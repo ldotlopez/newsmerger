@@ -21,8 +21,7 @@ class CacheConfig(pydantic.BaseModel):
     base_dir: Path = pydantic.Field(
         default_factory=lambda: platformdirs.user_cache_path(PACKAGE_NAME)
     )
-    index_expiration: float = 60 * 60
-    # article_expiration: float = 60 * 60 * 12
+    expiration: float = 60 * 60
 
 
 class Config(pydantic.BaseModel):

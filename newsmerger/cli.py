@@ -13,7 +13,7 @@ from foundation.storage import DiskStorage
 
 from newsmerger.config import Config
 from newsmerger.consts import PACKAGE_NAME
-from newsmerger.models import Source, SourceEntry
+from newsmerger.models import SourceEntryData
 from newsmerger.providers import BaseProvider
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
@@ -59,13 +59,13 @@ class App:
         self.storage = DiskStorage(base_dir=self.config.cache.base_dir)
         self.cache = Cache(
             storage=self.storage,
-            validator=StatValidator(expiration_time=self.config.cache.index_expiration),
+            validator=StatValidator(expiration_time=self.config.cache.expiration),
         )
 
         LOGGER.info(
             "using cache ("
             + f"base_dir='{self.storage.base_dir}', "
-            + f"stat_expiration_time={self.config.cache.index_expiration}"
+            + f"stat_expiration_time={self.config.cache.expiration}"
             + ")"
         )
 
@@ -118,6 +118,11 @@ class App:
 
             return resp.content
 
+    def store_many(self, entries: list[SourceEntryData]) -> None: ...
+
+    def store(self, entry_data: SourceEntryData) -> None:
+        self.store_many([entry_data])
+
 
 @click.group()
 @click.option("-c", "--config", "config_path", type=Path, default=None)
@@ -139,17 +144,30 @@ def import_cmd(ctx):
 
     for source in app.config.sources:
         content = app.fetch(str(source.url))
-        # content = requests.get(str(source.url)).content
-        import ipdb
-
-        ipdb.set_trace()
-        pass
         provider = ProviderFactory(source.provider)
 
-        items = provider.parse_listing(content)
+        entries = []
+        for uri in provider.parse_index(content):
+            content = app.fetch(str(uri))
+            try:
+                entry = provider.parse_item(content)
+            except ValueError as e:
+                LOGGER.error(f"error '{e}' while parsing '{uri}'")
+                continue
 
-        source_model = Source(provider=source.provider, url=source.url)
-        entries = [SourceEntry.from_data(source_model, entry) for entry in items]
+            if not entry.uri:
+                entry.uri = uri
+            if not entry.content:
+                entry.content = entry.title
+
+            entries.append(entry)
+
+        app.store(entries)
+
+        # items = provider.parse_listing(content)
+
+        # source_model = Source(provider=source.provider, url=source.url)
+        # entries = [SourceEntry.from_data(source_model, entry) for entry in items]
 
 
 # @click.command()

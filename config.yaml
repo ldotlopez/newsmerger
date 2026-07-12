@@ -1,0 +1,7 @@
+sources:
+  - name: el merdi
+    url: https://www.elperiodicomediterraneo.com/castello
+    provider: prensaiberica
+
+cache:
+  expiration: 21600

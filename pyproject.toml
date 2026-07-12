@@ -17,6 +17,7 @@ dependencies = [
     "requests>=2.34.2",
     "rich>=15.0.0",
     "rich-click>=1.9.7",
+    "readability-lxml>=0.8.4.1",
 ]
 
 [project.scripts]
