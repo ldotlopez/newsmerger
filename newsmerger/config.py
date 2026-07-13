@@ -24,9 +24,18 @@ class CacheConfig(pydantic.BaseModel):
     expiration: float = 60 * 60
 
 
+class DatabaseConfig(pydantic.BaseModel):
+    uri: str = pydantic.Field(
+        default_factory=lambda: (
+            "sqlite://" + platformdirs.user_data_dir(PACKAGE_NAME) + "/data.db"
+        )
+    )
+
+
 class Config(pydantic.BaseModel):
     sources: list[SourceConfig] = []
     cache: CacheConfig = CacheConfig()
+    db: DatabaseConfig = DatabaseConfig()
 
     @classmethod
     def from_file(cls, filepath: str | Path) -> Config:

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, model_validator
 
 type JsonCompatibleType = (
     None
@@ -19,8 +20,22 @@ type JsonCompatibleType = (
 
 
 class Source(BaseModel):
+    id: str | None = None
+    name: str
     url: HttpUrl
     provider: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def id_from_name(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        if data.get("id"):
+            return data
+
+        data["id"] = data.get("name")
+        return data
 
 
 class SourceEntry(BaseModel):
