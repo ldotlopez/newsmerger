@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import pickle
 from pathlib import Path
 
 import requests
@@ -13,7 +14,7 @@ from foundation.storage import DiskStorage
 from newsmerger.config import Config
 from newsmerger.consts import PACKAGE_NAME
 from newsmerger.db import Database
-from newsmerger.models import Source, SourceEntryData
+from newsmerger.models import SourceData, SourceItem
 from newsmerger.providers import BaseProvider
 
 from .httpclient import HTTPClient
@@ -31,14 +32,20 @@ class ServerError(NetworkError):
         self.response = response
 
 
-def SourceFactory(name: str, *args, **kwargs) -> BaseProvider:
+def provider_factory(source: SourceData, *args, **kwargs) -> BaseProvider:
+    """Instantiate a Provider.
+
+    Accepts either a config-like object with a `.provider` and `.url` attributes
+    (e.g., SourceConfig) or a provider module name string. If a config object is
+    provided and `url` is not in kwargs, the url will be filled from it.
+    """
     try:
-        m = importlib.import_module(f"newsmerger.providers.{name}")
+        m = importlib.import_module(f"newsmerger.providers.{source.provider}")
     except ModuleNotFoundError:
-        LOGGER.error(f"provider {name} not found")
+        LOGGER.error(f"provider {source.provider} not found")
         raise
 
-    return getattr(m, "Provider")(*args, **kwargs)
+    return getattr(m, "Provider")(source, *args, **kwargs)
 
 
 class Fetcher:
@@ -65,7 +72,7 @@ class App:
         )
         LOGGER.info(
             "using cache ("
-            + f"base_dir='{self.cache.storage.base_dir}', "
+            + f"base_dir='{self.cache.storage}', "
             + f"stat_expiration_time={config.cache.expiration}"
             + ")"
         )
@@ -76,14 +83,32 @@ class App:
         config_path = ctx.obj["config_path"]
         return cls(config=Config.from_file(config_path) if config_path else Config())
 
-    def import_source(self, source: Source) -> list[SourceEntryData]:
-        return list(source.retrieve_items())
+    def import_source(self, provider: BaseProvider) -> list[SourceItem]:
+        """Import items from a runtime provider instance and return raw entry data."""
 
-    def store_many(self, entries: list[SourceEntryData]) -> None:
-        self.db.upsert_many(entries)
+        # items = []
+        # for item_data in provider.retrieve_items():
+        #     items.append(SourceItem(source=provider.source, **item_data.model_dump()))
+        # with open(f"{provider.source.name}.pkl", "wb") as fh:
+        #     items = pickle.dump(items, fh)
 
-    def store(self, entry_data: SourceEntryData) -> None:
-        self.store_many([entry_data])
+        with open(f"{provider.source.name}.pkl", "rb") as fh:
+            items = pickle.load(fh)
+
+        self.db.save_source_items(items)
+
+        return items
+
+    # def store_many(self, entries: list[SourceItemData]) -> None:
+    #     # legacy helper kept for compatibility; prefer store_entries_for_source
+    #     for entry in entries:
+    #         # Without source context, we cannot store entries directly
+    #         raise RuntimeError(
+    #             "store_many requires a source context; use store_entries_for_source"
+    #         )
+
+    # def store(self, entry_data: SourceItemData) -> None:
+    #     self.store_many([entry_data])
 
 
 @click.group()
@@ -105,8 +130,11 @@ def import_cmd(ctx):
     app = App.from_click_context(ctx)
 
     for source_config in app.config.sources:
-        app.import_source(
-            SourceFactory(
-                source_config.provider, url=str(source_config.url), fetcher=app.fetcher
-            )
-        )
+        provider = provider_factory(source_config, fetcher=app.fetcher)
+
+        # entries = pickle.load(open(f"{source_config.name}.pkl", "rb"))
+        _ = app.import_source(provider)  # noqa: F841
+
+        # Convert config to runtime Source model for DB operations
+        # source_model = Source(name=source_config.name, url=source_config.url, provider=source_config.provider)
+        # app.store_entries_for_source(source_model, entries)

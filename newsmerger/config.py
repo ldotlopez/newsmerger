@@ -7,14 +7,7 @@ import pydantic
 import yaml
 
 from .consts import PACKAGE_NAME
-
-
-class SourceConfig(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
-
-    name: str
-    url: pydantic.HttpUrl
-    provider: str
+from .models import SourceData
 
 
 class CacheConfig(pydantic.BaseModel):
@@ -27,13 +20,13 @@ class CacheConfig(pydantic.BaseModel):
 class DatabaseConfig(pydantic.BaseModel):
     uri: str = pydantic.Field(
         default_factory=lambda: (
-            "sqlite://" + platformdirs.user_data_dir(PACKAGE_NAME) + "/data.db"
+            "sqlite:///" + platformdirs.user_data_dir(PACKAGE_NAME) + "/data.db"
         )
     )
 
 
 class Config(pydantic.BaseModel):
-    sources: list[SourceConfig] = []
+    sources: list[SourceData] = []
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
 

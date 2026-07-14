@@ -2,7 +2,6 @@ import hashlib
 import logging
 
 import requests
-
 from foundation import cache
 
 LOGGER = logging.getLogger(__name__)
@@ -58,7 +57,7 @@ class HTTPClient:
 
         LOGGER.debug(f"{url} fetched {len(content)} bytes")
         if is_cacheable:
-            self.cache.set(key, content)
+            self.cache.set(key, content)  # ty:ignore[invalid-argument-type]
             LOGGER.debug(f"{url} saved {len(resp.content)} bytes")
 
         return content

@@ -1,9 +1,10 @@
-from newsmerger.httpclient import HTTPClient
-from typing import Iterator
-from abc import abstractmethod
-
-from ..models import SourceEntryData
 import logging
+from abc import abstractmethod
+from typing import Iterator
+
+from newsmerger.httpclient import HTTPClient
+
+from ..models import SourceData, SourceItemData
 
 LOGGER = logging.getLogger(__name__)
 
@@ -13,23 +14,26 @@ URI = str
 class BaseProvider:
     NAME: str
 
+    def __init__(self, source: SourceData) -> None:
+        self.source = source
+
     @abstractmethod
-    def retrieve_items(self) -> Iterator[SourceEntryData]: ...
+    def retrieve_items(self) -> Iterator[SourceItemData]: ...
 
 
 class IndexSiteProvider(BaseProvider):
-    def __init__(self, *, url: URI, fetcher: HTTPClient) -> None:
-        self.url = url
+    def __init__(self, source: SourceData, *, fetcher: HTTPClient) -> None:
+        super().__init__(source)
         self.fetcher = fetcher
 
     @abstractmethod
     def parse_index(self, content: bytes) -> Iterator[URI]: ...
 
     @abstractmethod
-    def parse_item(self, content: bytes) -> SourceEntryData: ...
+    def parse_item(self, content: bytes) -> SourceItemData: ...
 
-    def retrieve_items(self) -> Iterator[SourceEntryData]:
-        content = self.fetcher.get(self.url)
+    def retrieve_items(self) -> Iterator[SourceItemData]:
+        content = self.fetcher.get(str(self.source.url))
         links = self.parse_index(content)
 
         for url in links:

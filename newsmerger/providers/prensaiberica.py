@@ -1,4 +1,3 @@
-import hashlib
 import logging
 from datetime import datetime
 from typing import Iterator, cast
@@ -6,7 +5,7 @@ from typing import Iterator, cast
 import bs4
 from readability import Document
 
-from ..models import SourceEntryData
+from ..models import SourceItemData
 from . import URI, IndexSiteProvider
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ class Provider(IndexSiteProvider):
 
             yield _extract_href(article)
 
-    def parse_item(self, content: bytes) -> SourceEntryData:
+    def parse_item(self, content: bytes) -> SourceItemData:
         html = content.decode("utf-8")
 
         soup = bs4.BeautifulSoup(html, features="html5lib")
@@ -53,8 +52,7 @@ class Provider(IndexSiteProvider):
         doc = Document(html)
         content = doc.summary()
 
-        return SourceEntryData(
-            id=hashlib.sha256(url.encode("utf-8")).hexdigest(),
+        return SourceItemData(
             title=title,
             uri=url,
             content=content,
