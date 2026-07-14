@@ -1,7 +1,11 @@
 sources:
-  - name: el merdi
-    url: https://www.elperiodicomediterraneo.com/castello
-    provider: prensaiberica
+  # - name: El Periódico Mediterraneo (Castelló ciudad)
+  #   provider: prensaiberica
+  #   url: https://www.elperiodicomediterraneo.com/castello
+
+  - name: Castellón información (Castelló ciudad)
+    provider: castelloninformacion
+    url: https://www.castelloninformacion.com/noticies/castello/
 
 cache:
   expiration: 21600

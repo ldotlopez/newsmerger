@@ -131,10 +131,4 @@ def import_cmd(ctx):
 
     for source_config in app.config.sources:
         provider = provider_factory(source_config, fetcher=app.fetcher)
-
-        # entries = pickle.load(open(f"{source_config.name}.pkl", "rb"))
         _ = app.import_source(provider)  # noqa: F841
-
-        # Convert config to runtime Source model for DB operations
-        # source_model = Source(name=source_config.name, url=source_config.url, provider=source_config.provider)
-        # app.store_entries_for_source(source_model, entries)
