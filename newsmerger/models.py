@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+from datetime import datetime
 from typing import Any, TypeVar
 
+from foundation.jsonlib import JsonCompatible
 from pydantic import BaseModel, HttpUrl, model_validator
-
-from .jsonlib import JsonCompatible
 
 
 class UidFieldMixin:
@@ -63,6 +63,8 @@ class SourceItem:
     uri: str
     content: str | bytes = ""
     data: JsonCompatible = dataclasses.field(default_factory=lambda: {})
+    published_at: datetime | None = None
+    modified_at: datetime | None = None
 
     @classmethod
     def from_data(cls, source: SourceData, data: SourceItemData) -> SourceItem:
@@ -93,3 +95,5 @@ class SourceItemData(
     uri: str
     content: str
     data: JsonCompatible = {}
+    published_at: datetime | None = None
+    modified_at: datetime | None = None

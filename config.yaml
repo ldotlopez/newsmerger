@@ -1,7 +1,7 @@
 sources:
-  # - name: El Periódico Mediterraneo (Castelló ciudad)
-  #   provider: prensaiberica
-  #   url: https://www.elperiodicomediterraneo.com/castello
+  - name: El Periódico Mediterraneo (Castelló ciudad)
+    provider: prensaiberica
+    url: https://www.elperiodicomediterraneo.com/castello
 
   - name: Castellón información (Castelló ciudad)
     provider: castelloninformacion

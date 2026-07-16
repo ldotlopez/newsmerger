@@ -48,20 +48,6 @@ def provider_factory(source: SourceData, *args, **kwargs) -> BaseProvider:
     return getattr(m, "Provider")(source, *args, **kwargs)
 
 
-class Fetcher:
-    def __init__(self):
-        self.sess = requests.Session()
-
-    def get(self, url: str) -> bytes:
-        return self.request(url)
-
-    def request(self, url: str, method: str = "GET") -> bytes:
-        return self.raw_request(requests.Request(method=method, url=url))
-
-    def raw_request(self, request: requests.Request) -> bytes:
-        return self.sess.send(request.prepare()).content
-
-
 class App:
     def __init__(self, config: Config):
         self.config = config
@@ -86,29 +72,21 @@ class App:
     def import_source(self, provider: BaseProvider) -> list[SourceItem]:
         """Import items from a runtime provider instance and return raw entry data."""
 
-        # items = []
-        # for item_data in provider.retrieve_items():
-        #     items.append(SourceItem(source=provider.source, **item_data.model_dump()))
-        # with open(f"{provider.source.name}.pkl", "wb") as fh:
-        #     items = pickle.dump(items, fh)
+        try:
+            with open(f"{provider.source.uid}.pkl", "rb") as fh:
+                items = pickle.load(fh)
+        except FileNotFoundError:
+            items = []
+            for item_data in provider.retrieve_items():
+                items.append(
+                    SourceItem(source=provider.source, **item_data.model_dump())
+                )
+            with open(f"{provider.source.uid}.pkl", "wb") as fh:
+                pickle.dump(items, fh)
 
-        with open(f"{provider.source.name}.pkl", "rb") as fh:
-            items = pickle.load(fh)
-
-        self.db.save_source_items(items)
+        self.db.upsert_source_items(items)
 
         return items
-
-    # def store_many(self, entries: list[SourceItemData]) -> None:
-    #     # legacy helper kept for compatibility; prefer store_entries_for_source
-    #     for entry in entries:
-    #         # Without source context, we cannot store entries directly
-    #         raise RuntimeError(
-    #             "store_many requires a source context; use store_entries_for_source"
-    #         )
-
-    # def store(self, entry_data: SourceItemData) -> None:
-    #     self.store_many([entry_data])
 
 
 @click.group()
@@ -131,4 +109,4 @@ def import_cmd(ctx):
 
     for source_config in app.config.sources:
         provider = provider_factory(source_config, fetcher=app.fetcher)
-        _ = app.import_source(provider)  # noqa: F841
+        _ = app.import_source(provider)

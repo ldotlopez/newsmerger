@@ -1,14 +1,20 @@
+import hashlib
 import logging
 from datetime import datetime
 from typing import Iterator, cast
 
 import bs4
-from readability import Document
+from foundation.scrapelib import (
+    drop_selectors,
+    extract,
+    head_meta_get_value,
+    soupify,
+)
 
 from ..models import SourceItemData
 from . import URI, IndexSiteProvider
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 
 class Provider(IndexSiteProvider):
@@ -16,7 +22,7 @@ class Provider(IndexSiteProvider):
     EXCLUDED_SECTION_TITLES = {"Comarcas", "Vídeos y galerías de Castellón"}
 
     def parse_index(self, content: bytes) -> Iterator[URI]:
-        soup = bs4.BeautifulSoup(content, "html5lib")
+        soup = soupify(content.decode("utf-8"))
 
         excluded_containers = self._find_excluded_containers(soup)
         excluded_ids = {id(c) for c in excluded_containers}
@@ -32,68 +38,63 @@ class Provider(IndexSiteProvider):
             yield _extract_href(article)
 
     def parse_item(self, content: bytes) -> SourceItemData:
-        html = content.decode("utf-8")
+        soup = soupify(content.decode("utf-8"))
 
-        soup = bs4.BeautifulSoup(html, features="html5lib")
-
-        title = self._get_meta_property(soup, "og:title")
-        image = self._get_meta_property(soup, "og:image")
-        author = self._get_meta_name(soup, "author")
-        url = self._get_meta_property(soup, "og:url")
-        tags = self._get_meta_property(soup, "article:tag").split(",")
-        section = self._get_meta_property(soup, "article:section")
+        title = head_meta_get_value(soup, {"property": "og:title"})
+        image = head_meta_get_value(soup, {"property": "og:image"})
+        author = head_meta_get_value(soup, {"name": "author"})
+        url = head_meta_get_value(soup, {"property": "og:url"})
+        tags = head_meta_get_value(soup, {"property": "article:tag"}).split(",")
+        section = head_meta_get_value(soup, {"property": "article:section"})
         pub_time = datetime.fromisoformat(
-            self._get_meta_property(soup, "article:published_time")
+            head_meta_get_value(soup, {"property": "article:published_time"})
         )
         mod_time = datetime.fromisoformat(
-            self._get_meta_property(soup, "article:modified_time")
+            head_meta_get_value(soup, {"property": "article:modified_time"})
         )
 
-        doc = Document(html)
-        content = doc.summary()
+        if (main := soup.select_one("#main-content")) is None:
+            raise ValueError("Could not find main content container")
+
+        for div in main.find_all("div", recursive=False):
+            if div.get_text().find("Lo más leído") != -1:
+                div.decompose()  # Remove the "Lo más leído" section
+
+        drop_selectors(
+            main,
+            [
+                "#paywall",
+                ".ft-mol-rrss-column",
+                ".ft-mol-advice",
+                ".ft-ad",
+                ".closedContent",
+                ".ft-mol-writer",
+                ".ft-mol-tagsNews",
+                ".ft-mol-related",
+                ".ft-mol-related__header",
+                ".bloque_bajo_noticia",
+                "a#comments",
+                ".ft-mol-btnGroup",
+                ".disqus_thread",
+            ],
+        )
+
+        md = extract(main, output_format="markdown")
 
         return SourceItemData(
+            uid=hashlib.sha256(url.encode()).hexdigest(),
             title=title,
             uri=url,
-            content=content,
+            content=md,
+            published_at=pub_time,
+            modified_at=mod_time,
             data={
                 "author": author,
                 "image": image,
                 "section": section,
                 "tags": tags,
-                "pub_date": pub_time,
-                "mod_date": mod_time,
             },
         )
-
-    def _get_meta_property(self, soup: bs4.BeautifulSoup, property: str) -> str:
-        if (head_tag := soup.find("head")) is None:
-            raise ValueError()
-
-        # if (meta_tag := head_tag.find("meta", property=property)) is None:
-        if (meta_tag := head_tag.find("meta", attrs={"property": property})) is None:
-            raise ValueError()
-
-        try:
-            content = meta_tag.attrs["content"]
-        except KeyError as e:
-            raise ValueError() from e
-
-        return content.strip()
-
-    def _get_meta_name(self, soup: bs4.BeautifulSoup, name: str) -> str:
-        if (head_tag := soup.find("head")) is None:
-            raise ValueError()
-
-        if (meta_tag := head_tag.find("meta", attrs={"name": name})) is None:
-            raise ValueError()
-
-        try:
-            content = meta_tag.attrs["content"]
-        except KeyError as e:
-            raise ValueError() from e
-
-        return content.strip()
 
     # # --- Section exclusion helpers -------------------------------------
 
@@ -109,7 +110,7 @@ class Provider(IndexSiteProvider):
 
             container = self._get_section_container(h3)
             if container is None:
-                logger.warning(
+                LOGGER.warning(
                     f"Could not find container for excluded section: {title}"
                 )
                 continue
@@ -138,7 +139,7 @@ class Provider(IndexSiteProvider):
         """Climb parents to find the article tag wrapping a headline."""
         article = headline.find_parent("article")
         if article is None:
-            logger.warning(f"No article parent found for headline: {headline.text}")
+            LOGGER.warning(f"No article parent found for headline: {headline.text}")
 
         return article
 
