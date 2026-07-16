@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import pickle
+from datetime import timezone
 from pathlib import Path
 
 import requests
@@ -13,13 +15,20 @@ from foundation.storage import DiskStorage
 
 from newsmerger.config import Config
 from newsmerger.consts import PACKAGE_NAME
-from newsmerger.db import Database
+from newsmerger.db import Database, ProcessingScope
 from newsmerger.models import SourceData, SourceItem
+from newsmerger.processors import BaseProcessor
 from newsmerger.providers import BaseProvider
 
 from .httpclient import HTTPClient
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
+
+_USE_PICKLE_DATA = os.environ.get("NEWSMERGER_PICKLE_CACHE", "0").lower() not in (
+    "0",
+    "false",
+    "",
+)
 
 
 class NetworkError(Exception):
@@ -48,6 +57,16 @@ def provider_factory(source: SourceData, *args, **kwargs) -> BaseProvider:
     return getattr(m, "Provider")(source, *args, **kwargs)
 
 
+def processor_factory(name: str, db: Database, **params) -> BaseProcessor:
+    try:
+        m = importlib.import_module(f"newsmerger.processors.{name}")
+    except ModuleNotFoundError:
+        LOGGER.error(f"processor {name} not found")
+        raise
+
+    return getattr(m, "Processor")(db, **params)
+
+
 class App:
     def __init__(self, config: Config):
         self.config = config
@@ -71,17 +90,21 @@ class App:
 
     def import_source(self, provider: BaseProvider) -> list[SourceItem]:
         """Import items from a runtime provider instance and return raw entry data."""
+        pickle_path = f"{provider.source.name}.pkl"
+        items: list[SourceItem] | None = None
 
-        try:
-            with open(f"{provider.source.uid}.pkl", "rb") as fh:
+        if _USE_PICKLE_DATA and os.path.exists(pickle_path):
+            with open(pickle_path, "rb") as fh:
                 items = pickle.load(fh)
-        except FileNotFoundError:
-            items = []
-            for item_data in provider.retrieve_items():
-                items.append(
-                    SourceItem(source=provider.source, **item_data.model_dump())
-                )
-            with open(f"{provider.source.uid}.pkl", "wb") as fh:
+
+        if items is None:
+            items = [
+                SourceItem.from_data(provider.source, item_data)
+                for item_data in provider.retrieve_items()
+            ]
+
+        if _USE_PICKLE_DATA:
+            with open(pickle_path, "wb") as fh:
                 pickle.dump(items, fh)
 
         self.db.upsert_source_items(items)
@@ -110,3 +133,37 @@ def import_cmd(ctx):
     for source_config in app.config.sources:
         provider = provider_factory(source_config, fetcher=app.fetcher)
         _ = app.import_source(provider)
+
+
+@cli.command("process")
+@click.argument("processor_name")
+@click.option("--source", default=None, help="Limit to a source name or uid")
+@click.option("--since", type=click.DateTime(), default=None)
+@click.option("--until", type=click.DateTime(), default=None)
+@click.option("--limit", type=int, default=None)
+@click.option(
+    "--force",
+    "--reprocess",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Ignore stored processing state (including ignored items) and reprocess everything in scope",
+)
+@click.pass_context
+def process_cmd(ctx, processor_name, source, since, until, limit, force):
+    app = App.from_click_context(ctx)
+
+    config_entry = next(
+        (p for p in app.config.processors if p.name == processor_name), None
+    )
+    params = config_entry.params if config_entry else {}
+
+    processor = processor_factory(processor_name, app.db, **params)
+
+    scope = ProcessingScope(
+        source=source,
+        since=since.replace(tzinfo=timezone.utc) if since else None,
+        until=until.replace(tzinfo=timezone.utc) if until else None,
+        limit=limit,
+    )
+    processor.run(scope=scope, force=force)
