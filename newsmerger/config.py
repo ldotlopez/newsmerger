@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import platformdirs
 import pydantic
@@ -25,8 +26,18 @@ class DatabaseConfig(pydantic.BaseModel):
     )
 
 
+class ProcessorConfig(pydantic.BaseModel):
+    name: str
+    # Forwarded as kwargs to the Processor's __init__. `max_retries` and
+    # `version` are recognized by BaseProcessor itself (override the
+    # class-level MAX_RETRIES/VERSION); anything else is processor-specific
+    # (e.g. a model name, a feed title).
+    params: dict[str, Any] = {}
+
+
 class Config(pydantic.BaseModel):
     sources: list[SourceData] = []
+    processors: list[ProcessorConfig] = []
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
 
