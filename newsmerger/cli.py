@@ -8,6 +8,7 @@ from datetime import timezone
 from pathlib import Path
 
 import requests
+import rich
 import rich_click as click
 from foundation.cache import Cache, StatValidator
 from foundation.logging import setup as setup_logging
@@ -130,9 +131,13 @@ def cli(ctx, config_path: Path | None):
 def import_cmd(ctx):
     app = App.from_click_context(ctx)
 
+    rich.print(
+        f"Importing {len(app.config.sources)} sources from {ctx.obj['config_path']}"
+    )
     for source_config in app.config.sources:
         provider = provider_factory(source_config, fetcher=app.fetcher)
-        _ = app.import_source(provider)
+        items = app.import_source(provider)
+        rich.print(f"Imported {len(items)} items from '{source_config.name}'")
 
 
 @cli.command("process")

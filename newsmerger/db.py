@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import enum
 import logging
 from abc import abstractmethod
 from datetime import datetime, timezone
@@ -15,6 +17,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -223,6 +226,128 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
         return f"<DBSourceItem(id={self.id}, title={self.title})>"
 
 
+class ProcessingStatus(str, enum.Enum):
+    DONE = "done"
+    ERROR = "error"
+    IGNORED = "ignored"
+
+
+@dataclasses.dataclass(frozen=True)
+class ProcessingScope:
+    """Which items a processor run should apply to. All fields optional /
+    combinable; an unset field means "no restriction on this axis"."""
+
+    source: str | None = None  # source name or uid
+    since: datetime | None = None  # published_at >=
+    until: datetime | None = None  # published_at <
+    uids: tuple[str, ...] | None = None
+    limit: int | None = None
+
+
+def _backoff_seconds(
+    attempts: int,
+    base: float = 60.0,
+    factor: float = 2.0,
+    max_seconds: float = 24 * 3600,
+) -> float:
+    """Simple exponential backoff for error retries: base * factor**(attempts-1),
+    capped at max_seconds. Just a counter + a timestamp comparison — no
+    scheduler, no background machinery."""
+    return min(base * (factor ** max(attempts - 1, 0)), max_seconds)
+
+
+class DBProcessingState(Base):
+    """Per-(item, processor) run state.
+
+    Absence of a row means "pending" — never attempted. `error` rows track
+    `attempts` for retry/backoff accounting (see `_backoff_seconds`); once
+    attempts >= max_retries the item is no longer picked up automatically.
+    `ignored` means the processor itself decided the item doesn't apply
+    (e.g. wrong language) — a deliberate, permanent skip, distinct from a
+    failure, and only reprocessed with `force=True`.
+    """
+
+    __tablename__ = "processing_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_item_id: Mapped[int] = mapped_column(ForeignKey("source_items.id"))
+    processor: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50))
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bumping a processor's VERSION constant makes previously `done` items
+    # eligible again without needing --force (see Database._is_eligible).
+    processor_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    source_item: Mapped[DBSourceItem] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("source_item_id", "processor"),
+        Index("ix_processing_state_processor_status", "processor", "status"),
+    )
+
+    def __repr__(self):
+        return f"<DBProcessingState(item={self.source_item_id}, processor={self.processor}, status={self.status})>"
+
+
+class DBItemAnnotation(Base):
+    """One piece of derived data a processor attached to a SourceItem.
+
+    (source_item_id, processor, key) is unique — a processor can write
+    several keys per item (e.g. a tagger writing "tags" and "language"),
+    but re-running it on the same item updates in place rather than
+    duplicating rows. Deliberately separate from DBProcessingState: state
+    tracks "did this run succeed", annotations track "what did it produce"
+    — a partial failure can leave some keys saved while the item is still
+    marked as needing a retry.
+    """
+
+    __tablename__ = "item_annotations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_item_id: Mapped[int] = mapped_column(ForeignKey("source_items.id"))
+    processor: Mapped[str] = mapped_column(String(255))
+    key: Mapped[str] = mapped_column(String(255))
+    value: Mapped[Any] = mapped_column(CustomJSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    source_item: Mapped[DBSourceItem] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("source_item_id", "processor", "key"),
+        Index("ix_item_annotations_processor", "processor"),
+    )
+
+    def __repr__(self):
+        return f"<DBItemAnnotation(item={self.source_item_id}, processor={self.processor}, key={self.key})>"
+
+
+class DBArtifact(Base):
+    """A generated output not tied to a single item (e.g. an RSS feed).
+
+    (processor, name) is unique — `name` disambiguates when one processor
+    produces several artifacts (e.g. one feed per source).
+    """
+
+    __tablename__ = "artifacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    processor: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(255))
+    content: Mapped[str] = mapped_column(Text)
+    content_type: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (UniqueConstraint("processor", "name"),)
+
+    def __repr__(self):
+        return f"<DBArtifact(processor={self.processor}, name={self.name})>"
+
+
 class Database:
     """Database connection and session management"""
 
@@ -291,24 +416,6 @@ class Database:
             raise
         finally:
             session.close()
-
-    def save_source_items(self, items: list[SourceItem]):
-        sources = {item.source for item in items}
-
-        items_by_source = {source: [] for source in sources}
-        for item in items:
-            items_by_source[item.source].append(item)
-
-        with self.session_scope() as sess:
-            db_sources_map = dict(self._get_or_create_source_bulk(sess, sources))
-
-            for source, items in items_by_source.items():
-                db_source = db_sources_map[source]
-                _ = dict(
-                    self._get_or_create_bulk(
-                        sess, DBSourceItem, items, source_id=db_source.id
-                    )
-                )
 
     def upsert_source_items(self, items: list[SourceItem]) -> None:
         """Alternative to `save_source_items`.
@@ -440,6 +547,206 @@ class Database:
             db_item.published_at = dto.published_at
 
         return True
+
+    # --- Post-processing: state, annotations, artifacts ---------------------
+
+    def get_unprocessed_items(
+        self,
+        processor: str,
+        *,
+        version: str | None = None,
+        max_retries: int = 3,
+        force: bool = False,
+        scope: ProcessingScope | None = None,
+    ) -> list[SourceItem]:
+        """Items a processor should run on, given its current state and scope.
+
+        Eligibility (pending / error-with-backoff-elapsed / done-with-stale-
+        version) is evaluated in Python rather than SQL — the candidate set
+        is already narrowed by `scope` in the query, and backoff math is
+        simple enough that hand-rolling dialect-portable SQL for it isn't
+        worth it. `force=True` skips eligibility entirely, including
+        `ignored` items.
+        """
+        scope = scope or ProcessingScope()
+        now = datetime.now(timezone.utc)
+
+        with self.session_scope() as sess:
+            query = (
+                sess.query(DBSourceItem, DBProcessingState)
+                .join(DBSource)
+                .outerjoin(
+                    DBProcessingState,
+                    (DBProcessingState.source_item_id == DBSourceItem.id)
+                    & (DBProcessingState.processor == processor),
+                )
+            )
+            query = self._apply_scope(query, scope)
+            query = query.order_by(DBSourceItem.published_at)
+
+            result = []
+            for db_item, state in query.all():
+                if not force and not self._is_eligible(
+                    state, version, max_retries, now
+                ):
+                    continue
+                result.append(db_item.to_dto())
+                if scope.limit and len(result) >= scope.limit:
+                    break
+
+            return result
+
+    def _apply_scope(self, query, scope: ProcessingScope):
+        if scope.source:
+            query = query.filter(
+                (DBSource.uid == scope.source) | (DBSource.name == scope.source)
+            )
+        if scope.since:
+            query = query.filter(DBSourceItem.published_at >= scope.since)
+        if scope.until:
+            query = query.filter(DBSourceItem.published_at < scope.until)
+        if scope.uids:
+            query = query.filter(DBSourceItem.uid.in_(scope.uids))
+        return query
+
+    def _is_eligible(
+        self,
+        state: DBProcessingState | None,
+        version: str | None,
+        max_retries: int,
+        now: datetime,
+    ) -> bool:
+        if state is None:
+            return True  # never attempted
+        if state.status == ProcessingStatus.IGNORED:
+            return False  # permanent skip; only --force reprocesses it
+        if state.status == ProcessingStatus.DONE:
+            return state.processor_version != version  # version bump reprocesses
+        if state.status == ProcessingStatus.ERROR:
+            if state.attempts >= max_retries:
+                return False
+            elapsed = (now - state.updated_at).total_seconds()
+            return elapsed >= _backoff_seconds(state.attempts)
+        return True
+
+    def get_source_items(
+        self, scope: ProcessingScope | None = None
+    ) -> list[SourceItem]:
+        """Scoped item lookup for ArtifactProcessors, which don't consult
+        per-item processing state (an artifact isn't "done" or "error" per
+        item — it's regenerated wholesale on each run)."""
+        scope = scope or ProcessingScope()
+
+        with self.session_scope() as sess:
+            query = sess.query(DBSourceItem).join(DBSource)
+            query = self._apply_scope(query, scope)
+            query = query.order_by(DBSourceItem.published_at)
+            if scope.limit:
+                query = query.limit(scope.limit)
+            return [db_item.to_dto() for db_item in query.all()]
+
+    def mark_processing_result(
+        self,
+        item: SourceItem,
+        processor: str,
+        status: ProcessingStatus,
+        *,
+        error: str | None = None,
+        version: str | None = None,
+    ) -> None:
+        with self.session_scope() as sess:
+            db_item = sess.query(DBSourceItem).filter_by(uid=item.uid).one()
+            now = datetime.now(timezone.utc)
+            state = (
+                sess.query(DBProcessingState)
+                .filter_by(source_item_id=db_item.id, processor=processor)
+                .one_or_none()
+            )
+
+            if state is None:
+                sess.add(
+                    DBProcessingState(
+                        source_item_id=db_item.id,
+                        processor=processor,
+                        status=status,
+                        attempts=1 if status == ProcessingStatus.ERROR else 0,
+                        last_error=error,
+                        processor_version=version,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                return
+
+            state.status = status
+            state.processor_version = version
+            state.updated_at = now
+            if status == ProcessingStatus.ERROR:
+                state.attempts += 1
+                state.last_error = error
+            else:
+                state.last_error = None
+
+    def save_annotations(
+        self, item: SourceItem, processor: str, values: dict[str, Any]
+    ) -> None:
+        if not values:
+            return
+
+        with self.session_scope() as sess:
+            db_item = sess.query(DBSourceItem).filter_by(uid=item.uid).one()
+            now = datetime.now(timezone.utc)
+
+            existing = (
+                sess.query(DBItemAnnotation)
+                .filter_by(source_item_id=db_item.id, processor=processor)
+                .filter(DBItemAnnotation.key.in_(values.keys()))
+                .all()
+            )
+            existing_by_key = {row.key: row for row in existing}
+
+            for key, value in values.items():
+                row = existing_by_key.get(key)
+                if row is not None:
+                    row.value = value
+                    row.updated_at = now
+                else:
+                    sess.add(
+                        DBItemAnnotation(
+                            source_item_id=db_item.id,
+                            processor=processor,
+                            key=key,
+                            value=value,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+
+    def save_artifact(
+        self, processor: str, name: str, content: str, content_type: str
+    ) -> None:
+        with self.session_scope() as sess:
+            now = datetime.now(timezone.utc)
+            existing = (
+                sess.query(DBArtifact)
+                .filter_by(processor=processor, name=name)
+                .one_or_none()
+            )
+            if existing is not None:
+                existing.content = content
+                existing.content_type = content_type
+                existing.updated_at = now
+            else:
+                sess.add(
+                    DBArtifact(
+                        processor=processor,
+                        name=name,
+                        content=content,
+                        content_type=content_type,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
 
     def _get_or_create_source(self, session, source: SourceData) -> DBSource:
         return self._get_or_create_source_bulk(session, [source])[0][1]
