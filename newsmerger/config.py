@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import platformdirs
 import pydantic
@@ -12,6 +11,7 @@ from .models import SourceData
 
 
 class CacheConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
     base_dir: Path = pydantic.Field(
         default_factory=lambda: platformdirs.user_cache_path(PACKAGE_NAME)
     )
@@ -19,6 +19,7 @@ class CacheConfig(pydantic.BaseModel):
 
 
 class DatabaseConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
     uri: str = pydantic.Field(
         default_factory=lambda: (
             "sqlite:///" + platformdirs.user_data_dir(PACKAGE_NAME) + "/data.db"
@@ -26,13 +27,18 @@ class DatabaseConfig(pydantic.BaseModel):
     )
 
 
+class ProcessorConfigParams(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="allow")
+
+
 class ProcessorConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
     name: str
     # Forwarded as kwargs to the Processor's __init__. `max_retries` and
     # `version` are recognized by BaseProcessor itself (override the
     # class-level MAX_RETRIES/VERSION); anything else is processor-specific
     # (e.g. a model name, a feed title).
-    params: dict[str, Any] = {}
+    params: ProcessorConfigParams
 
 
 class Config(pydantic.BaseModel):

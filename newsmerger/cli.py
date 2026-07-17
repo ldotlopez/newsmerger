@@ -161,7 +161,12 @@ def process_cmd(ctx, processor_name, source, since, until, limit, force):
     config_entry = next(
         (p for p in app.config.processors if p.name == processor_name), None
     )
-    params = config_entry.params if config_entry else {}
+    if not config_entry:
+        LOGGER.warning(
+            f"Processor '{processor_name}' not found in config; using default parameters"
+        )
+
+    params = config_entry.params.model_dump() if config_entry else {}
 
     processor = processor_factory(processor_name, app.db, **params)
 
