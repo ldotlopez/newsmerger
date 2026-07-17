@@ -756,33 +756,6 @@ class Database:
     ) -> list[tuple[SourceData, DBSource]]:
         return self._get_or_create_bulk(session, DBSource, sources)
 
-        # """Get or create DBSources for the given SourceData list with a single lookup query."""
-        # if not sources:
-        #     return []
-
-        # source_by_uid = {source.uid: source for source in sources}
-        # source_uids = list(dict.fromkeys(source.uid for source in sources))
-
-        # existing_sources = (
-        #     session.query(DBSource).filter(DBSource.uid.in_(source_uids)).all()
-        # )
-        # db_sources_by_uid = {db_source.uid: db_source for db_source in existing_sources}
-
-        # missing_sources = [
-        #     source_by_uid[source_uid]
-        #     for source_uid in source_uids
-        #     if source_uid not in db_sources_by_uid
-        # ]
-        # for source in missing_sources:
-        #     db_source = DBSource.from_dto(source)
-        #     session.add(db_source)
-        #     db_sources_by_uid[source.uid] = db_source
-
-        # if missing_sources:
-        #     session.flush()  # Ensure IDs are generated for newly created rows.
-
-        # return [(source, db_sources_by_uid[source.uid]) for source in sources]
-
     def _get_or_create_bulk(
         self,
         session: Session,
