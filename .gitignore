@@ -177,3 +177,6 @@ pyrightconfig.json
 
 # Editors
 .zed/
+
+# macOS
+.DS_Store
