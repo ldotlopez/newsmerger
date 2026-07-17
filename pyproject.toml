@@ -24,6 +24,11 @@ dependencies = [
 [project.scripts]
 newsmerger = "newsmerger.cli:cli"
 
+[project.optional-dependencies]
+ai-tagging = [
+    "ollama>=0.6.2",
+]
+
 [tool.uv.sources]
 foundation = { workspace = true, editable = true }
 
