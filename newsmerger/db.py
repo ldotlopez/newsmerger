@@ -417,24 +417,6 @@ class Database:
         finally:
             session.close()
 
-    def save_source_items(self, items: list[SourceItem]):
-        sources = {item.source for item in items}
-
-        items_by_source = {source: [] for source in sources}
-        for item in items:
-            items_by_source[item.source].append(item)
-
-        with self.session_scope() as sess:
-            db_sources_map = dict(self._get_or_create_source_bulk(sess, sources))
-
-            for source, items in items_by_source.items():
-                db_source = db_sources_map[source]
-                _ = dict(
-                    self._get_or_create_bulk(
-                        sess, DBSourceItem, items, source_id=db_source.id
-                    )
-                )
-
     def upsert_source_items(self, items: list[SourceItem]) -> None:
         """Alternative to `save_source_items`.
 
