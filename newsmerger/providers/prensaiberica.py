@@ -6,8 +6,8 @@ from typing import Iterator, cast
 import bs4
 from foundation.scrapelib import (
     drop_selectors,
-    extract,
     head_meta_get_value,
+    prune_to_spine,
     soupify,
 )
 
@@ -79,13 +79,13 @@ class Provider(IndexSiteProvider):
             ],
         )
 
-        md = extract(main, output_format="markdown")
+        root = prune_to_spine(main)
 
         return SourceItemData(
             uid=hashlib.sha256(url.encode()).hexdigest(),
             title=title,
             uri=url,
-            content=md,
+            content=str(root),
             published_at=pub_time,
             modified_at=mod_time,
             data={

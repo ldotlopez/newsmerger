@@ -6,13 +6,13 @@ from typing import Iterator
 import bs4
 import feedparser
 from foundation.scrapelib import (
-    extract,
+    drop_selectors,
     head_meta_get_value_by_name,
     head_meta_get_value_by_property,
+    prune_to_spine,
 )
 from pydantic import HttpUrl
 
-# from readability import Document
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from . import URI, IndexSiteProvider
@@ -33,7 +33,6 @@ class Provider(IndexSiteProvider):
             yield entry.link
 
     def parse_item(self, content: bytes) -> SourceItemData:
-
         html = content.decode("utf-8")
 
         soup = bs4.BeautifulSoup(html, features="html5lib")
@@ -51,13 +50,17 @@ class Provider(IndexSiteProvider):
             head_meta_get_value_by_property(soup, "article:modified_time")
         )
 
-        md = extract(soup, output_format="markdown")
+        if (article := soup.select_one("article.post")) is None:
+            raise ValueError("Article not found")
+
+        drop_selectors(article, [".td-is-sticky"])
+        root = prune_to_spine(article)
 
         return SourceItemData(
             uid=hashlib.sha256(url.encode()).hexdigest(),
             title=title,
             uri=url,
-            content=md,
+            content=str(root),
             published_at=pub_time,
             modified_at=mod_time,
             data={
