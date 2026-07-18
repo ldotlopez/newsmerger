@@ -722,6 +722,37 @@ class Database:
                         )
                     )
 
+    def get_annotations(
+        self,
+        item: SourceItem,
+        *,
+        processor: str | None = None,
+        key: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Annotations saved for a single item, keyed as `{processor: {key: value}}`.
+
+        `processor`/`key` narrow the query but never change the return
+        shape. Missing item, no annotations, or a filter matching nothing
+        all collapse to `{}` — there's no separate "item not found" signal,
+        since callers only ever care whether the annotation they asked for
+        is there.
+        """
+        with self.session_scope() as sess:
+            query = (
+                sess.query(DBItemAnnotation)
+                .join(DBSourceItem, DBItemAnnotation.source_item_id == DBSourceItem.id)
+                .filter(DBSourceItem.uid == item.uid)
+            )
+            if processor is not None:
+                query = query.filter(DBItemAnnotation.processor == processor)
+            if key is not None:
+                query = query.filter(DBItemAnnotation.key == key)
+
+            result: dict[str, dict[str, Any]] = {}
+            for row in query.all():
+                result.setdefault(row.processor, {})[row.key] = row.value
+            return result
+
     def save_artifact(
         self, processor: str, name: str, content: str, content_type: str
     ) -> None:

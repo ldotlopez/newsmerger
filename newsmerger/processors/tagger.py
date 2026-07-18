@@ -1,25 +1,22 @@
-"""Example ItemProcessor: derives simple per-item annotations.
-
-This is a placeholder implementation (naive text heuristics, no external
-LLM call) meant to demonstrate the processor contract — multiple
-annotation keys per item, each computed independently so a failure in one
-doesn't lose the other (see `PartialFailure`). Swap `_extract_tags` /
-`_summarize` for real LLM calls when wiring this up for real.
-"""
-
 import json
 import logging
 import os
 from typing import Any
 
 import ollama
+import pydantic
 
 from ..models import SourceItem
 from . import ItemProcessor, PartialFailure
 
 LOGGER = logging.getLogger(__name__)
 
-PROMPT = """
+ResponseBaseModel = pydantic.RootModel[list[str]]
+
+RESPONSE_JSON_SCHEMA = json.dumps(ResponseBaseModel.model_json_schema())
+
+
+PROMPT = f"""
 You are an expert entity extraction and content tagging assistant. Your sole task is to analyze the provided text and extract relevant tags.
 
 ### Extraction Rules:
@@ -41,10 +38,11 @@ You are an expert entity extraction and content tagging assistant. Your sole tas
 
 *   Do **NOT** wrap the JSON in markdown code blocks unless specifically requested. Output nothing but the raw JSON structure.
 
+*  Respond with JSON matching this exact schema: {RESPONSE_JSON_SCHEMA}
 
 ### Example Output Format:
 
-["Category", "Person Name", "Location Name", "Organization"]
+{{"items": ["Category", "Topic", "Persona Name", "Location Name", "Organization"]}}
 
 ### Input Text:
 
@@ -63,6 +61,7 @@ class Processor(ItemProcessor):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+
         self.model = model
 
         api_base = api_base or os.environ.get(
@@ -70,22 +69,38 @@ class Processor(ItemProcessor):
         )
         api_key = api_key or os.environ.get("OLLAMA_API_KEY")
 
-        self.client = ollama.Client(
-            host=api_base,
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+        headers = {}
+        if api_key:
+            headers.update({"Authorization": f"Bearer {api_key}"})
+
+        self.client = ollama.Client(host=api_base, headers=headers)
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
+        annotations = self.db.get_annotations(item, processor="markdownify", key="text")
+        text = annotations.get("markdownify", {}).get("text")
+        if not text:
+            raise PartialFailure(
+                {},
+                {"tags": "markdownify text annotation not yet available for this item"},
+            )
+
+        # https://gemma4-ai.com/blog/gemma4-json-output
         resp = self.client.generate(
-            model=self.model, prompt=PROMPT + item.content, stream=False
+            model=self.model, prompt=PROMPT + text, stream=False, format="json"
         )
 
         results = {}
         errors = {}
 
         try:
-            results["tags"] = json.loads(resp.response)
-        except json.JSONDecodeError as e:
+            data = json.loads(clean_json(resp.response))
+            llm_tags = ResponseBaseModel(data["items"]).root
+        except (
+            pydantic.ValidationError,
+            KeyError,
+            AttributeError,
+            json.JSONDecodeError,
+        ) as e:
             errors["tags"] = str(e) + f"(content={resp.response!r})"
 
         if errors:
@@ -93,7 +108,34 @@ class Processor(ItemProcessor):
 
         item_tags = item.data.get("tags", [])
         if isinstance(item_tags, list):
-            results["tags"] = list(set(results["tags"] + item_tags))
+            results["tags"] = merge_tags(llm_tags, item_tags)
+        else:
+            results["tags"] = llm_tags
 
         LOGGER.debug(f"Tags for {item.title}: {results['tags']!r}")
         return results
+
+
+def clean_json(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1]  # Remove first line
+        text = text.rsplit("```", 1)[0]  # Remove last ```
+    return text.strip()
+
+
+def merge_tags(existing_tags: list[str], new_tags: list[str]) -> list[str]:
+    """Merge two lists of tags, ensuring uniqueness and preserving order."""
+
+    all_tags = existing_tags + new_tags
+
+    # create table with lowercased tags to ensure case-insensitive uniqueness
+    tlb = {x.lower(): [] for x in all_tags}
+
+    for tag in all_tags:
+        tlb[tag.lower()].append(tag)
+
+    # take the first occurrence of each tag (preserving original case)
+    merged = [tags[0] for tags in tlb.values()]
+
+    return merged
