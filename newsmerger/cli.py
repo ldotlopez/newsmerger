@@ -7,7 +7,6 @@ import pickle
 from datetime import timezone
 from pathlib import Path
 
-import requests
 import rich
 import rich_click as click
 from foundation.cache import Cache, StatValidator
@@ -30,16 +29,6 @@ _USE_PICKLE_DATA = os.environ.get("NEWSMERGER_PICKLE_CACHE", "0").lower() not in
     "false",
     "",
 )
-
-
-class NetworkError(Exception):
-    pass
-
-
-class ServerError(NetworkError):
-    def __init__(self, url: str, response: requests.Response):
-        self.url = url
-        self.response = response
 
 
 def provider_factory(source: SourceData, *args, **kwargs) -> BaseProvider:

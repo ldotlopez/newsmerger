@@ -61,3 +61,13 @@ class HTTPClient:
             LOGGER.debug(f"{url} saved {len(resp.content)} bytes")
 
         return content
+
+
+class NetworkError(Exception):
+    pass
+
+
+class ServerError(NetworkError):
+    def __init__(self, url: str, response: requests.Response):
+        self.url = url
+        self.response = response
