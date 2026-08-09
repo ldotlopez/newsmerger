@@ -4,13 +4,13 @@ import importlib
 import logging
 import os
 import pickle
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 
 import rich
 import rich_click as click
 from foundation.cache import Cache, StatValidator
-from foundation.logging import setup as setup_logging
+from foundation.loglib import setup_logger
 from foundation.storage import DiskStorage
 
 from newsmerger.config import Config
@@ -44,7 +44,7 @@ def provider_factory(source: SourceData, *args, **kwargs) -> BaseProvider:
         LOGGER.error(f"provider {source.provider} not found")
         raise
 
-    return getattr(m, "Provider")(source, *args, **kwargs)
+    return m.Provider(source, *args, **kwargs)
 
 
 def processor_factory(name: str, db: Database, **params) -> BaseProcessor:
@@ -54,7 +54,7 @@ def processor_factory(name: str, db: Database, **params) -> BaseProcessor:
         LOGGER.error(f"processor {name} not found")
         raise
 
-    return getattr(m, "Processor")(db, **params)
+    return m.Processor(db, **params)
 
 
 class App:
@@ -108,7 +108,7 @@ class App:
 def cli(ctx, config_path: Path | None):
     # ensure that ctx.obj exists and is a dict (in case `cli()` is called
     # by means other than the `if` block below)
-    setup_logging(PACKAGE_NAME)
+    setup_logger(PACKAGE_NAME)
     LOGGER.setLevel(logging.DEBUG)
 
     ctx.ensure_object(dict)
@@ -161,8 +161,8 @@ def process_cmd(ctx, processor_name, source, since, until, limit, force):
 
     scope = ProcessingScope(
         source=source,
-        since=since.replace(tzinfo=timezone.utc) if since else None,
-        until=until.replace(tzinfo=timezone.utc) if until else None,
+        since=since.replace(tzinfo=UTC) if since else None,
+        until=until.replace(tzinfo=UTC) if until else None,
         limit=limit,
     )
     processor.run(scope=scope, force=force)

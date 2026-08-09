@@ -18,16 +18,11 @@ dependencies = [
     "rich>=15.0.0",
     "rich-click>=1.9.7",
     "sqlalchemy>=2.0.51",
-    "feedparser>=6.0.12",
 ]
 
 [project.scripts]
 newsmerger = "newsmerger.cli:cli"
 
-[project.optional-dependencies]
-ai-tagging = [
-    "ollama>=0.6.2",
-]
 
 [tool.uv.sources]
 foundation = { workspace = true, editable = true }
@@ -37,4 +32,10 @@ dev = [
     "ipdb>=0.13.13",
     "ipython>=9.13.0",
     "pre-commit>=4.6.0",
+]
+tagging = [
+    "ollama>=0.6.2",
+]
+feeds = [
+    "feedparser>=6.0.12",
 ]
