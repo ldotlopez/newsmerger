@@ -4,6 +4,8 @@ Scope (--source/--since/--until/--limit) controls which items go into the
 feed. Produces one artifact named "feed".
 """
 
+from typing import Any
+
 import trafilatura
 
 from ..models import SourceItem
