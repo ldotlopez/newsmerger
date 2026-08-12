@@ -9,7 +9,7 @@ from pathlib import Path
 
 import rich
 import rich_click as click
-from foundation.cache import Cache, StatValidator
+from foundation.cache import Cache, TTLValidator
 from foundation.loglib import setup_logger
 from foundation.storage import DiskStorage
 
@@ -63,7 +63,7 @@ class App:
         self.db = Database(self.config.db.uri)
         self.cache = Cache(
             storage=DiskStorage(base_dir=self.config.cache.base_dir),
-            validator=StatValidator(expiration_time=self.config.cache.expiration),
+            validator=TTLValidator(expiration_time=self.config.cache.expiration),
         )
         LOGGER.info(
             "using cache ("
