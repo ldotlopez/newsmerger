@@ -1,7 +1,7 @@
 import hashlib
 import logging
+from collections.abc import Iterator
 from datetime import datetime
-from typing import Iterator
 
 import bs4
 import feedparser
