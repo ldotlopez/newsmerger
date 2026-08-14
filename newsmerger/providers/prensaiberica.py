@@ -3,6 +3,7 @@ import logging
 from collections.abc import Iterator
 from datetime import datetime
 from typing import ClassVar
+from urllib.parse import urljoin
 
 import feedparser
 from foundation.scrapelib import (
@@ -40,7 +41,7 @@ class Provider(IndexSiteProvider):
             )
             return
 
-        feed_url = f"{self.source.url.scheme}://{self.source.url.host}:{self.source.url.port}{href}"
+        feed_url = urljoin(str(self.source.url), href)
         feed_content = self.fetcher.get(feed_url)
         fc = feedparser.parse(feed_content)
         yield from (entry["link"] for entry in fc["entries"])
