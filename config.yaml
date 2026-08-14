@@ -7,6 +7,11 @@ sources:
     provider: castelloninformacion
     url: https://www.castelloninformacion.com/noticies/castello/
 
+  - id: castellonplaza
+    name: Castellón Plaza
+    provider: plaza
+    url: https://castellonplaza.com/castellon9/
+
 cache:
   expiration: 21600
 

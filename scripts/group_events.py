@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Standalone, read-only experiment: group source items into event clusters
 based on tag overlap.
 
@@ -12,7 +12,7 @@ Usage:
     python scripts/group_events.py --config config.yaml
     python scripts/group_events.py --config config.yaml --days 3 --min-score 0.4
     DISABLE_RICH=1 python scripts/group_events.py --config config.yaml
-"""
+"""  # noqa: EXE001
 
 from __future__ import annotations
 
@@ -21,12 +21,12 @@ import json
 import logging
 import math
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from pathlib import Path
 
 import rich_click as click
-from foundation.logging import setup as setup_logging
+from foundation.loglib import setup_logger
 
 from newsmerger.config import Config
 from newsmerger.consts import PACKAGE_NAME
@@ -265,7 +265,7 @@ def build_payload(
     return {
         "key": key,
         "params": params,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "singleton_count": singleton_count,
         "groups": groups_payload,
     }
@@ -321,7 +321,7 @@ def main(
     verbose,
     log_level,
 ):
-    setup_logging(PACKAGE_NAME)
+    setup_logger(PACKAGE_NAME)
     logging.getLogger(PACKAGE_NAME).setLevel(
         logging.DEBUG if verbose else log_level.upper()
     )
@@ -330,7 +330,7 @@ def main(
     # Read-only: never create/alter schema from this tool.
     db = Database(config.db.uri, create_schema=False)
 
-    scope = ProcessingScope(since=datetime.now(timezone.utc) - timedelta(days=days))
+    scope = ProcessingScope(since=datetime.now(UTC) - timedelta(days=days))
     items = load_tagged_items(db, scope)
 
     if not items:

@@ -1,0 +1,103 @@
+import hashlib
+import logging
+import re
+from collections.abc import Iterator
+from datetime import datetime
+from typing import ClassVar
+from urllib.parse import urljoin
+
+import bs4
+from foundation.dtlib import get_local_tz
+from foundation.scrapelib import (
+    drop_selectors,
+    head_meta_get_value,
+    prune_to_spine,
+    soupify,
+)
+
+from ..models import SourceItemData
+from . import URI, IndexSiteProvider
+
+LOGGER = logging.getLogger(__name__)
+
+DATETIME_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})[^\d]+(\d{2}):(\d{2})")
+
+
+class SectionNotFoundError(Exception):
+    pass
+
+
+def get_section(tag: bs4.Tag, title: str) -> bs4.Tag:
+    sections = tag.select("h2 span")
+    for sect in sections:
+        if sect.get_text().strip().lower() == "castellón":
+            return sect
+
+    raise SectionNotFoundError("Could not find section 'Castellón' in index page")
+
+
+def parse_datetime(tag: bs4.Tag) -> datetime:
+    text = tag.get_text().strip()
+    if (m := DATETIME_RE.search(text)) is None:
+        raise ValueError(f"Could not parse datetime from text: {text}")
+    day, month, year, hour, minute = map(int, m.groups())
+    dt = datetime(year, month, day, hour, minute, tzinfo=get_local_tz())
+    return dt
+
+
+class Provider(IndexSiteProvider):
+    NAME = "prensaiberica"
+    EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
+
+    def parse_index(self, content: bytes) -> Iterator[URI]:
+        soup = soupify(content.decode("utf-8"))
+        section = get_section(soup, "Castellón")
+        container = section.find_parent("div", {"class": "wrap-SUPERIOR"})
+        headlines = container.find_all(["h2", "h3"], {"itemprop": "headline"})
+        for h in headlines:
+            path = h.find("a").attrs.get("href")
+            url = urljoin(str(self.source.url), path)
+            yield url
+
+    def parse_item(self, content: bytes) -> SourceItemData:
+        soup = soupify(content.decode("utf-8"))
+
+        title = head_meta_get_value(soup, {"property": "og:title"})
+        image = head_meta_get_value(soup, {"property": "og:image"})
+        url = head_meta_get_value(soup, {"property": "og:url"})
+        author = soup.select_one(".redactor a").get_text().strip()
+        # pub_time = datetime.fromisoformat(
+        #     head_meta_get_value(soup, {"property": "article:published_time"})
+        # )
+        # mod_time = datetime.fromisoformat(
+        #     head_meta_get_value(soup, {"property": "article:modified_time"})
+        # )
+        #
+        content = soup.select_one(".wrap-FULL")
+        drop_selectors(content, [".container-mega", ".COLUMNA-DER"])
+        prune_to_spine(content)
+
+        try:
+            pub_time = parse_datetime(soup.select_one(".fecha-pub"))
+        except ValueError:
+            LOGGER.warning(f"Could not parse publication date of '{url}'")
+            pub_time = None
+
+        try:
+            mod_time = parse_datetime(soup.select_one(".fecha-mod"))
+        except ValueError:
+            # LOGGER.warning(f"Could not parse modification date of '{url}'")
+            mod_time = None
+
+        return SourceItemData(
+            uid=hashlib.sha256(url.encode()).hexdigest(),
+            title=title,
+            uri=url,
+            content=str(content),
+            published_at=pub_time,
+            modified_at=mod_time,
+            data={
+                "author": author,
+                "image": image,
+            },
+        )
