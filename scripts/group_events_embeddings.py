@@ -31,7 +31,7 @@ tagger.py: http://localhost:11343 - note this is NOT Ollama's usual default
 port, 11434; kept identical to tagger.py's existing default for
 consistency, not verified here) with an embedding-capable model pulled
 (e.g. `ollama pull nomic-embed-text`).
-"""
+"""  # noqa: EXE001
 
 from __future__ import annotations
 
@@ -42,13 +42,13 @@ import logging
 import math
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from pathlib import Path
 
 import ollama
 import rich_click as click
-from foundation.logging import setup as setup_logging
+from foundation.loglib import setup_logger
 
 from newsmerger.config import Config
 from newsmerger.consts import PACKAGE_NAME
@@ -458,7 +458,7 @@ def build_json_payload(
         ]
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "params": params,
         "baseline_groups": groups_payload(baseline_groups),
         "hybrid_groups": groups_payload(hybrid_groups),
@@ -555,7 +555,7 @@ def main(
     verbose,
     log_level,
 ):
-    setup_logging(PACKAGE_NAME)
+    setup_logger(PACKAGE_NAME)
     logging.getLogger(PACKAGE_NAME).setLevel(
         logging.DEBUG if verbose else log_level.upper()
     )
@@ -564,7 +564,7 @@ def main(
     # Read-only: never create/alter schema from this tool.
     db = Database(config.db.uri, create_schema=False)
 
-    scope = ProcessingScope(since=datetime.now(timezone.utc) - timedelta(days=days))
+    scope = ProcessingScope(since=datetime.now(UTC) - timedelta(days=days))
     items = load_tagged_items(db, scope)
 
     if not items:

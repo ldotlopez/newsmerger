@@ -1,6 +1,6 @@
 import logging
 from abc import abstractmethod
-from typing import Iterator
+from collections.abc import Iterator
 
 from newsmerger.httpclient import HTTPClient
 
@@ -43,6 +43,11 @@ class IndexSiteProvider(BaseProvider):
                 entry_data = self.parse_item(content)
             except ValueError as e:
                 LOGGER.error(f"error '{e}' while parsing '{url}'")
+                continue
+
+            # TODO: is this the right place to do this check? maybe it should be done in parse_item instead
+            if entry_data.content is None:
+                LOGGER.warning(f"skipping entry with no content: {url}")
                 continue
 
             yield entry_data
