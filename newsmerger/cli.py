@@ -18,7 +18,7 @@ from newsmerger.consts import PACKAGE_NAME
 from newsmerger.db import Database, ProcessingScope
 from newsmerger.models import SourceData, SourceItem
 from newsmerger.processors import BaseProcessor
-from newsmerger.providers import BaseProvider
+from newsmerger.providers import BaseProvider, IndexSiteProvider
 
 from .httpclient import HTTPClient
 
@@ -101,6 +101,19 @@ class App:
 
         return items
 
+    def import_url(self, source: SourceData) -> SourceItem:
+        """Import one item URL with its configured provider."""
+        provider = provider_factory(source.model_copy(deep=True), fetcher=self.fetcher)
+        if not isinstance(provider, IndexSiteProvider):
+            raise click.ClickException(
+                f"provider '{source.provider}' does not support URL imports"
+            )
+
+        item_data = provider.retrieve_item(str(source.url))
+        item = SourceItem.from_data(source, item_data)
+        self.db.upsert_source_items([item])
+        return item
+
 
 @click.group()
 @click.option("-c", "--config", "config_path", type=Path, default=None)
@@ -127,6 +140,28 @@ def import_cmd(ctx):
         provider = provider_factory(source_config, fetcher=app.fetcher)
         items = app.import_source(provider)
         rich.print(f"Imported {len(items)} items from '{source_config.name}'")
+
+
+@cli.command("import-url")
+@click.option("-p", "--provider", required=True, help="Provider module name")
+@click.argument("url")
+@click.pass_context
+def import_url_cmd(ctx, provider: str, url: str) -> None:
+    app = App.from_click_context(ctx)
+
+    try:
+        source = SourceData(
+            name=f"{provider}:{url}",
+            provider=provider,
+            url=url,
+        )
+        item = app.import_url(source)
+    except ModuleNotFoundError as exc:
+        raise click.ClickException(f"provider '{provider}' not found") from exc
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    rich.print(f"Imported item '{item.title}' from '{item.uri}'")
 
 
 @cli.command("process")

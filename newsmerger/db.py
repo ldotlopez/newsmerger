@@ -5,9 +5,10 @@ import dataclasses
 import enum
 import logging
 from abc import abstractmethod
-from datetime import datetime, timezone
+from collections.abc import Iterable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Generic, Iterable, Iterator, Self, TypeVar
+from typing import Any, Self, TypeVar
 
 from foundation.jsonlib import dump_json_compatible, load_json_compatible
 from sqlalchemy import (
@@ -34,24 +35,21 @@ Base = declarative_base()
 DTO = TypeVar("DTO")
 
 
-class DtoTransferMixin(Generic[DTO]):
+class DtoTransferMixin[DTO]:
     """Mixin for DB models to provide conversion to/from DTOs"""
 
     @classmethod
     @abstractmethod
     def from_dto(cls, dto: DTO, **kwargs) -> Self:
         """Convert from DTO to DB model"""
-        pass
 
     @abstractmethod
     def to_dto(self) -> DTO:
         """Convert from DB model to DTO"""
-        pass
 
     @abstractmethod
     def update(self, dto: DTO) -> None:
         """Update DB model from DTO"""
-        pass
 
 
 class CustomJSON(TypeDecorator):
@@ -87,12 +85,12 @@ class UTCDateTime(TypeDecorator):
             return None
         if value.tzinfo is None:
             raise ValueError(f"naive datetime not allowed: {value!r}")
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
     def process_result_value(self, value: Any, dialect: Any) -> datetime | None:
         if value is None:
             return None
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 class DBSource(DtoTransferMixin[SourceData], Base):
@@ -471,7 +469,7 @@ class Database:
         )
         existing_by_uid = {db_item.uid: db_item for db_item in existing_items}
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         created, updated, unchanged = 0, 0, 0
 
         for uid, item in items_by_uid.items():
@@ -569,7 +567,7 @@ class Database:
         `ignored` items.
         """
         scope = scope or ProcessingScope()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         with self.session_scope() as sess:
             query = (
@@ -656,7 +654,7 @@ class Database:
     ) -> None:
         with self.session_scope() as sess:
             db_item = sess.query(DBSourceItem).filter_by(uid=item.uid).one()
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             state = (
                 sess.query(DBProcessingState)
                 .filter_by(source_item_id=db_item.id, processor=processor)
@@ -695,7 +693,7 @@ class Database:
 
         with self.session_scope() as sess:
             db_item = sess.query(DBSourceItem).filter_by(uid=item.uid).one()
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             existing = (
                 sess.query(DBItemAnnotation)
@@ -757,7 +755,7 @@ class Database:
         self, processor: str, name: str, content: str, content_type: str
     ) -> None:
         with self.session_scope() as sess:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             existing = (
                 sess.query(DBArtifact)
                 .filter_by(processor=processor, name=name)

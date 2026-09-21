@@ -2,6 +2,7 @@ import datetime
 import unittest
 from pathlib import Path
 from pprint import pprint as pp
+from unittest.mock import Mock
 
 from newsmerger.models import SourceData, SourceItemData
 from newsmerger.providers.prensaiberica import Provider as PrensaIbericaProvider
@@ -161,6 +162,23 @@ class TestPrensaIberica(unittest.TestCase):
                     ],
                 },
             ),
+        )
+
+    def test_retrieve_item_fetches_and_parses_url(self) -> None:
+        content = read_sample("prensaiberica-item-132310503.html")
+        fetcher = Mock()
+        fetcher.get.return_value = content
+        provider = PrensaIbericaProvider(
+            source=self.provider.source,
+            fetcher=fetcher,
+        )
+
+        item = provider.retrieve_item("https://example.test/article")
+
+        fetcher.get.assert_called_once_with("https://example.test/article")
+        self.assertEqual(
+            item.uid,
+            "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8",
         )
 
 
