@@ -41,11 +41,70 @@ class ProcessorConfig(pydantic.BaseModel):
     params: ProcessorConfigParams
 
 
+class PipelineStepConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    processor: str
+    params: ProcessorConfigParams = pydantic.Field(
+        default_factory=ProcessorConfigParams
+    )
+
+
+class PipelineConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    name: str
+    steps: list[PipelineStepConfig]
+
+    @pydantic.field_validator("steps")
+    @classmethod
+    def validate_steps(
+        cls, steps: list[PipelineStepConfig]
+    ) -> list[PipelineStepConfig]:
+        if not steps:
+            raise ValueError("pipeline must contain at least one step")
+
+        processor_names = [step.processor for step in steps]
+        if len(processor_names) != len(set(processor_names)):
+            raise ValueError("pipeline steps must not repeat a processor")
+        return steps
+
+
 class Config(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
     sources: list[SourceData] = []
     processors: list[ProcessorConfig] = []
+    pipelines: list[PipelineConfig] = []
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
+
+    @pydantic.model_validator(mode="after")
+    def validate_pipelines(self) -> Config:
+        processor_names = [processor.name for processor in self.processors]
+        if len(processor_names) != len(set(processor_names)):
+            raise ValueError("processor names must be unique")
+
+        pipeline_names = [pipeline.name for pipeline in self.pipelines]
+        if len(pipeline_names) != len(set(pipeline_names)):
+            raise ValueError("pipeline names must be unique")
+
+        configured_processors = set(processor_names)
+        for pipeline in self.pipelines:
+            unknown = {
+                step.processor
+                for step in pipeline.steps
+                if step.processor not in configured_processors
+            }
+            if unknown:
+                names = ", ".join(sorted(unknown))
+                raise ValueError(
+                    f"pipeline '{pipeline.name}' references unknown processor(s): {names}"
+                )
+        return self
+
+    def get_pipeline(self, name: str) -> PipelineConfig:
+        for pipeline in self.pipelines:
+            if pipeline.name == name:
+                return pipeline
+        raise ValueError(f"pipeline '{name}' is not configured")
 
     @classmethod
     def from_file(cls, filepath: str | Path) -> Config:

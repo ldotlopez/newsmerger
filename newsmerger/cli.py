@@ -13,7 +13,7 @@ from foundation.cache import Cache, TTLValidator
 from foundation.loglib import setup_logger
 from foundation.storage import DiskStorage
 
-from newsmerger.config import Config
+from newsmerger.config import Config, PipelineConfig
 from newsmerger.consts import PACKAGE_NAME
 from newsmerger.db import Database, ProcessingScope
 from newsmerger.models import SourceData, SourceItem
@@ -114,6 +114,29 @@ class App:
         self.db.upsert_source_items([item])
         return item
 
+    def run_pipeline(
+        self,
+        item: SourceItem,
+        pipeline: PipelineConfig,
+        *,
+        force: bool = False,
+    ) -> None:
+        scope = ProcessingScope(uids=(item.uid,))
+        configured_processors = {
+            processor.name: processor.params.model_dump()
+            for processor in self.config.processors
+        }
+        for step in pipeline.steps:
+            processor_name = step.processor
+            params = configured_processors.get(processor_name, {}).copy()
+            params.update(step.params.model_dump())
+            processor = processor_factory(processor_name, self.db, **params)
+            processor.run(scope=scope, force=force)
+            if not self.db.get_annotations(item, processor=processor_name):
+                raise click.ClickException(
+                    f"processor '{processor_name}' did not produce an output"
+                )
+
 
 @click.group()
 @click.option("-c", "--config", "config_path", type=Path, default=None)
@@ -162,6 +185,37 @@ def import_url_cmd(ctx, provider: str, url: str) -> None:
         raise click.ClickException(str(exc)) from exc
 
     rich.print(f"Imported item '{item.title}' from '{item.uri}'")
+
+
+@cli.command("pipeline-url")
+@click.argument("pipeline_name")
+@click.option("-p", "--provider", required=True, help="Provider module name")
+@click.option("--force", is_flag=True, help="Re-run already completed processors")
+@click.argument("url")
+@click.pass_context
+def pipeline_url_cmd(
+    ctx: click.Context,
+    pipeline_name: str,
+    provider: str,
+    force: bool,
+    url: str,
+) -> None:
+    app = App.from_click_context(ctx)
+
+    try:
+        source = SourceData(name=f"{provider}:{url}", provider=provider, url=url)
+        item = app.import_url(source)
+        pipeline = app.config.get_pipeline(pipeline_name)
+        app.run_pipeline(item, pipeline, force=force)
+    except (ModuleNotFoundError, ValueError, click.ClickException) as exc:
+        if isinstance(exc, click.ClickException):
+            raise
+        raise click.ClickException(str(exc)) from exc
+
+    rich.print(
+        f"Processed '{item.title}' with pipeline '{pipeline.name}' "
+        f"({', '.join(step.processor for step in pipeline.steps)})"
+    )
 
 
 @cli.command("process")

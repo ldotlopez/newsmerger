@@ -44,7 +44,17 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 ## Bigger, not really necessary yet (flagged, not scheduled)
 
 - **Markdown-generation postprocessor** — reads the cleaned HTML stored per item 2 above and converts to markdown for consumers. No consumer exists yet in this codebase; deferred until ingestion path is solid.
-- **General tagging/summarizing/querying post-processing pipeline** (per project description).
+- **Configuration-defined pipelines** — `pipeline-url` now accepts a pipeline
+  name and resolves an ordered list of configured processor steps. Processor
+  defaults live in `processors`; step-level params override those defaults.
+  The current example defines `publish-news` as
+  `markdownify -> summarize -> telegram`. This is intentionally linear and
+  does not yet provide durable Telegram idempotency or dependency graph
+  management.
+- **Telegram message formatting** — the basic Telegram processor now uses
+  `sendPhoto` when the source item has an image, includes the title, summary,
+  and original link in an escaped HTML caption, and falls back to
+  `sendMessage` when no image is available.
 - **Alembic migrations** — not needed until there's an actual schema change to migrate.
 - **Generalizing `BaseProvider`/`IndexSiteProvider`** for non-news "generic information" sources — speculative; wait for a second concrete use case.
 
