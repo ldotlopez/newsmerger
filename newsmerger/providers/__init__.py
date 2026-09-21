@@ -32,6 +32,10 @@ class IndexSiteProvider(BaseProvider):
     @abstractmethod
     def parse_item(self, content: bytes) -> SourceItemData: ...
 
+    def retrieve_item(self, url: str) -> SourceItemData:
+        """Fetch and parse one item URL."""
+        return self.parse_item(self.fetcher.get(url))
+
     def retrieve_items(self) -> Iterator[SourceItemData]:
         content = self.fetcher.get(str(self.source.url))
         links = self.parse_index(content)
