@@ -35,7 +35,6 @@ consistency, not verified here) with an embedding-capable model pulled
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import logging
@@ -50,49 +49,16 @@ import ollama
 import rich_click as click
 from foundation.loglib import setup_logger
 
-from newsmerger.config import Config
+from newsmerger.app import App
 from newsmerger.consts import PACKAGE_NAME
-from newsmerger.db import Database, ProcessingScope
-from newsmerger.models import SourceItem
+from newsmerger.db import ProcessingScope
+from newsmerger.processors._grouping_scoring import ScoredItem, load_tagged_items
 
 LOGGER = logging.getLogger(f"{PACKAGE_NAME}.tools.group_events_embeddings")
 
 DISABLE_RICH = os.environ.get("DISABLE_RICH", "0").lower() not in ("0", "false", "")
 
 DEFAULT_EMBEDDING_MODEL = os.environ.get("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
-
-
-@dataclasses.dataclass(frozen=True)
-class ScoredItem:
-    item: SourceItem
-    tags: frozenset[str]  # lowercased, for Jaccard - matches the other scripts
-    raw_tags: tuple[str, ...]  # original case/order, for the embedding text
-
-
-def load_tagged_items(db: Database, scope: ProcessingScope) -> list[ScoredItem]:
-    """Fetch items in scope along with their "tagger" tags annotation.
-
-    Items with no tags annotation yet are skipped entirely - they can't
-    participate in tag-based grouping either way.
-    """
-    items = db.get_source_items(scope=scope)
-    result = []
-    for item in items:
-        annotations = db.get_annotations(item, processor="tagger", key="tags")
-        tags = annotations.get("tagger", {}).get("tags") or []
-        if not tags:
-            LOGGER.debug(f"skipping '{item.title}' - no tags annotation")
-            continue
-        result.append(
-            ScoredItem(
-                item=item,
-                tags=frozenset(t.lower() for t in tags),
-                raw_tags=tuple(tags),
-            )
-        )
-
-    LOGGER.info(f"{len(result)}/{len(items)} items in scope have tags")
-    return result
 
 
 def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
@@ -560,12 +526,10 @@ def main(
         logging.DEBUG if verbose else log_level.upper()
     )
 
-    config = Config.from_file(config_path) if config_path else Config()
-    # Read-only: never create/alter schema from this tool.
-    db = Database(config.db.uri, config.db.content_dir, create_schema=False)
-
     scope = ProcessingScope(since=datetime.now(UTC) - timedelta(days=days))
-    items = load_tagged_items(db, scope)
+    # Read-only: never create/alter schema from this tool.
+    with App.from_config_file(config_path, create_schema=False) as app:
+        items = load_tagged_items(app.db, scope)
 
     if not items:
         LOGGER.warning("no tagged items found in scope - nothing to group")

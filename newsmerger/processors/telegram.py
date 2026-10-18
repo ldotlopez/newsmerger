@@ -7,9 +7,13 @@ from typing import Any
 import requests
 
 from ..models import SourceItem
-from . import ItemProcessor, PartialFailure
+from . import ItemProcessor
 
 MAX_CAPTION_LENGTH = 1024
+
+
+class TelegramError(Exception):
+    """The Telegram API answered with ok=false."""
 
 
 def build_caption(title: str, summary: str, uri: str) -> str:
@@ -34,6 +38,7 @@ def build_caption(title: str, summary: str, uri: str) -> str:
 
 class Processor(ItemProcessor):
     NAME = "telegram"
+    REQUIRES = "summarize"
 
     def __init__(
         self,
@@ -45,23 +50,17 @@ class Processor(ItemProcessor):
         super().__init__(*args, **kwargs)
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
         self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+        if not self.bot_token or not self.chat_id:
+            raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
-        if not self.bot_token or not self.chat_id:
-            raise PartialFailure(
-                {},
-                {"sended": "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required"},
-            )
+        # Never post an item twice, not even with --force or after it changed.
+        posted = self.db.get_annotations(item, processor=self.NAME, key="message_id")
+        message_id = posted.get(self.NAME, {}).get("message_id")
+        if message_id is not None:
+            return {"message_id": message_id}
 
-        annotations = self.db.get_annotations(
-            item, processor="summarize", key="summary"
-        )
-        summary = annotations.get("summarize", {}).get("summary")
-        if not summary:
-            raise PartialFailure(
-                {},
-                {"sended": "summary annotation is not available"},
-            )
+        summary = self.require_annotation(item, "summarize", "summary")
 
         caption = build_caption(item.title, str(summary), item.uri)
         image = item.data.get("image") if isinstance(item.data, dict) else None
@@ -89,12 +88,6 @@ class Processor(ItemProcessor):
         response.raise_for_status()
         result = response.json()
         if not result.get("ok"):
-            raise PartialFailure({}, {"sended": str(result)})
+            raise TelegramError(str(result))
 
-        self.db.save_artifact(
-            self.NAME,
-            f"sended:{item.uid}",
-            str(result.get("result", {}).get("message_id", "")),
-            "application/json",
-        )
-        return {"sended": True}
+        return {"message_id": result["result"]["message_id"]}

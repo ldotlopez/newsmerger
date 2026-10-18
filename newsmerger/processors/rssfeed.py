@@ -4,8 +4,8 @@ Scope (--source/--since/--until/--limit) controls which items go into the
 feed. Produces one artifact named "feed".
 """
 
-from datetime import datetime, timezone
-from typing import Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from xml.sax.saxutils import escape
 
 from ..db import ProcessingScope
@@ -40,7 +40,7 @@ class Processor(ArtifactProcessor):
 
     def _build_feed(self, items: list[SourceItem]) -> str:
         entries = "\n".join(self._build_entry(item) for item in items)
-        now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
+        now = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S %z")
 
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -54,7 +54,7 @@ class Processor(ArtifactProcessor):
     def _build_entry(self, item: SourceItem) -> str:
         pub_date = ""
         if item.published_at is not None:
-            pub_date = item.published_at.astimezone(timezone.utc).strftime(
+            pub_date = item.published_at.astimezone(UTC).strftime(
                 "%a, %d %b %Y %H:%M:%S %z"
             )
 

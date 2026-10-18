@@ -1,9 +1,10 @@
 import logging
 from abc import abstractmethod
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from ..db import Database, ProcessingScope, ProcessingStatus
-from ..models import SourceItem
+from ..models import Artifact, SourceItem
 
 LOGGER = logging.getLogger(__name__)
 
@@ -13,6 +14,10 @@ class SkipItem(Exception):
     deliberately not applicable (e.g. wrong language) rather than a
     processing failure. Recorded as `ignored` — a permanent skip that only
     `--force` will revisit."""
+
+
+class MissingAnnotationError(LookupError):
+    """An annotation a processor needs from an upstream one is missing."""
 
 
 class PartialFailure(Exception):
@@ -57,7 +62,13 @@ class BaseProcessor:
 class ItemProcessor(BaseProcessor):
     """Runs over individual items that don't yet have output from this
     processor (or are eligible for a retry / reprocess — see
-    `Database.get_unprocessed_items`)."""
+    `Database.get_unprocessed_items`).
+
+    REQUIRES names the processor whose output this one reads: only items it
+    finished on their current content are picked up.
+    """
+
+    REQUIRES: str | None = None
 
     def run(self, *, scope: ProcessingScope | None = None, force: bool = False) -> None:
         items = self.db.get_unprocessed_items(
@@ -66,6 +77,7 @@ class ItemProcessor(BaseProcessor):
             max_retries=self.MAX_RETRIES,
             force=force,
             scope=scope,
+            requires=self.REQUIRES,
         )
         LOGGER.info(f"{self.NAME}: {len(items)} item(s) to process")
 
@@ -73,18 +85,17 @@ class ItemProcessor(BaseProcessor):
             try:
                 result = self.process_item(item)
             except SkipItem as e:
-                self.db.mark_processing_result(
+                self.db.record_result(
                     item, self.NAME, ProcessingStatus.IGNORED, version=self.VERSION
                 )
                 LOGGER.info(f"{self.NAME} ignored '{item.uri}': {e}")
                 continue
             except PartialFailure as e:
-                if e.results:
-                    self.db.save_annotations(item, self.NAME, e.results)
-                self.db.mark_processing_result(
+                self.db.record_result(
                     item,
                     self.NAME,
                     ProcessingStatus.ERROR,
+                    annotations=e.results,
                     error="; ".join(f"{k}: {v}" for k, v in e.errors.items()),
                     version=self.VERSION,
                 )
@@ -93,7 +104,7 @@ class ItemProcessor(BaseProcessor):
                 )
                 continue
             except Exception as e:
-                self.db.mark_processing_result(
+                self.db.record_result(
                     item,
                     self.NAME,
                     ProcessingStatus.ERROR,
@@ -103,10 +114,21 @@ class ItemProcessor(BaseProcessor):
                 LOGGER.exception(f"{self.NAME} failed on '{item.uri}'")
                 continue
 
-            self.db.save_annotations(item, self.NAME, result)
-            self.db.mark_processing_result(
-                item, self.NAME, ProcessingStatus.DONE, version=self.VERSION
+            self.db.record_result(
+                item,
+                self.NAME,
+                ProcessingStatus.DONE,
+                annotations=result,
+                version=self.VERSION,
             )
+
+    def require_annotation(self, item: SourceItem, processor: str, key: str) -> Any:
+        """Return an upstream processor's annotation, or raise if it is missing."""
+        annotations = self.db.get_annotations(item, processor=processor, key=key)
+        value = annotations.get(processor, {}).get(key)
+        if not value:
+            raise MissingAnnotationError(f"{processor}.{key} annotation is missing")
+        return value
 
     @abstractmethod
     def process_item(self, item: SourceItem) -> dict[str, Any]:
@@ -128,7 +150,7 @@ class ArtifactProcessor(BaseProcessor):
 
     def run(self, *, scope: ProcessingScope | None = None, force: bool = False) -> None:
         for name, content, content_type in self.produce(scope or ProcessingScope()):
-            self.db.save_artifact(self.NAME, name, content, content_type)
+            self.db.save_artifact(Artifact(self.NAME, name, content, content_type))
             LOGGER.info(f"{self.NAME}: saved artifact '{name}' ({len(content)} bytes)")
 
     @abstractmethod
