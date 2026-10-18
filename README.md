@@ -95,14 +95,21 @@ uv run newsmerger -c config.yaml process markdownify --source "Castellón Plaza"
 - Item contents (HTML, PDF, ...) live outside the database, in `content_dir`,
   one file per sha256. Text content is always stored as UTF-8.
 
-Databases created before content storage existed must be migrated once,
-before running the new code:
+The database runs in WAL mode, so back it up with SQLite's backup API (or
+with no process using it), not by copying `data.db` alone.
 
-```sh
-uv run python scripts/migrate_content_to_storage.py --config config.yaml
+## Scripting
+
+Scripts build the same core the CLI uses:
+
+```python
+from pathlib import Path
+
+from newsmerger.app import App
+
+with App.from_config_file(Path("config.yaml"), create_schema=False) as app:
+    feed = app.db.get_artifact("rssfeed", "feed")
 ```
-
-It backs up the database to `<name>.bak` first and can be re-run safely.
 
 ## Development
 
