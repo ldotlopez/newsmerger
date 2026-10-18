@@ -19,7 +19,7 @@ class ImportUrlCommandTests(unittest.TestCase):
         app = Mock()
         app.import_url.return_value = item
 
-        with patch("newsmerger.cli.App.from_click_context", return_value=app):
+        with patch("newsmerger.cli.app_from_context", return_value=app):
             result = CliRunner().invoke(
                 cli,
                 [
@@ -54,7 +54,7 @@ class ImportUrlCommandTests(unittest.TestCase):
         )
         app.config.get_pipeline.return_value = pipeline
 
-        with patch("newsmerger.cli.App.from_click_context", return_value=app):
+        with patch("newsmerger.cli.app_from_context", return_value=app):
             result = CliRunner().invoke(
                 cli,
                 [
