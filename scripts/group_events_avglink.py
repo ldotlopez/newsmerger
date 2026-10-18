@@ -367,7 +367,7 @@ def main(
 
     config = Config.from_file(config_path) if config_path else Config()
     # Read-only: never create/alter schema from this tool.
-    db = Database(config.db.uri, create_schema=False)
+    db = Database(config.db.uri, config.db.content_dir, create_schema=False)
 
     scope = ProcessingScope(since=datetime.now(UTC) - timedelta(days=days))
     items = load_tagged_items(db, scope)

@@ -4,6 +4,8 @@ from pathlib import Path
 from pprint import pprint as pp
 from unittest.mock import Mock
 
+import pydantic
+
 from newsmerger.models import SourceData, SourceItemData
 from newsmerger.providers.prensaiberica import Provider as PrensaIbericaProvider
 
@@ -50,7 +52,8 @@ class TestPrensaIberica(unittest.TestCase):
                 uid="ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8",
                 title="El eco perdido de las fiestas de julio nacidas del asedio carlista sobre Castellón",
                 uri="https://www.elperiodicomediterraneo.com/castello/2026/07/11/eco-perdido-fiestas-julio-castellon-ribalta-carlista-historia-132310503.html",
-                content="[ignore]",
+                content=b"[ignore]",
+                mimetype="text/html",
                 data={
                     "author": "Ximo Górriz",
                     "image": "https://estaticos-cdn.prensaiberica.es/clip/66d17ffb-8e7c-43cf-9a9f-40d50ef6654d_16-9-discover-aspect-ratio_default_0_x683y256.png",
@@ -87,7 +90,8 @@ class TestPrensaIberica(unittest.TestCase):
                 title="El Grau se vuelca en las fiestas en honor a la Virgen "
                 "del Carmen: los 22 actos del programa y todas las "
                 "novedades",
-                content="[ignore]",
+                content=b"[ignore]",
+                mimetype="text/html",
                 uri="https://www.elperiodicomediterraneo.com/castello/2026/07/11/grau-vuelca-fiestas-honor-virgen-carmen-actos-castello-castellon-132340038.html",
                 data={
                     "author": "Paloma Aguilar",
@@ -129,7 +133,8 @@ class TestPrensaIberica(unittest.TestCase):
                 uid="12cd5c47e09f096cdb188afee9bd8d25ee06d40ee41feb1c2ec2d11f1679f96b",
                 title="Castellón apoya a la selección española desde la plaza Mayor",
                 uri="https://www.elperiodicomediterraneo.com/deportes/2026/07/10/castellon-apoya-seleccion-espanola-plaza-belgica-mayor-132344288.html",
-                content="[ignore]",
+                content=b"[ignore]",
+                mimetype="text/html",
                 data={
                     "author": "David Oliver",
                     "image": "https://estaticos-cdn.prensaiberica.es/clip/2e7b2496-8242-4717-b9ed-738592c3f461_16-9-discover-aspect-ratio_default_0_x731y325.jpg",
@@ -180,6 +185,24 @@ class TestPrensaIberica(unittest.TestCase):
             item.uid,
             "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8",
         )
+
+
+class TestSourceItemDataContent(unittest.TestCase):
+    def make(self, content: bytes, mimetype: str) -> SourceItemData:
+        return SourceItemData(
+            title="t", uri="https://example.test/a", content=content, mimetype=mimetype
+        )
+
+    def test_text_must_be_utf8(self) -> None:
+        with self.assertRaises(pydantic.ValidationError):
+            self.make("ñ".encode("latin-1"), "text/html")
+
+    def test_mimetype_must_not_carry_charset(self) -> None:
+        with self.assertRaises(pydantic.ValidationError):
+            self.make(b"<p>", "text/html; charset=utf-8")
+
+    def test_binary_is_not_decoded(self) -> None:
+        self.assertEqual(self.make(b"\xff\xfe", "application/pdf").content, b"\xff\xfe")
 
 
 if __name__ == "__main__":
