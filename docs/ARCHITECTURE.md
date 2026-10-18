@@ -198,9 +198,7 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
   transaction, recording the item's `content_sha256`.
 - `BaseProcessor.REQUIRES` names the upstream processor;
   `require_annotation()` reads its value.
-- Dependencies: `summarize` and `tagger` read `markdownify.markdown`;
-  `telegram` reads `summarize.summary` and stores the posted `message_id`,
-  which also keeps it from ever posting an item twice.
+- Dependencies: `summarize` and `tagger` read `markdownify.markdown`.
 - `Database.delete_annotations` removes annotations by processor, item or
   both, together with their processing state, so the items become pending.
 
@@ -215,10 +213,18 @@ and differ only in their clustering step: single-link and average-link over
 tag overlap, and single-link over tag overlap blended with tag embeddings
 (`grouping_embeddings`, computed with Ollama on every run).
 
+`telegram` is the remixer with an external side effect (decision 0005). It
+reads `summarize.summary` and keeps its state in its own `state` artifact,
+read back on every run: the first run's time (`watermark`), a FIFO queue of
+item keys, the posted items with their `message_id`, and each source's last
+post time. Without `since` or `uids` in the scope it queues only items
+published since `watermark`. It posts at most one item per source per
+`interval`; posting errors keep the item queued and are logged without the
+request URL, which embeds the bot token.
+
 ## Pipelines
 
 Pipelines stay outside the core (decision 0003). `scripts/pipeline_url.py`
 imports one URL into a configured source and runs a linear list of
 processors on it, stopping at the first one without output. There is no
-dependency graph and no idempotency guarantee for external side effects
-beyond `telegram`'s own `message_id` check.
+dependency graph and no idempotency guarantee for external side effects.
