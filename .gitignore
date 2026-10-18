@@ -180,3 +180,6 @@ pyrightconfig.json
 
 # macOS
 .DS_Store
+
+# Local configuration (see config.example.yaml)
+config.yaml
