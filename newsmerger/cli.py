@@ -1,149 +1,26 @@
 from __future__ import annotations
 
-import importlib
 import logging
-import os
-import pickle
 from datetime import UTC
 from pathlib import Path
 
 import rich
 import rich_click as click
-from foundation.cache import UserCache
 from foundation.loglib import setup_logger
 
-from newsmerger.config import Config, PipelineConfig
+from newsmerger.app import App, PipelineError
 from newsmerger.consts import PACKAGE_NAME
-from newsmerger.db import Database, ProcessingScope
-from newsmerger.models import SourceData, SourceItem
-from newsmerger.processors import BaseProcessor
-from newsmerger.providers import BaseProvider, IndexSiteProvider
-
-from .httpclient import HTTPClient
+from newsmerger.db import ProcessingScope
+from newsmerger.models import SourceData
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
 
-_USE_PICKLE_DATA = os.environ.get("NEWSMERGER_PICKLE_CACHE", "0").lower() not in (
-    "0",
-    "false",
-    "",
-)
 
-
-def provider_factory(source: SourceData, *args, **kwargs) -> BaseProvider:
-    """Instantiate a Provider.
-
-    Accepts either a config-like object with a `.provider` and `.url` attributes
-    (e.g., SourceConfig) or a provider module name string. If a config object is
-    provided and `url` is not in kwargs, the url will be filled from it.
-    """
-    try:
-        m = importlib.import_module(f"newsmerger.providers.{source.provider}")
-    except ModuleNotFoundError:
-        LOGGER.error(f"provider {source.provider} not found")
-        raise
-
-    return m.Provider(source, *args, **kwargs)
-
-
-def processor_factory(name: str, db: Database, **params) -> BaseProcessor:
-    try:
-        m = importlib.import_module(f"newsmerger.processors.{name}")
-    except ModuleNotFoundError:
-        LOGGER.error(f"processor {name} not found")
-        raise
-
-    return m.Processor(db, **params)
-
-
-class App:
-    def __init__(self, config: Config):
-        self.config = config
-        self.db = Database(self.config.db.uri, self.config.db.content_dir)
-        self.cache = UserCache(
-            app=PACKAGE_NAME,
-            expiration_time=self.config.cache.expiration,
-            base_dir=self.config.cache.base_dir,
-        )
-        LOGGER.info(
-            "using cache ("
-            + f"base_dir='{self.config.cache.base_dir}', "
-            + f"expiration_time={config.cache.expiration}"
-            + ")"
-        )
-        self.fetcher = HTTPClient(cache=self.cache)
-
-    @classmethod
-    def from_click_context(cls, ctx: click.Context) -> App:
-        config_path = ctx.obj["config_path"]
-        app = cls(config=Config.from_file(config_path) if config_path else Config())
-        ctx.call_on_close(app.close)
-        return app
-
-    def close(self) -> None:
-        """Drop expired cache entries, then release the cache."""
-        # UserCache never prunes on its own; once per run keeps it bounded.
-        self.cache.prune()
-        self.cache.close()
-
-    def import_source(self, provider: BaseProvider) -> list[SourceItem]:
-        """Import items from a runtime provider instance and return raw entry data."""
-        pickle_path = f"{provider.source.name}.pkl"
-        items: list[SourceItem] | None = None
-
-        if _USE_PICKLE_DATA and os.path.exists(pickle_path):
-            with open(pickle_path, "rb") as fh:
-                items = pickle.load(fh)
-
-        if items is None:
-            items = [
-                SourceItem.from_data(provider.source, item_data)
-                for item_data in provider.retrieve_items()
-            ]
-
-        if _USE_PICKLE_DATA:
-            with open(pickle_path, "wb") as fh:
-                pickle.dump(items, fh)
-
-        self.db.upsert_source_items(items)
-
-        return items
-
-    def import_url(self, source: SourceData) -> SourceItem:
-        """Import one item URL with its configured provider."""
-        provider = provider_factory(source.model_copy(deep=True), fetcher=self.fetcher)
-        if not isinstance(provider, IndexSiteProvider):
-            raise click.ClickException(
-                f"provider '{source.provider}' does not support URL imports"
-            )
-
-        item_data = provider.retrieve_item(str(source.url))
-        item = SourceItem.from_data(source, item_data)
-        self.db.upsert_source_items([item])
-        return item
-
-    def run_pipeline(
-        self,
-        item: SourceItem,
-        pipeline: PipelineConfig,
-        *,
-        force: bool = False,
-    ) -> None:
-        scope = ProcessingScope(uids=(item.uid,))
-        configured_processors = {
-            processor.name: processor.params.model_dump()
-            for processor in self.config.processors
-        }
-        for step in pipeline.steps:
-            processor_name = step.processor
-            params = configured_processors.get(processor_name, {}).copy()
-            params.update(step.params.model_dump())
-            processor = processor_factory(processor_name, self.db, **params)
-            processor.run(scope=scope, force=force)
-            if not self.db.get_annotations(item, processor=processor_name):
-                raise click.ClickException(
-                    f"processor '{processor_name}' did not produce an output"
-                )
+def app_from_context(ctx: click.Context) -> App:
+    """Build the App for this invocation and close it when the command ends."""
+    app = App.from_config_file(ctx.obj["config_path"])
+    ctx.call_on_close(app.close)
+    return app
 
 
 @click.group()
@@ -162,14 +39,13 @@ def cli(ctx, config_path: Path | None):
 @cli.command("import")
 @click.pass_context
 def import_cmd(ctx):
-    app = App.from_click_context(ctx)
+    app = app_from_context(ctx)
 
     rich.print(
         f"Importing {len(app.config.sources)} sources from {ctx.obj['config_path']}"
     )
     for source_config in app.config.sources:
-        provider = provider_factory(source_config, fetcher=app.fetcher)
-        items = app.import_source(provider)
+        items = app.import_source(source_config)
         rich.print(f"Imported {len(items)} items from '{source_config.name}'")
 
 
@@ -178,7 +54,7 @@ def import_cmd(ctx):
 @click.argument("url")
 @click.pass_context
 def import_url_cmd(ctx, provider: str, url: str) -> None:
-    app = App.from_click_context(ctx)
+    app = app_from_context(ctx)
 
     try:
         source = SourceData(
@@ -208,16 +84,14 @@ def pipeline_url_cmd(
     force: bool,
     url: str,
 ) -> None:
-    app = App.from_click_context(ctx)
+    app = app_from_context(ctx)
 
     try:
         source = SourceData(name=f"{provider}:{url}", provider=provider, url=url)
         item = app.import_url(source)
         pipeline = app.config.get_pipeline(pipeline_name)
         app.run_pipeline(item, pipeline, force=force)
-    except (ModuleNotFoundError, ValueError, click.ClickException) as exc:
-        if isinstance(exc, click.ClickException):
-            raise
+    except (ModuleNotFoundError, ValueError, PipelineError) as exc:
         raise click.ClickException(str(exc)) from exc
 
     rich.print(
@@ -242,19 +116,7 @@ def pipeline_url_cmd(
 )
 @click.pass_context
 def process_cmd(ctx, processor_name, source, since, until, limit, force):
-    app = App.from_click_context(ctx)
-
-    config_entry = next(
-        (p for p in app.config.processors if p.name == processor_name), None
-    )
-    if not config_entry:
-        LOGGER.warning(
-            f"Processor '{processor_name}' not found in config; using default parameters"
-        )
-
-    params = config_entry.params.model_dump() if config_entry else {}
-
-    processor = processor_factory(processor_name, app.db, **params)
+    app = app_from_context(ctx)
 
     scope = ProcessingScope(
         source=source,
@@ -262,4 +124,4 @@ def process_cmd(ctx, processor_name, source, since, until, limit, force):
         until=until.replace(tzinfo=UTC) if until else None,
         limit=limit,
     )
-    processor.run(scope=scope, force=force)
+    app.run_processor(processor_name, scope=scope, force=force)
