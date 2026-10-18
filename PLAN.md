@@ -3,16 +3,13 @@
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
-1. [ ] **Decide whether to rotate the secrets** (owner). The Ollama API key
-   and the Telegram bot token never reached git history (checked
-   2026-10-18): they only lived in the uncommitted `config.yaml`, which now
-   reads them from `${OLLAMA_API_KEY}`, `${TELEGRAM_BOT_TOKEN}` and
-   `${TELEGRAM_CHAT_ID}`. Rotate them if that file was shared elsewhere.
+Nothing scheduled.
 
 ---
 
 ## Done
 
+- [x] **Secrets**: no rotation needed (never committed; owner's call).
 - [x] **External scripts**: none existed outside `scripts/`. The embeddings
   experiment became the `grouping_embeddings` remixer (single-link over tag
   overlap blended with tag embeddings), sharing `single_link_groups` with
