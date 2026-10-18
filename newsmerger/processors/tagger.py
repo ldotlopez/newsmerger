@@ -7,7 +7,7 @@ import ollama
 import pydantic
 
 from ..models import SourceItem
-from . import ItemProcessor, PartialFailure
+from . import ItemProcessor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ You are an expert entity extraction and content tagging assistant. Your sole tas
 
 class Processor(ItemProcessor):
     NAME = "tagger"
+    REQUIRES = "markdownify"
 
     def __init__(
         self,
@@ -76,21 +77,12 @@ class Processor(ItemProcessor):
         self.client = ollama.Client(host=api_base, headers=headers)
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
-        annotations = self.db.get_annotations(item, processor="markdownify", key="text")
-        text = annotations.get("markdownify", {}).get("text")
-        if not text:
-            raise PartialFailure(
-                {},
-                {"tags": "markdownify text annotation not yet available for this item"},
-            )
+        markdown = self.require_annotation(item, "markdownify", "markdown")
 
         # https://gemma4-ai.com/blog/gemma4-json-output
         resp = self.client.generate(
-            model=self.model, prompt=PROMPT + text, stream=False, format="json"
+            model=self.model, prompt=PROMPT + markdown, stream=False, format="json"
         )
-
-        results = {}
-        errors = {}
 
         try:
             data = json.loads(clean_json(resp.response))
@@ -101,10 +93,9 @@ class Processor(ItemProcessor):
             AttributeError,
             json.JSONDecodeError,
         ) as e:
-            errors["tags"] = str(e) + f"(content={resp.response!r})"
+            raise ValueError(f"invalid tags response {resp.response!r}: {e}") from e
 
-        if errors:
-            raise PartialFailure(results, errors)
+        results = {}
 
         item_tags = item.data.get("tags", [])
         if isinstance(item_tags, list):

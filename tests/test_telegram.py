@@ -50,7 +50,7 @@ class TelegramProcessorTests(unittest.TestCase):
         self.assertIn(
             'href="https://example.test/article?a=1&amp;b=2"', payload["caption"]
         )
-        self.assertEqual(result, {"sended": True})
+        self.assertEqual(result, {"message_id": 42})
 
     @patch("newsmerger.processors.telegram.requests.post")
     def test_falls_back_to_text_without_image(self, post: Mock) -> None:
@@ -64,6 +64,16 @@ class TelegramProcessorTests(unittest.TestCase):
         self.assertTrue(request_url.endswith("/sendMessage"))
         self.assertIn("text", payload)
         self.assertNotIn("photo", payload)
+
+    @patch("newsmerger.processors.telegram.requests.post")
+    def test_already_posted_item_is_not_posted_again(self, post: Mock) -> None:
+        processor = self.make_processor()
+        processor.db.get_annotations.return_value = {"telegram": {"message_id": 7}}
+
+        result = processor.process_item(self.make_item())
+
+        post.assert_not_called()
+        self.assertEqual(result, {"message_id": 7})
 
     def test_caption_is_bounded_and_keeps_link(self) -> None:
         caption = build_caption(

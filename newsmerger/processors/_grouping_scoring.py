@@ -20,7 +20,8 @@ from ..models import SourceItem
 @dataclasses.dataclass(frozen=True)
 class ScoredItem:
     item: SourceItem
-    tags: frozenset[str]
+    tags: frozenset[str]  # lowercased, for Jaccard
+    raw_tags: tuple[str, ...]  # original case and order
 
 
 @dataclasses.dataclass(frozen=True)
@@ -39,14 +40,16 @@ def load_tagged_items(db: Database, scope: ProcessingScope) -> list[ScoredItem]:
     participate in tag-based grouping and never enter the scoring pool.
     """
     items = db.get_source_items(scope=scope)
-    result = []
-    for item in items:
-        annotations = db.get_annotations(item, processor="tagger", key="tags")
-        tags = annotations.get("tagger", {}).get("tags") or []
-        if not tags:
-            continue
-        result.append(ScoredItem(item=item, tags=frozenset(t.lower() for t in tags)))
-    return result
+    tags_by_uid = db.get_annotation_values(items, processor="tagger", key="tags")
+    return [
+        ScoredItem(
+            item=item,
+            tags=frozenset(t.lower() for t in tags),
+            raw_tags=tuple(tags),
+        )
+        for item in items
+        if (tags := tags_by_uid.get(item.uid))
+    ]
 
 
 def jaccard(a: frozenset[str], b: frozenset[str]) -> float:

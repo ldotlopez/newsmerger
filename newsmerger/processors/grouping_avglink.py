@@ -16,9 +16,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
-from typing import Iterator
 
 from ..db import ProcessingScope
 from . import ArtifactProcessor
@@ -96,7 +96,7 @@ def build_payload(
         )
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "params": params,
         "groups": groups_payload,
     }
@@ -121,7 +121,7 @@ class Processor(ArtifactProcessor):
     def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
         if scope.since is None:
             scope = dataclasses.replace(
-                scope, since=datetime.now(timezone.utc) - timedelta(days=self.days)
+                scope, since=datetime.now(UTC) - timedelta(days=self.days)
             )
 
         items = load_tagged_items(self.db, scope)

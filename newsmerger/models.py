@@ -93,6 +93,21 @@ class SourceItem:
         return dataclasses.asdict(self)
 
 
+@dataclasses.dataclass(slots=True)
+class Artifact:
+    """A processor output derived from many items (an RSS feed, a newsletter).
+
+    Unique per (processor, name); the timestamps are set by the database.
+    """
+
+    processor: str
+    name: str
+    content: str
+    content_type: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class SourceItemData(
     UidFromNameMixin,
     UidFieldMixin,

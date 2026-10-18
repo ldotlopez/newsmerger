@@ -5,8 +5,8 @@ from typing import Any
 
 import ollama
 
-from ..models import SourceItem
-from . import ItemProcessor, PartialFailure
+from ..models import Artifact, SourceItem
+from . import ItemProcessor
 
 PROMPT = """Summarize the following news article in the same language as the
 article. Return only a concise summary of 3 to 5 sentences.
@@ -17,6 +17,7 @@ Article:
 
 class Processor(ItemProcessor):
     NAME = "summarize"
+    REQUIRES = "markdownify"
 
     def __init__(
         self,
@@ -33,27 +34,18 @@ class Processor(ItemProcessor):
         self.client = ollama.Client(host=host, headers=headers)
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
-        annotations = self.db.get_annotations(item, processor="markdownify", key="text")
-        text = annotations.get("markdownify", {}).get("text")
-        if not text:
-            raise PartialFailure(
-                {},
-                {"summary": "markdownify text annotation is not available"},
-            )
+        markdown = self.require_annotation(item, "markdownify", "markdown")
 
         response = self.client.generate(
             model=self.model,
-            prompt=PROMPT + text,
+            prompt=PROMPT + markdown,
             stream=False,
         )
         summary = response.response.strip()
         if not summary:
-            raise PartialFailure({}, {"summary": "LLM returned an empty summary"})
+            raise ValueError("LLM returned an empty summary")
 
         self.db.save_artifact(
-            self.NAME,
-            f"summary:{item.uid}",
-            summary,
-            "text/plain",
+            Artifact(self.NAME, f"summary:{item.uid}", summary, "text/plain")
         )
         return {"summary": summary}

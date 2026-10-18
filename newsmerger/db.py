@@ -4,6 +4,7 @@ import contextlib
 import dataclasses
 import enum
 import logging
+import sqlite3
 from abc import abstractmethod
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
@@ -22,12 +23,20 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    event,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import (
+    Mapped,
+    Session,
+    aliased,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 from sqlalchemy.types import TypeDecorator
 
-from .models import SourceData, SourceItem, SupportsUid
+from .models import Artifact, SourceData, SourceItem, SupportsUid
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +44,22 @@ Base = declarative_base()
 
 
 DTO = TypeVar("DTO")
+
+# The connection settings foundation.dblib.SQLite3DB applies.
+SQLITE_PRAGMAS = (
+    "foreign_keys = ON",
+    "busy_timeout = 5000",
+    "journal_mode = WAL",
+    "synchronous = NORMAL",
+    "temp_store = MEMORY",
+)
+
+
+def _configure_sqlite_connection(
+    dbapi_connection: sqlite3.Connection, connection_record: Any
+) -> None:
+    for pragma in SQLITE_PRAGMAS:
+        dbapi_connection.execute(f"PRAGMA {pragma}")
 
 
 class DtoTransferMixin[DTO]:
@@ -145,7 +170,7 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     uid: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(Text)
     # Uid is provider-derived (often sha256(uri), but not guaranteed), so
     # uri gets its own real uniqueness/index rather than relying on uid.
@@ -278,7 +303,9 @@ class DBProcessingState(Base):
     __tablename__ = "processing_state"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_item_id: Mapped[int] = mapped_column(ForeignKey("source_items.id"))
+    source_item_id: Mapped[int] = mapped_column(
+        ForeignKey("source_items.id", ondelete="CASCADE")
+    )
     processor: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(50))
     attempts: Mapped[int] = mapped_column(default=0)
@@ -286,6 +313,9 @@ class DBProcessingState(Base):
     # Bumping a processor's VERSION constant makes previously `done` items
     # eligible again without needing --force (see Database._is_eligible).
     processor_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Item content this state was computed from; a different one on the item
+    # makes it eligible again (see Database._is_eligible).
+    content_sha256: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
@@ -315,7 +345,9 @@ class DBItemAnnotation(Base):
     __tablename__ = "item_annotations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_item_id: Mapped[int] = mapped_column(ForeignKey("source_items.id"))
+    source_item_id: Mapped[int] = mapped_column(
+        ForeignKey("source_items.id", ondelete="CASCADE")
+    )
     processor: Mapped[str] = mapped_column(String(255))
     key: Mapped[str] = mapped_column(String(255))
     value: Mapped[Any] = mapped_column(CustomJSON)
@@ -333,7 +365,7 @@ class DBItemAnnotation(Base):
         return f"<DBItemAnnotation(item={self.source_item_id}, processor={self.processor}, key={self.key})>"
 
 
-class DBArtifact(Base):
+class DBArtifact(DtoTransferMixin[Artifact], Base):
     """A generated output not tied to a single item (e.g. an RSS feed).
 
     (processor, name) is unique — `name` disambiguates when one processor
@@ -351,6 +383,37 @@ class DBArtifact(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (UniqueConstraint("processor", "name"),)
+
+    @classmethod
+    def from_dto(cls, dto: Artifact, **kwargs) -> DBArtifact:
+        """Convert from models.Artifact; kwargs override the timestamps."""
+        fields = {
+            "processor": dto.processor,
+            "name": dto.name,
+            "content": dto.content,
+            "content_type": dto.content_type,
+            "created_at": dto.created_at,
+            "updated_at": dto.updated_at,
+        }
+        fields.update(kwargs)
+        return cls(**fields)
+
+    def update(self, dto: Artifact) -> None:
+        """Update every field but the timestamps, which Database manages."""
+        self.processor = dto.processor
+        self.name = dto.name
+        self.content = dto.content
+        self.content_type = dto.content_type
+
+    def to_dto(self) -> Artifact:
+        return Artifact(
+            processor=self.processor,
+            name=self.name,
+            content=self.content,
+            content_type=self.content_type,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
 
     def __repr__(self):
         return f"<DBArtifact(processor={self.processor}, name={self.name})>"
@@ -379,6 +442,8 @@ class Database:
         except Exception:
             LOGGER.exception(f"Failed to create engine for '{database_url}'")
             raise
+        if self.engine.dialect.name == "sqlite":
+            event.listen(self.engine, "connect", _configure_sqlite_connection)
 
         if create_schema:
             try:
@@ -622,15 +687,22 @@ class Database:
         max_retries: int = 3,
         force: bool = False,
         scope: ProcessingScope | None = None,
+        requires: str | None = None,
     ) -> list[SourceItem]:
         """Items a processor should run on, given its current state and scope.
+
+        With `requires`, only items that processor finished on their current
+        content are candidates: anything it ignored, failed or has not reached
+        yet is left alone rather than attempted and failed here. This holds
+        even with `force=True`.
 
         Eligibility (pending / error-with-backoff-elapsed / done-with-stale-
         version) is evaluated in Python rather than SQL — the candidate set
         is already narrowed by `scope` in the query, and backoff math is
         simple enough that hand-rolling dialect-portable SQL for it isn't
         worth it. `force=True` skips eligibility entirely, including
-        `ignored` items.
+        `ignored` items. A state computed from older content is always
+        eligible again.
         """
         scope = scope or ProcessingScope()
         now = datetime.now(UTC)
@@ -645,13 +717,22 @@ class Database:
                     & (DBProcessingState.processor == processor),
                 )
             )
+            if requires is not None:
+                upstream = aliased(DBProcessingState)
+                query = query.join(
+                    upstream,
+                    (upstream.source_item_id == DBSourceItem.id)
+                    & (upstream.processor == requires)
+                    & (upstream.status == ProcessingStatus.DONE.value)
+                    & (upstream.content_sha256 == DBSourceItem.content_sha256),
+                )
             query = self._apply_scope(query, scope)
             query = query.order_by(DBSourceItem.published_at)
 
             result = []
             for db_item, state in query.all():
                 if not force and not self._is_eligible(
-                    state, version, max_retries, now
+                    state, db_item.content_sha256, version, max_retries, now
                 ):
                     continue
                 result.append(db_item.to_dto())
@@ -676,12 +757,15 @@ class Database:
     def _is_eligible(
         self,
         state: DBProcessingState | None,
+        content_sha256: str,
         version: str | None,
         max_retries: int,
         now: datetime,
     ) -> bool:
         if state is None:
             return True  # never attempted
+        if state.content_sha256 != content_sha256:
+            return True  # the item's content changed since the last run
         if state.status == ProcessingStatus.IGNORED:
             return False  # permanent skip; only --force reprocesses it
         if state.status == ProcessingStatus.DONE:
@@ -709,82 +793,99 @@ class Database:
                 query = query.limit(scope.limit)
             return [db_item.to_dto() for db_item in query.all()]
 
-    def mark_processing_result(
+    def record_result(
         self,
         item: SourceItem,
         processor: str,
         status: ProcessingStatus,
         *,
+        annotations: dict[str, Any] | None = None,
         error: str | None = None,
         version: str | None = None,
     ) -> None:
+        """Save a processor run's annotations and state in one transaction.
+
+        The state records `item.content_sha256`: the content the run used.
+        """
         with self.session_scope() as sess:
             db_item = sess.query(DBSourceItem).filter_by(uid=item.uid).one()
             now = datetime.now(UTC)
-            state = (
-                sess.query(DBProcessingState)
-                .filter_by(source_item_id=db_item.id, processor=processor)
-                .one_or_none()
+            if annotations:
+                self._save_annotations(sess, db_item.id, processor, annotations, now)
+            self._save_state(
+                sess, db_item.id, item, processor, status, error, version, now
             )
 
-            if state is None:
-                sess.add(
-                    DBProcessingState(
-                        source_item_id=db_item.id,
+    def _save_state(
+        self,
+        session: Session,
+        source_item_id: int,
+        item: SourceItem,
+        processor: str,
+        status: ProcessingStatus,
+        error: str | None,
+        version: str | None,
+        now: datetime,
+    ) -> None:
+        state = (
+            session.query(DBProcessingState)
+            .filter_by(source_item_id=source_item_id, processor=processor)
+            .one_or_none()
+        )
+        if state is None:
+            state = DBProcessingState(
+                source_item_id=source_item_id,
+                processor=processor,
+                attempts=0,
+                created_at=now,
+            )
+            session.add(state)
+        elif state.content_sha256 != item.content_sha256:
+            state.attempts = 0  # new content gets a full set of retries
+
+        state.status = status
+        state.content_sha256 = item.content_sha256
+        state.processor_version = version
+        state.updated_at = now
+        if status == ProcessingStatus.ERROR:
+            state.attempts += 1
+            state.last_error = error
+        else:
+            state.attempts = 0
+            state.last_error = None
+
+    def _save_annotations(
+        self,
+        session: Session,
+        source_item_id: int,
+        processor: str,
+        values: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        existing = (
+            session.query(DBItemAnnotation)
+            .filter_by(source_item_id=source_item_id, processor=processor)
+            .filter(DBItemAnnotation.key.in_(values.keys()))
+            .all()
+        )
+        existing_by_key = {row.key: row for row in existing}
+
+        for key, value in values.items():
+            row = existing_by_key.get(key)
+            if row is not None:
+                row.value = value
+                row.updated_at = now
+            else:
+                session.add(
+                    DBItemAnnotation(
+                        source_item_id=source_item_id,
                         processor=processor,
-                        status=status,
-                        attempts=1 if status == ProcessingStatus.ERROR else 0,
-                        last_error=error,
-                        processor_version=version,
+                        key=key,
+                        value=value,
                         created_at=now,
                         updated_at=now,
                     )
                 )
-                return
-
-            state.status = status
-            state.processor_version = version
-            state.updated_at = now
-            if status == ProcessingStatus.ERROR:
-                state.attempts += 1
-                state.last_error = error
-            else:
-                state.last_error = None
-
-    def save_annotations(
-        self, item: SourceItem, processor: str, values: dict[str, Any]
-    ) -> None:
-        if not values:
-            return
-
-        with self.session_scope() as sess:
-            db_item = sess.query(DBSourceItem).filter_by(uid=item.uid).one()
-            now = datetime.now(UTC)
-
-            existing = (
-                sess.query(DBItemAnnotation)
-                .filter_by(source_item_id=db_item.id, processor=processor)
-                .filter(DBItemAnnotation.key.in_(values.keys()))
-                .all()
-            )
-            existing_by_key = {row.key: row for row in existing}
-
-            for key, value in values.items():
-                row = existing_by_key.get(key)
-                if row is not None:
-                    row.value = value
-                    row.updated_at = now
-                else:
-                    sess.add(
-                        DBItemAnnotation(
-                            source_item_id=db_item.id,
-                            processor=processor,
-                            key=key,
-                            value=value,
-                            created_at=now,
-                            updated_at=now,
-                        )
-                    )
 
     def get_annotations(
         self,
@@ -817,31 +918,51 @@ class Database:
                 result.setdefault(row.processor, {})[row.key] = row.value
             return result
 
-    def save_artifact(
-        self, processor: str, name: str, content: str, content_type: str
-    ) -> None:
+    def get_annotation_values(
+        self, items: list[SourceItem], *, processor: str, key: str
+    ) -> dict[str, Any]:
+        """One annotation's value per item uid, in a single query.
+
+        Items without that annotation are absent from the result.
+        """
+        uids = [item.uid for item in items]
+        with self.session_scope() as sess:
+            rows = (
+                sess.query(DBSourceItem.uid, DBItemAnnotation.value)
+                .join(
+                    DBItemAnnotation, DBItemAnnotation.source_item_id == DBSourceItem.id
+                )
+                .filter(
+                    DBSourceItem.uid.in_(uids),
+                    DBItemAnnotation.processor == processor,
+                    DBItemAnnotation.key == key,
+                )
+            )
+            return dict(rows.all())
+
+    def save_artifact(self, artifact: Artifact) -> None:
+        """Create or replace the artifact named (processor, name)."""
         with self.session_scope() as sess:
             now = datetime.now(UTC)
             existing = (
                 sess.query(DBArtifact)
-                .filter_by(processor=processor, name=name)
+                .filter_by(processor=artifact.processor, name=artifact.name)
                 .one_or_none()
             )
             if existing is not None:
-                existing.content = content
-                existing.content_type = content_type
+                existing.update(artifact)
                 existing.updated_at = now
             else:
-                sess.add(
-                    DBArtifact(
-                        processor=processor,
-                        name=name,
-                        content=content,
-                        content_type=content_type,
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
+                sess.add(DBArtifact.from_dto(artifact, created_at=now, updated_at=now))
+
+    def get_artifact(self, processor: str, name: str) -> Artifact | None:
+        with self.session_scope() as sess:
+            db_artifact = (
+                sess.query(DBArtifact)
+                .filter_by(processor=processor, name=name)
+                .one_or_none()
+            )
+            return db_artifact.to_dto() if db_artifact is not None else None
 
     def _get_or_create_source(self, session, source: SourceData) -> DBSource:
         return self._get_or_create_source_bulk(session, [source])[0][1]
