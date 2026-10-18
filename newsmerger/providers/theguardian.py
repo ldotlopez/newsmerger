@@ -1,95 +1,72 @@
 import hashlib
 import logging
+import re
 from collections.abc import Iterator
 from datetime import datetime
 from urllib.parse import urljoin
 
 import feedparser
-from foundation.scrapelib import (
-    drop_selectors,
-    head_meta_get_value,
-    prune_to_spine,
-    soupify,
-)
+from foundation.scrapelib import drop_selectors, head_meta_get_value, soupify
 
 from ..models import SourceItemData
 from . import URI, IndexSiteProvider
 
 LOGGER = logging.getLogger(__name__)
 
+# Live blogs, videos, galleries and podcasts don't use the article body layout
+NON_ARTICLE_RE = re.compile(r"/(live|video|gallery|audio|picture)/")
+
 
 class Provider(IndexSiteProvider):
     def parse_index(self, content: bytes) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
-        if not (tag := soup.select_one('html head link[rel="alternate"]')):
-            LOGGER.warning("Could not find <link rel='alternate'> in index page")
-            return
+        tag = soup.select_one('link[rel="alternate"][type="application/rss+xml"]')
+        if tag is None or not (href := tag.attrs.get("href")):
+            raise ValueError("Could not find RSS feed link in index page")
 
-        href = tag.attrs.get("href")
-        if not href:
-            LOGGER.warning("Could not find href in <link rel='alternate'>")
-            return
-
-        if not href.startswith("/rss/section/"):
-            LOGGER.warning(
-                f"Unexpected href in <link rel='alternate'>: {href} (expected '/rss/section/...')"
-            )
-            return
-
-        feed_url = urljoin(str(self.source.url), href)
-        feed_content = self.fetcher.get(feed_url)
-        fc = feedparser.parse(feed_content)
-        yield from (entry["link"] for entry in fc["entries"])
+        feed = feedparser.parse(self.fetcher.get(urljoin(self.index_url, href)))
+        for entry in feed["entries"]:
+            if NON_ARTICLE_RE.search(entry["link"]):
+                LOGGER.debug(f"Skipping non-article entry '{entry['link']}'")
+                continue
+            yield entry["link"]
 
     def parse_item(self, content: bytes) -> SourceItemData:
         soup = soupify(content.decode("utf-8"))
 
+        url = head_meta_get_value(soup, {"property": "og:url"})
         title = head_meta_get_value(soup, {"property": "og:title"})
         image = head_meta_get_value(soup, {"property": "og:image"})
-        author = head_meta_get_value(soup, {"name": "author"})
-        url = head_meta_get_value(soup, {"property": "og:url"})
-        tags = head_meta_get_value(soup, {"property": "article:tag"}).split(",")
         section = head_meta_get_value(soup, {"property": "article:section"})
+        tags = head_meta_get_value(soup, {"property": "article:tag"}).split(",")
         pub_time = datetime.fromisoformat(
             head_meta_get_value(soup, {"property": "article:published_time"})
         )
         mod_time = datetime.fromisoformat(
             head_meta_get_value(soup, {"property": "article:modified_time"})
         )
-
-        if (main := soup.select_one("#main-content")) is None:
-            raise ValueError("Could not find main content container")
-
-        for div in main.find_all("div", recursive=False):
-            if div.get_text().find("Lo más leído") != -1:
-                div.decompose()  # Remove the "Lo más leído" section
-
-        drop_selectors(
-            main,
-            [
-                "#paywall",
-                ".ft-mol-rrss-column",
-                ".ft-mol-advice",
-                ".ft-ad",
-                ".closedContent",
-                ".ft-mol-writer",
-                ".ft-mol-tagsNews",
-                ".ft-mol-related",
-                ".ft-mol-related__header",
-                ".bloque_bajo_noticia",
-                "a#comments",
-                ".ft-mol-btnGroup",
-                ".disqus_thread",
-            ],
+        author = ", ".join(
+            a.get_text().strip() for a in soup.select('address a[rel="author"]')
         )
 
-        root = prune_to_spine(main)
+        if (body := soup.select_one(".article-body-commercial-selector")) is None:
+            raise ValueError("Could not find article body container")
+
+        drop_selectors(
+            body,
+            [
+                "#sign-in-gate",
+                "gu-island",
+                "button",
+                'figure[data-spacefinder-type$="NewsletterSignupBlockElement"]',
+            ],
+        )
 
         return SourceItemData(
             uid=hashlib.sha256(url.encode()).hexdigest(),
             title=title,
             uri=url,
-            content=str(root).encode("utf-8"),
+            content=str(body).encode("utf-8"),
             mimetype="text/html",
             published_at=pub_time,
             modified_at=mod_time,
