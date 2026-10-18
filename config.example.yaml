@@ -39,12 +39,13 @@ processors:
       api_base: http://localhost:11434
       api_key: ${OLLAMA_API_KEY}
       model: gemma4:12b
+
+remixers:
   - name: telegram
     params:
       bot_token: ${TELEGRAM_BOT_TOKEN}
       chat_id: ${TELEGRAM_CHAT_ID}
-
-remixers:
+      interval: 30                   # minutes between posts of the same source
   - name: rssfeed
   - name: grouping_singlelink
   - name: grouping_avglink
