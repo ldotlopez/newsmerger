@@ -1,3 +1,4 @@
+# Copy to config.yaml and adjust.
 # Secrets come from the environment or from a .env file next to this one:
 # ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}.
 # Write a literal dollar sign as $$.
@@ -18,15 +19,10 @@ sources:
     provider: plaza
     url: https://castellonplaza.com/castellon9/
 
-  # - id: juntagobiernolocal
-  #   name: Junta de Gobierno Local
-  #   provider: csjuntasgobierno
-  #   url: https://www.castello.es/es/sesiones
-
-  # - id: the-guardian-spain
-  #   name: The Guardian (Spain)
-  #   provider: theguardian
-  #   url: https://www.theguardian.com/world/spain
+  - id: the-guardian-spain
+    name: The Guardian (Spain)
+    provider: theguardian
+    url: https://www.theguardian.com/world/spain
 
 cache:
   expiration: 21600
@@ -35,14 +31,13 @@ processors:
   - name: markdownify
   - name: summarize
     params:
-      api_base: https://ollama.w.cuarentaydos.com
+      api_base: http://localhost:11434
       api_key: ${OLLAMA_API_KEY}
       model: gemma4:12b
   - name: tagger
     params:
-      api_base: https://ollama.w.cuarentaydos.com
+      api_base: http://localhost:11434
       api_key: ${OLLAMA_API_KEY}
-      # ['qwen2.5-coder:14b', 'qwen3.6:35b-a3b', 'gemma4:12b', 'llama3.2-vision:11b', 'qwen3-vl:8b', 'ministral-3:8b', 'qwen3:14b', 'phi4-mini:3.8b', 'llama3.2:3B', 'gemma3n:e4b', 'mistral-small3.2:24b', 'mxbai-embed-large:latest', 'llama3.1:8b', 'gemma4:26b', 'gemma4:12b-it-qat', 'deepseek-r1:14b', 'deepseek-coder-v2:16b', 'phi4:14b', 'qwen3.5:9b', 'qwen3-coder-next:cloud', 'qwen3.5:9b-98k', 'qwen3.5:9b-64k', 'qwen3.6:27b-mlx', 'gemma4:12b-mlx', 'qwen3.5:9b-mlx', 'devstral-small-2:24b', 'gemma4:26b', 'gemma4:e4b-mlx']
       model: gemma4:12b
   - name: telegram
     params:
@@ -55,6 +50,6 @@ remixers:
   - name: grouping_avglink
   - name: grouping_embeddings
     params:
-      api_base: https://ollama.w.cuarentaydos.com
+      api_base: http://localhost:11434
       api_key: ${OLLAMA_API_KEY}
       model: mxbai-embed-large:latest
