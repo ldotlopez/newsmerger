@@ -1,7 +1,7 @@
 # Architecture
 
 ```
-config.yaml ─► Config ─► App (cli.py)
+config.yaml ─► Config ─► App (app.py) ◄── cli.py, scripts/
                           │
         HTTPClient ◄──────┤ import / import-url
         (cached)          ▼
@@ -22,14 +22,15 @@ config.yaml ─► Config ─► App (cli.py)
 
 | Module | Responsibility |
 | :--- | :--- |
-| `cli.py` | Click commands and `App`, which wires config, cache, HTTP client, database, providers and processors. |
+| `app.py` | `App`, the application core: wires config, HTTP cache, database, providers and processors, and runs imports, processors and pipelines. Front ends use it instead of building their own wiring; reads go through `App.db`. |
+| `cli.py` | Click commands only; builds an `App` per invocation. |
 | `config.py` | Pydantic models for `config.yaml`: sources, database, cache, processors, pipelines. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated) and `SourceItem` (the item DTO used everywhere else). |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers/` | One module per site, each exposing `Provider`. |
 | `processors/` | One module per processor, each exposing `Processor`. |
-| `scripts/` | Standalone tools: grouping experiments and the content-storage migration. |
+| `scripts/` | Standalone tools built on `App`: grouping experiments. |
 
 ## Providers
 
@@ -57,14 +58,18 @@ SQLite tables:
   `content_sha256`, `data`, `published_at`, `modified_at`). `uid` and `uri`
   are unique.
 - `processing_state`: per item and processor, the status (`done`, `error`,
-  `ignored`), attempts and processor version.
+  `ignored`), attempts, processor version and the `content_sha256` the run
+  used.
 - `item_annotations`: per item and processor, key/value results (e.g.
   `markdownify.text`, `summarize.summary`).
 - `artifacts`: whole-dataset outputs, unique per `(processor, name)`.
 
 SQLAlchemy models never leave `db.py`: `Database` takes and returns DTOs.
-`Base.metadata.create_all` creates missing tables only; schema changes need
-a migration script (see `scripts/migrate_content_to_storage.py`).
+Every SQLite connection gets the settings `foundation.dblib.SQLite3DB` uses
+(`SQLITE_PRAGMAS`): foreign keys on, WAL, `busy_timeout`, `synchronous=NORMAL`,
+in-memory temp store. Item foreign keys are `ON DELETE CASCADE`.
+`Base.metadata.create_all` creates missing tables only; it never alters an
+existing schema.
 
 ### Content storage
 
@@ -96,14 +101,27 @@ a no-op.
 
 - `ItemProcessor.process_item(item)` returns annotations for one item.
   `Database.get_unprocessed_items` selects items that were never processed,
-  failed with retries left and backoff elapsed, or were done by an older
-  processor version. Raising `SkipItem` marks the item `ignored`;
-  `PartialFailure` saves partial results and marks it `error`.
+  whose content changed since the last run, that failed with retries left and
+  backoff elapsed, or that were done by an older processor version. Raising
+  `SkipItem` marks the item `ignored`; `PartialFailure` saves partial results
+  and marks it `error`; any other exception marks it `error`.
+- `Database.record_result` saves a run's annotations and state in one
+  transaction, recording the item's `content_sha256`. A content change resets
+  the retry count.
+- `ItemProcessor.REQUIRES` names the processor whose output it reads. Only
+  items that processor finished on their current content are picked up (even
+  with `--force`), so an upstream skip is never a downstream error.
+  `require_annotation()` reads the upstream value.
+- Dependencies: `summarize` and `tagger` read `markdownify.markdown`;
+  `telegram` reads `summarize.summary` and stores the posted `message_id`,
+  which also keeps it from ever posting an item twice.
 - `ArtifactProcessor.produce(scope)` yields `(name, content, content_type)`
-  for the whole scope, regenerated on each run.
-- Processors read other processors' output through annotations, e.g.
-  `summarize` reads `markdownify.text` and `telegram` reads
-  `summarize.summary`.
+  for the whole scope, regenerated on each run and stored as an `Artifact`
+  DTO, unique per `(processor, name)`. Artifacts feed RSS feeds and
+  newsletters built by external scripts, which read them with
+  `Database.get_artifact`.
+- Bulk reads such as `Database.get_annotation_values` (one annotation for many
+  items, one query) back whole-dataset processors like the groupings.
 
 ## Pipelines
 
