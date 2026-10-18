@@ -1,4 +1,3 @@
-import hashlib
 import logging
 
 import requests
@@ -10,7 +9,8 @@ DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/142.0",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "ca,en-US;q=0.7,en;q=0.3",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
+    # Only what requests decodes without extra packages: br/zstd came back raw.
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
     "Sec-Fetch-Dest": "document",
@@ -29,12 +29,6 @@ class HTTPClient:
         self.session = requests.Session()
         self.session.headers.update(headers)
 
-    @staticmethod
-    def _build_url_key(url: str) -> str:
-        h = hashlib.sha256()
-        h.update(url.encode("utf-8"))
-        return h.hexdigest()
-
     def get(self, url: str) -> bytes:
         return self.fetch("GET", url)
 
@@ -42,23 +36,21 @@ class HTTPClient:
         is_cacheable = method.upper() == "GET"
 
         if is_cacheable:
-            key = self._build_url_key(url)
             try:
-                content = self.cache.get(key)
+                content = self.cache.get(url)
                 LOGGER.debug(f"{url} found in cache ({len(content)} bytes)")
                 return content
             except cache.CacheMissError:
                 pass
-        else:
-            key = None
 
         resp = self.session.request(method, url, *args, **kwargs)
         content = resp.content
 
         LOGGER.debug(f"{url} fetched {len(content)} bytes")
-        if is_cacheable:
-            self.cache.set(key, content)  # ty:ignore[invalid-argument-type]
-            LOGGER.debug(f"{url} saved {len(resp.content)} bytes")
+        # Error pages must not be served from cache for the whole TTL.
+        if is_cacheable and resp.ok:
+            self.cache.set(url, content)
+            LOGGER.debug(f"{url} saved {len(content)} bytes")
 
         return content
 

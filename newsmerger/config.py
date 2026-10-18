@@ -25,6 +25,9 @@ class DatabaseConfig(pydantic.BaseModel):
             "sqlite:///" + platformdirs.user_data_dir(PACKAGE_NAME) + "/data.db"
         )
     )
+    content_dir: Path = pydantic.Field(
+        default_factory=lambda: platformdirs.user_data_path(PACKAGE_NAME) / "content"
+    )
 
 
 class ProcessorConfigParams(pydantic.BaseModel):

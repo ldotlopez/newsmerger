@@ -86,7 +86,8 @@ class Provider(IndexSiteProvider):
             uid=hashlib.sha256(url.encode()).hexdigest(),
             title=title,
             uri=url,
-            content=str(root),
+            content=str(root).encode("utf-8"),
+            mimetype="text/html",
             published_at=pub_time,
             modified_at=mod_time,
             data={

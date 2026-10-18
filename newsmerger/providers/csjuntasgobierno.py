@@ -61,13 +61,15 @@ class Provider(BaseProvider):
                 title=protodata.title,
                 published_at=protodata.dt,
                 modified_at=protodata.dt,
-                content="",
+                content=self.fetcher.get(protodata.uri),
+                mimetype="application/pdf",
                 data={
                     "type": protodata.type_,
                 },
             )
 
     def _iter_pdf_links(self, content: bytes) -> Iterator[PreparseData]:
+
         soup = bs4.BeautifulSoup(content.decode("utf-8"), "html5lib")
 
         for link in soup.select("a[href]"):

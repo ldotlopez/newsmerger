@@ -3,61 +3,85 @@
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
-1. [x] **Use `SourceItem.from_data()`** instead of inline `SourceItem(source=provider.source, **item_data.model_dump())` in `App.import_source`.
-   Helper already exists in `models.py` for this exact purpose — avoids duplicate construction logic.
-   *(Done as part of the pickle-cache edit to `import_source`.)*
+1. [ ] **Move secrets out of `config.yaml`.** It is tracked in git and holds an
+   Ollama API key, a Telegram bot token and a chat id. Rotate them and read
+   them from environment variables or an untracked file.
 
-2. [x] **Stop converting to markdown at ingestion — keep max context, drop only cruft.**
-   Principle: don't throw away structure a postprocessor might want later; only prune identifiable cruft (nav/ads/paywall/related-content/tracking). Mechanism: `foundation.scrapelib.prune_to_spine(node, stop_at=None)` (added manually by user) — keeps `main_node`'s ancestor chain up to root with attributes intact (`lang`, `itemtype`, wrapper classes), drops siblings not on that path. Combined with `drop_selectors` for cruft inside `main_node`'s own subtree. Stores resulting HTML in `content`, not markdown. Markdown generation becomes a later postprocessor's job — deferred, see "Bigger" section below.
+2. [ ] **Remove `ipdb.set_trace()` from `providers/theguardian.py`** (`parse_index`). Flagged by ruff (T100); the provider stops on every import.
 
-   - [x] `prensaiberica.py` — `main_node` (`#main-content`) → `drop_selectors` (list) → `prune_to_spine(main)` → `str(root)` stored. Dead `extract` import removed.
-   - [x] `castelloninformacion.py` — `main_node` (`article.post`) → `drop_selectors(article, [".td-is-sticky"])` → `prune_to_spine(article)` → `str(root)` stored.
-     - Correction (found on review): uses the *same* `drop_selectors` (plural, list) helper as `prensaiberica.py`, just called with a one-item list (`[".td-is-sticky"]`) — there is no separate singular `drop_selector` function. Earlier note claiming a deliberately different API surface was wrong.
-     - Note: only one selector dropped so far — worth a visual sanity check of `article.post` on a live/sample page to confirm no related-posts/inline-ad/author-bio widgets are still nested inside before considering this fully tuned.
+3. [ ] **Remove `_get_or_create_source` (singular)** in `db.py`: no callers;
+   `upsert_source_items` uses `_get_or_create_source_bulk` directly.
 
-3. [ ] **Confirm `save_source_items` is dead code** now that `upsert_source_items` is wired in via `cli.py`. If no other caller, remove it (and the never-called insert-only path in `DBSourceItem.update`).
+4. [ ] **Fix the `markdownify.py` module docstring.** It is copied from
+   `rssfeed.py` and describes an RSS feed.
 
-4. [ ] **Confirm `_get_or_create_source` (singular)** in `db.py` is unused — `save_source_items`/`upsert_source_items` both call `_get_or_create_source_bulk` directly. Remove if truly dead, or find the caller.
+5. [ ] **`castelloninformacion.py` cosmetic cleanup**: stray commented-out
+   `tags`/`section` extraction lines; wire them up or drop them.
 
-5. [ ] **Resolve the large commented-out block** in `_get_or_create_source_bulk` (`db.py`, ~30 lines) — superseded by `_get_or_create_bulk`. Delete, or confirm intentional and keep as reference.
+6. [ ] **Re-import `csjuntasgobierno` deliberately.** The provider now
+   downloads each PDF. Its 1234 existing rows were migrated with empty
+   content labelled `text/html`; the next import fetches every PDF and
+   updates them to `application/pdf`. The source is commented out in
+   `config.yaml` until then.
 
-6. [ ] **Add `--verbose` / `--log-level` options to `cli.py`.**
-   Project CLI conventions mandate these; currently `LOGGER.setLevel(logging.DEBUG)` is hardcoded with no flags.
+7. [ ] **Reclaim space in the migrated database.** `DROP COLUMN` does not
+   shrink the SQLite file; run `VACUUM` once. Delete `data.db.bak` when the
+   migration is confirmed good.
 
-7. [ ] **Add `DISABLE_RICH` environment variable support** (per CLI conventions doc).
+8. [ ] **Add `--verbose` / `--log-level` options to `cli.py`.**
+   `LOGGER.setLevel(logging.DEBUG)` is hardcoded with no flags.
 
-8. [ ] **Introduce `rich` for CLI output** (progress/status during import, error summaries), via `rich_click` (already used as the `click` import in `cli.py` for its help/usage formatting) for better integration between the two libraries, rather than importing plain `rich` alongside it. Additive — nothing currently violates the convention since there's no rich output yet to disable.
+9. [ ] **Add `DISABLE_RICH` environment variable support.**
 
-9. [ ] **`castelloninformacion.py` cosmetic cleanup**  stray commented-out `tags`/`section` extraction lines (`# tags = head_meta_get_value_by_property(...)`, `# section = ...`) left over from when it tracked `prensaiberica.py`'s fields; either wire them up or drop them. (Earlier note about an unused `# from readability import Document` import was stale — that import isn't in the file anymore.) No functional impact.
-
-10. [ ] **`csjuntasgobierno.py`** — explicitly out of scope per project instructions ("ignore for now"). No action.
+10. [ ] **Introduce `rich` for CLI output** (progress during import, error
+    summaries) via `rich_click`, which `cli.py` already uses.
 
 ---
 
 ## Done
 
-- [x] **Swap `save_source_items` → `upsert_source_items`** in `App.import_source` (`cli.py`). Insert-only save silently no-op'd on re-import of already-seen items; upsert diff-updates them properly.
-- [x] **Gate the debug pickle dump behind `NEWSMERGER_PICKLE_CACHE`** env var in `App.import_source` (`cli.py`). If set and not `0`/`false`/empty: load from `{source_name}.pkl` if present, else fetch real data via `provider.retrieve_items()`; always write the pickle back afterward when caching is enabled. Unconditional dump removed.
+- [x] **Content storage.** Item contents moved out of SQLite into a
+  `foundation.storage.DiskStorage` keyed by sha256 (`db.content_dir`).
+  `source_items.content` replaced by `mimetype` + `content_sha256`; text is
+  always UTF-8; processors load content on demand via `Database.get_content`.
+  Real database migrated with `scripts/migrate_content_to_storage.py`
+  (1888 items, 655 distinct contents).
+- [x] **Removed `save_source_items`** and its tests; `upsert_source_items` is
+  the only write path. The commented-out block in `_get_or_create_source_bulk`
+  is gone too.
+- [x] **Removed `newsmerger/filestore.py`** (`BufferedStore`), superseded by
+  `foundation.storage`.
+- [x] **Keep cleaned HTML at ingestion instead of markdown.** Providers keep
+  `main_node` and its ancestors with `prune_to_spine`, drop cruft with
+  `drop_selectors`, and store the HTML. Markdown is the `markdownify`
+  processor's job.
+- [x] **Use `SourceItem.from_data()`** in `App.import_source`.
+- [x] **Swap `save_source_items` → `upsert_source_items`** in `App.import_source`.
+- [x] **Gate the debug pickle dump behind `NEWSMERGER_PICKLE_CACHE`.**
+- [x] **Configuration-defined pipelines.** `pipeline-url` runs an ordered list
+  of configured processor steps; step params override processor defaults.
+- [x] **Telegram message formatting.** `sendPhoto` with an escaped HTML caption
+  (title, summary, link) when the item has an image, `sendMessage` otherwise.
 
 ---
 
 ## Bigger, not really necessary yet (flagged, not scheduled)
 
-- **Markdown-generation postprocessor** — reads the cleaned HTML stored per item 2 above and converts to markdown for consumers. No consumer exists yet in this codebase; deferred until ingestion path is solid.
-- **Configuration-defined pipelines** — `pipeline-url` now accepts a pipeline
-  name and resolves an ordered list of configured processor steps. Processor
-  defaults live in `processors`; step-level params override those defaults.
-  The current example defines `publish-news` as
-  `markdownify -> summarize -> telegram`. This is intentionally linear and
-  does not yet provide durable Telegram idempotency or dependency graph
-  management.
-- **Telegram message formatting** — the basic Telegram processor now uses
-  `sendPhoto` when the source item has an image, includes the title, summary,
-  and original link in an escaped HTML caption, and falls back to
-  `sendMessage` when no image is available.
-- **Alembic migrations** — not needed until there's an actual schema change to migrate.
-- **Generalizing `BaseProvider`/`IndexSiteProvider`** for non-news "generic information" sources — speculative; wait for a second concrete use case.
+- **Constraints on migrated databases.** SQLite `ALTER TABLE` cannot add
+  NOT NULL or CHECK constraints, so the migrated `source_items` lacks the
+  ones a fresh schema has. Rebuild the table if they ever matter.
+- **Concurrent imports.** Releasing replaced contents can race with another
+  process starting to reference the same content. Add a lock if imports ever
+  run in parallel.
+- **PDF text extraction.** `markdownify` skips non-HTML items; PDF items need
+  their own extraction step before `summarize`/`tagger` can use them.
+- **Pipeline idempotency.** Pipelines are linear with no durable Telegram
+  idempotency and no dependency graph.
+- **Alembic migrations.** One-shot scripts are enough until schema changes
+  become frequent.
+- **Generalizing `BaseProvider`/`IndexSiteProvider`** for non-news sources:
+  wait for a second concrete use case.
 
 ---
 
-*Last updated: 2026-07-17*
+*Last updated: 2026-10-18*
