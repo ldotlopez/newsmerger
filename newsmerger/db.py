@@ -12,12 +12,12 @@ import dataclasses
 import enum
 import hashlib
 import logging
+import sqlite3
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 
-from foundation.dblib import configure_connection
 from foundation.jsonlib import dump_json_compatible, load_json_compatible
 from foundation.storage import DiskStorage
 from sqlalchemy import (
@@ -48,6 +48,21 @@ from sqlalchemy.types import TypeDecorator
 from .models import Artifact, ItemKey, ProcessingScope, SourceData, SourceItem
 
 LOGGER = logging.getLogger(__name__)
+
+SQLITE_PRAGMAS = (
+    "foreign_keys = ON",
+    "busy_timeout = 5000",
+    "journal_mode = WAL",
+    "synchronous = NORMAL",
+    "temp_store = MEMORY",
+)
+
+
+def _configure_sqlite_connection(
+    dbapi_connection: sqlite3.Connection, connection_record: Any
+) -> None:
+    for pragma in SQLITE_PRAGMAS:
+        dbapi_connection.execute(f"PRAGMA {pragma}")
 
 
 class Base(DeclarativeBase):
@@ -321,11 +336,7 @@ class Database:
         self._ensure_sqlite_directory(database_url)
         self.engine = create_engine(database_url)
         if self.engine.dialect.name == "sqlite":
-            event.listen(
-                self.engine,
-                "connect",
-                lambda connection, _: configure_connection(connection),
-            )
+            event.listen(self.engine, "connect", _configure_sqlite_connection)
         if create_schema:
             Base.metadata.create_all(self.engine)
 
