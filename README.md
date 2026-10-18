@@ -54,12 +54,13 @@ processors:                          # run in this order by `enrich`
       model: gemma4:12b
       api_base: https://ollama.example.com
       api_key: ${OLLAMA_API_KEY}
+
+remixers:                            # run in this order by `remix`
   - name: telegram
     params:
       bot_token: ${TELEGRAM_BOT_TOKEN}
       chat_id: ${TELEGRAM_CHAT_ID}
-
-remixers:                            # run in this order by `remix`
+      interval: 30                   # minutes between posts of the same source
   - name: rssfeed
     params:
       title: Castelló news
@@ -113,7 +114,7 @@ uv run newsmerger -c config.yaml artifact rssfeed feed > feed.xml
 ```
 
 `enrich`, `remix` and `items` accept `--source` (a source id), `--since`,
-`--until` and `--limit`.
+`--until`, `--uid` (repeatable, within `--source`) and `--limit`.
 
 `annotations` shows a one-line preview per key; `--key` prints full values
 (text as is, the rest as JSON). `artifact` writes the content to stdout and
@@ -140,10 +141,6 @@ or progress bars, one line per log record.
 - `--force` reprocesses everything in scope, skipped items included, with
   fresh retry attempts.
 
-`telegram` posts every summarized item in scope that it hasn't posted yet,
-and never posts the same item twice. On a fresh database, limit the first
-`enrich` with `--since`.
-
 ### Providers
 
 | Provider | Site | Content |
@@ -164,12 +161,12 @@ To support a new site, see
 | `markdownify` | item content | Extracts the article's markdown from HTML items |
 | `summarize` | `markdownify.markdown` | Summarizes the article with Ollama |
 | `tagger` | `markdownify.markdown` | Extracts entity tags with Ollama |
-| `telegram` | `summarize.summary` | Posts title, summary and link to a Telegram chat, once per item |
 
 ### Remixers
 
 | Remixer | Artifact | Does |
 | :--- | :--- | :--- |
+| `telegram` | `state` | Posts summarized items (title, summary, link) to a Telegram chat, at most one per source every `interval` minutes (`bot_token`, `chat_id`, `interval`) |
 | `rssfeed` | `feed` | RSS feed of the newest items in scope (`title`, `link`, `description`, `max_items`) |
 | `grouping_singlelink` | `current` | Clusters tagged items into events (single-link) |
 | `grouping_avglink` | `current` | Clusters tagged items into events (average-link) |
@@ -177,6 +174,16 @@ To support a new site, see
 
 Artifacts are rebuilt each time their remixer runs, so between runs they can
 lag behind the stored items.
+
+`telegram` keeps a FIFO queue per source. Each run queues the summarized
+items not queued or posted yet, oldest first, and posts the head of every
+queue whose source last posted at least `interval` minutes ago, so run
+`remix telegram` periodically (e.g. from cron every few minutes). Its first
+run only records the time: by default, only items published after it are
+queued. To queue older items, pass `--since` or `--source` with `--uid`. An
+item is never posted twice. A failed post is logged and stays at the head of
+its queue, holding back that source until it succeeds; the queue, the posted
+items and the last post per source are in `artifact telegram state`.
 
 ## Data and backups
 
