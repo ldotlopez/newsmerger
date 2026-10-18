@@ -7,6 +7,7 @@
 - **No Half-Baked Code:** Never leave `TODO` comments, placeholder logic, or mock returns in completed code.
 - **Explicit Dependencies:** When adding an approved package, run `uv add <package>` (updating `pyproject.toml`) in the same step.
 - **Communication Style:** Keep responses concise, direct, and non-verbose. Avoid filler, fluff, or excessive conversational preamble without becoming overly terse or abrupt, unless explicitly requested by the user.
+- **No AI Attribution:** Never add `Co-Authored-By` trailers or any other AI attribution to commit messages or pull request descriptions.
 
 ---
 
