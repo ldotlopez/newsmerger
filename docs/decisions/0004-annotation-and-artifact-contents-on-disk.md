@@ -1,0 +1,24 @@
+# 0004: Annotation and artifact contents on disk
+
+- **Status:** accepted
+- **Date:** 2026-10-18
+
+## Context
+
+Item contents already live in a `foundation.storage.DiskStorage`. Annotation
+values and artifact contents are still stored in SQLite, as JSON and text.
+
+## Decision
+
+Annotation and artifact contents are stored through
+`foundation.storage.DiskStorage`. The database keeps only the reference it
+returns, plus metadata:
+
+- Annotation: processor, item, key, `created_at` and `updated_at`.
+- Artifact: remixer, name, content type, `created_at` and `updated_at`.
+
+## Consequences
+
+- All bulky content follows the same storage path, and the database stays
+  small.
+- Backups must cover the content directory as well as the database.

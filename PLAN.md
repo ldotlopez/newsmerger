@@ -3,44 +3,55 @@
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
-1. [ ] **Move secrets out of `config.yaml`.** It is tracked in git and holds an
-   Ollama API key, a Telegram bot token and a chat id. Rotate them and read
-   them from environment variables or an untracked file.
+1. [ ] **Rotate the leaked secrets** (owner). The Ollama API key and the
+   Telegram bot token are in git history; `config.yaml` now reads them from
+   `${OLLAMA_API_KEY}`, `${TELEGRAM_BOT_TOKEN}` and `${TELEGRAM_CHAT_ID}`.
 
-2. [ ] **Check the external artifact scripts.** Do they read the
-   `markdownify.text` annotation or the `summarize` `summary:<uid>`
-   artifacts? If not, drop `text` and stop `summarize` writing those
-   artifacts (the `summarize.summary` annotation holds the same value). Move
-   the scripts onto `App` / `Database.get_artifact` instead of raw SQL.
+2. [ ] **Rebuild the real database** (owner). The schema changed (source ids,
+   `(source_id, uid)` keys, contents on disk, `artifacts.remixer`) and is
+   never migrated. No database exists at the default path on this machine;
+   where it does, rename `data.db` (with `-wal`/`-shm`) and `content/` to
+   `*.old-2026-10-18`, then `import`. Warning: `enrich` runs `telegram` and
+   reposts every summarized item in scope; use `--since`.
 
-3. [ ] **Remove `ipdb.set_trace()` from `providers/theguardian.py`** (`parse_index`). Flagged by ruff (T100); the provider stops on every import.
-
-4. [ ] **Remove `_get_or_create_source` (singular)** in `db.py`: no callers;
-   `upsert_source_items` uses `_get_or_create_source_bulk` directly.
-
-5. [ ] **Fix the `markdownify.py` module docstring.** It is copied from
-   `rssfeed.py` and describes an RSS feed.
-
-6. [ ] **`castelloninformacion.py` cosmetic cleanup**: stray commented-out
-   `tags`/`section` extraction lines; wire them up or drop them.
-
-7. [ ] **Propose `foundation.dblib.configure_connection(conn)`** (separately,
-   in foundation): a public function applying the SQLite PRAGMAs, used by
-   both `SQLite3DB` and newsmerger's `connect` listener, so the settings live
-   in one place instead of being copied into `db.SQLITE_PRAGMAS`.
-
-8. [ ] **Add `--verbose` / `--log-level` options to `cli.py`.**
-   `LOGGER.setLevel(logging.DEBUG)` is hardcoded with no flags.
-
-9. [ ] **Add `DISABLE_RICH` environment variable support.**
-
-10. [ ] **Introduce `rich` for CLI output** (progress during import, error
-    summaries) via `rich_click`, which `cli.py` already uses.
+3. [ ] **Fix the external artifact scripts** that read the removed
+   `summary:<uid>` artifacts, `markdownify.text` or the database directly;
+   move them onto `Application`.
 
 ---
 
 ## Done
 
+- [x] **Tests updated** to the reworked core, plus `Application`, remixer and
+  identity coverage (73 tests).
+- [x] **`foundation.dblib.configure_connection`** applies `SQLITE_PRAGMAS` to
+  any connection; `Database` uses it instead of a copied list.
+  `foundation.dblib` and `foundation.plugin` now declare `__all__`.
+- [x] **`rssfeed`** takes the newest `max_items` items, newest first, and
+  emits the required channel `<description>` (plus `<link>` when configured).
+- [x] **TECH-DOC reconciliation** (decisions 0001–0004): source `id` required
+  and items keyed by `(source id, uid)`, `uri` not unique; `${VAR}`
+  expansion for secrets in `config.yaml`; plugins loaded with
+  `foundation.plugin.ClassLoader`; remixers as their own plugin type and
+  config section (`rssfeed`, `grouping_*`, sharing `GroupingRemixer`);
+  `Application` as the single entry point with a private database, query
+  facade, `enrich`/`remix` phases in config order and annotation deletion
+  (which also deletes the state); `--force` resets attempts; `version` no
+  longer accepted from config, and unknown plugin params rejected;
+  annotation and artifact contents in the shared `DiskStorage`; pipelines
+  moved to `scripts/pipeline_url.py`.
+- [x] **One output rule**: `summarize` no longer writes artifacts and
+  `markdownify` emits only `markdown`.
+- [x] **CLI**: `import`, `import-url --source`, `enrich [PROCESSOR]`,
+  `remix [REMIXER]`; `--log-level`/`-v`; `DISABLE_RICH` plain output;
+  import progress and per-source error summary; run summaries as tables.
+- [x] **Cleanup**: removed `ipdb.set_trace()` from `theguardian`, unused
+  provider `NAME`s and constants, dead commented code, the `markdownify`
+  docstring copied from `rssfeed`, `_get_or_create_source(_bulk)`, unused
+  HTTP exceptions and the env-var fallbacks in processors; one Ollama client
+  helper (`llm.py`, default port 11434); `castelloninformacion` no longer
+  mutates its source; the `group_events*.py` scripts duplicated by the
+  grouping remixers are gone.
 - [x] **Application core (`newsmerger/app.py`).** `App` moved out of the CLI:
   wiring plus `import_source`, `import_url`, `run_processor`, `run_pipeline`;
   reads go through `App.db`. `cli.py` and the `group_events*` scripts use it.

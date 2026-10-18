@@ -1,69 +1,70 @@
 import unittest
+from unittest.mock import patch
 
-import pydantic
+from newsmerger.config import Config, ConfigError
 
-from newsmerger.config import Config
+SOURCE = """
+sources:
+  - id: plaza
+    name: Castellón Plaza
+    provider: plaza
+    url: https://castellonplaza.com/castellon9/
+"""
 
 
-class PipelineConfigTests(unittest.TestCase):
-    def test_loads_named_pipeline_and_steps(self) -> None:
-        config = Config.from_text(
-            """
-            processors:
-              - name: markdownify
-                params: {}
-              - name: summarize
-                params:
-                  model: small
-            pipelines:
-              - name: publish
-                steps:
-                  - processor: markdownify
-                  - processor: summarize
-                    params:
-                      model: fast
-            """
-        )
-
-        pipeline = config.get_pipeline("publish")
+class ConfigTests(unittest.TestCase):
+    def test_expands_environment_variables(self) -> None:
+        with patch.dict("os.environ", {"API_KEY": "secret"}):
+            config = Config.from_text(
+                "processors:\n  - name: summarize\n    params: {api_key: ${API_KEY}}\n"
+            )
 
         self.assertEqual(
-            [step.processor for step in pipeline.steps],
-            ["markdownify", "summarize"],
+            config.get_processor("summarize").params, {"api_key": "secret"}
         )
-        self.assertEqual(pipeline.steps[1].params.model_dump(), {"model": "fast"})
 
-    def test_rejects_unknown_processor(self) -> None:
-        with self.assertRaises(pydantic.ValidationError):
-            Config.from_text(
-                """
-                processors:
-                  - name: markdownify
-                    params: {}
-                pipelines:
-                  - name: publish
-                    steps:
-                      - processor: missing
-                """
-            )
+    def test_missing_environment_variable_is_a_clear_error(self) -> None:
+        with (
+            patch.dict("os.environ", clear=True),
+            self.assertRaisesRegex(ConfigError, "'API_KEY' is not set"),
+        ):
+            Config.from_text("processors:\n  - name: x\n    params: {k: ${API_KEY}}\n")
 
-    def test_rejects_duplicate_pipeline_step(self) -> None:
-        with self.assertRaises(pydantic.ValidationError):
-            Config.from_text(
-                """
-                processors:
-                  - name: markdownify
-                    params: {}
-                pipelines:
-                  - name: publish
-                    steps:
-                      - processor: markdownify
-                      - processor: markdownify
-                """
-            )
+    def test_double_dollar_is_a_literal_dollar(self) -> None:
+        config = Config.from_text(
+            "remixers:\n  - name: rssfeed\n    params: {title: costs $$5}\n"
+        )
 
-    def test_unknown_pipeline_has_clear_error(self) -> None:
-        config = Config()
+        self.assertEqual(config.get_remixer("rssfeed").params, {"title": "costs $5"})
 
-        with self.assertRaisesRegex(ValueError, "pipeline 'missing' is not configured"):
-            config.get_pipeline("missing")
+    def test_sources_are_found_by_id(self) -> None:
+        source = Config.from_text(SOURCE).get_source("plaza")
+
+        self.assertEqual(source.provider, "plaza")
+
+    def test_source_id_is_required(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_text(SOURCE.replace("  - id: plaza\n    name", "  - name"))
+
+    def test_source_rejects_unknown_fields(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_text(SOURCE + "    uid: legacy\n")
+
+    def test_source_ids_must_be_unique(self) -> None:
+        duplicated = SOURCE + SOURCE.removeprefix("\nsources:\n")
+        with self.assertRaisesRegex(ConfigError, "source ids must be unique"):
+            Config.from_text(duplicated)
+
+    def test_pipelines_are_no_longer_a_section(self) -> None:
+        with self.assertRaises(ConfigError):
+            Config.from_text("pipelines: []\n")
+
+    def test_unconfigured_plugin_has_clear_error(self) -> None:
+        with self.assertRaisesRegex(
+            ConfigError, "processor 'missing' is not configured"
+        ):
+            Config().get_processor("missing")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,19 +1,18 @@
+import dataclasses
 import logging
 from abc import abstractmethod
-from collections.abc import Iterator
 from typing import Any
 
-from ..db import Database, ProcessingScope, ProcessingStatus
-from ..models import Artifact, SourceItem
+from ..db import Database, ProcessingStatus
+from ..models import ProcessingScope, SourceItem
 
 LOGGER = logging.getLogger(__name__)
 
 
 class SkipItem(Exception):
-    """Raise from `ItemProcessor.process_item` to mark an item as
-    deliberately not applicable (e.g. wrong language) rather than a
-    processing failure. Recorded as `ignored` — a permanent skip that only
-    `--force` will revisit."""
+    """Raise from `process_item` when the item doesn't apply to this processor
+    (e.g. wrong language). Recorded as `ignored`: permanent for the item's
+    current content, revisited only if it changes or the run is forced."""
 
 
 class MissingAnnotationError(LookupError):
@@ -21,56 +20,46 @@ class MissingAnnotationError(LookupError):
 
 
 class PartialFailure(Exception):
-    """Raise from `ItemProcessor.process_item` when some annotation keys
-    were computed successfully and others weren't. `results` is saved as
-    annotations regardless of the failure; the item is still marked
-    `error` overall, so it's retried (subject to backoff) — a retry may
-    recompute already-succeeded keys, which is accepted as the simple
-    tradeoff here."""
+    """Raise from `process_item` when only some annotation keys were computed.
 
-    def __init__(self, results: dict[str, Any], errors: dict[str, str]):
+    `results` is saved anyway and the item is marked `error`, so a retry may
+    recompute keys that already succeeded.
+    """
+
+    def __init__(self, results: dict[str, Any], errors: dict[str, str]) -> None:
         self.results = results
         self.errors = errors
         super().__init__(f"{len(errors)} key(s) failed: {list(errors)}")
 
 
-class BaseProcessor:
-    NAME: str
-    MAX_RETRIES = 3
-    VERSION: str | None = None
+@dataclasses.dataclass(slots=True)
+class RunSummary:
+    done: int = 0
+    ignored: int = 0
+    failed: int = 0
 
-    def __init__(
-        self,
-        db: Database,
-        *,
-        max_retries: int | None = None,
-        version: str | None = None,
-        **params: Any,
-    ) -> None:
+
+class BaseProcessor:
+    """Produces annotations for each eligible item.
+
+    NAME is the processor's module name. Changing VERSION makes items it
+    finished eligible again. REQUIRES names the processor whose output this
+    one reads: only items it finished on their current content are picked up.
+    """
+
+    NAME: str
+    VERSION: str | None = None
+    REQUIRES: str | None = None
+    MAX_RETRIES = 3
+
+    def __init__(self, db: Database, *, max_retries: int | None = None) -> None:
         self.db = db
         if max_retries is not None:
             self.MAX_RETRIES = max_retries
-        if version is not None:
-            self.VERSION = version
 
-    @abstractmethod
     def run(
         self, *, scope: ProcessingScope | None = None, force: bool = False
-    ) -> None: ...
-
-
-class ItemProcessor(BaseProcessor):
-    """Runs over individual items that don't yet have output from this
-    processor (or are eligible for a retry / reprocess — see
-    `Database.get_unprocessed_items`).
-
-    REQUIRES names the processor whose output this one reads: only items it
-    finished on their current content are picked up.
-    """
-
-    REQUIRES: str | None = None
-
-    def run(self, *, scope: ProcessingScope | None = None, force: bool = False) -> None:
+    ) -> RunSummary:
         items = self.db.get_unprocessed_items(
             self.NAME,
             version=self.VERSION,
@@ -81,46 +70,43 @@ class ItemProcessor(BaseProcessor):
         )
         LOGGER.info(f"{self.NAME}: {len(items)} item(s) to process")
 
+        summary = RunSummary()
         for item in items:
-            try:
-                result = self.process_item(item)
-            except SkipItem as e:
-                self.db.record_result(
-                    item, self.NAME, ProcessingStatus.IGNORED, version=self.VERSION
-                )
-                LOGGER.info(f"{self.NAME} ignored '{item.uri}': {e}")
-                continue
-            except PartialFailure as e:
-                self.db.record_result(
-                    item,
-                    self.NAME,
-                    ProcessingStatus.ERROR,
-                    annotations=e.results,
-                    error="; ".join(f"{k}: {v}" for k, v in e.errors.items()),
-                    version=self.VERSION,
-                )
-                LOGGER.warning(
-                    f"{self.NAME} partial failure on '{item.uri}': {e.errors}"
-                )
-                continue
-            except Exception as e:
-                self.db.record_result(
-                    item,
-                    self.NAME,
-                    ProcessingStatus.ERROR,
-                    error=str(e),
-                    version=self.VERSION,
-                )
-                LOGGER.exception(f"{self.NAME} failed on '{item.uri}'")
-                continue
-
+            status, annotations, error = self._process(item)
             self.db.record_result(
                 item,
                 self.NAME,
-                ProcessingStatus.DONE,
-                annotations=result,
+                status,
+                annotations=annotations,
+                error=error,
                 version=self.VERSION,
+                reset_attempts=force,
             )
+            match status:
+                case ProcessingStatus.DONE:
+                    summary.done += 1
+                case ProcessingStatus.IGNORED:
+                    summary.ignored += 1
+                case ProcessingStatus.ERROR:
+                    summary.failed += 1
+        return summary
+
+    def _process(
+        self, item: SourceItem
+    ) -> tuple[ProcessingStatus, dict[str, Any] | None, str | None]:
+        """Run `process_item` and translate its outcome into a result."""
+        try:
+            return ProcessingStatus.DONE, self.process_item(item), None
+        except SkipItem as e:
+            LOGGER.info(f"{self.NAME} ignored '{item.uri}': {e}")
+            return ProcessingStatus.IGNORED, None, None
+        except PartialFailure as e:
+            LOGGER.warning(f"{self.NAME} partial failure on '{item.uri}': {e.errors}")
+            error = "; ".join(f"{k}: {v}" for k, v in e.errors.items())
+            return ProcessingStatus.ERROR, e.results, error
+        except Exception as e:
+            LOGGER.exception(f"{self.NAME} failed on '{item.uri}'")
+            return ProcessingStatus.ERROR, None, str(e)
 
     def require_annotation(self, item: SourceItem, processor: str, key: str) -> Any:
         """Return an upstream processor's annotation, or raise if it is missing."""
@@ -132,28 +118,9 @@ class ItemProcessor(BaseProcessor):
 
     @abstractmethod
     def process_item(self, item: SourceItem) -> dict[str, Any]:
-        """Return a dict of annotation key -> value on full success.
+        """Return annotation key -> value on full success.
 
-        Raise `SkipItem` if this item doesn't apply. Raise `PartialFailure`
-        if only some keys were computed. Any other exception marks the
-        whole item as `error` with no annotations saved.
+        Raise `SkipItem` if the item doesn't apply, `PartialFailure` if only
+        some keys were computed. Any other exception marks the item `error`
+        with no annotations saved.
         """
-        ...
-
-
-class ArtifactProcessor(BaseProcessor):
-    """Produces one or more named artifacts derived from many items, rather
-    than per-item output. Not tracked via DBProcessingState — an artifact
-    isn't "done" or "error" per item, it's regenerated wholesale on each
-    run. `force` is accepted for interface symmetry with ItemProcessor but
-    unused here; subclasses may use it to short-circuit regeneration."""
-
-    def run(self, *, scope: ProcessingScope | None = None, force: bool = False) -> None:
-        for name, content, content_type in self.produce(scope or ProcessingScope()):
-            self.db.save_artifact(Artifact(self.NAME, name, content, content_type))
-            LOGGER.info(f"{self.NAME}: saved artifact '{name}' ({len(content)} bytes)")
-
-    @abstractmethod
-    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
-        """Yield (name, content, content_type) tuples."""
-        ...

@@ -1,13 +1,13 @@
-from __future__ import annotations
+"""Posts each item's title, summary and link to a Telegram chat."""
 
 import html
-import os
 from typing import Any
 
 import requests
 
+from ..db import Database
 from ..models import SourceItem
-from . import ItemProcessor
+from . import BaseProcessor
 
 MAX_CAPTION_LENGTH = 1024
 
@@ -36,22 +36,21 @@ def build_caption(title: str, summary: str, uri: str) -> str:
     return heading + escaped_summary + footer
 
 
-class Processor(ItemProcessor):
+class Processor(BaseProcessor):
     NAME = "telegram"
     REQUIRES = "summarize"
 
     def __init__(
         self,
-        *args: Any,
-        bot_token: str | None = None,
-        chat_id: str | None = None,
-        **kwargs: Any,
+        db: Database,
+        *,
+        bot_token: str,
+        chat_id: str,
+        max_retries: int | None = None,
     ) -> None:
-        super().__init__(*args, **kwargs)
-        self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-        self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
-        if not self.bot_token or not self.chat_id:
-            raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
+        super().__init__(db, max_retries=max_retries)
+        self.bot_token = bot_token
+        self.chat_id = chat_id
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
         # Never post an item twice, not even with --force or after it changed.
@@ -63,7 +62,7 @@ class Processor(ItemProcessor):
         summary = self.require_annotation(item, "summarize", "summary")
 
         caption = build_caption(item.title, str(summary), item.uri)
-        image = item.data.get("image") if isinstance(item.data, dict) else None
+        image = item.data.get("image")
         if isinstance(image, str) and image.strip():
             endpoint = "sendPhoto"
             payload = {

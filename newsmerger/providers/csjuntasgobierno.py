@@ -9,9 +9,7 @@ from urllib.parse import urljoin
 import bs4
 from foundation.dtlib import get_local_tz
 
-from newsmerger.httpclient import HTTPClient
-
-from ..models import SourceData, SourceItemData
+from ..models import SourceItemData
 from . import BaseProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -46,12 +44,6 @@ class PreparseData:
 
 
 class Provider(BaseProvider):
-    NAME = "csjuntasgobierno"
-
-    def __init__(self, source: SourceData, *, fetcher: HTTPClient) -> None:
-        super().__init__(source)
-        self.fetcher = fetcher
-
     def retrieve_items(self) -> Iterator[SourceItemData]:
         index = self.fetcher.get(str(self.source.url))
         for protodata in self._iter_pdf_links(index):

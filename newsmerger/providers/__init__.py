@@ -2,29 +2,29 @@ import logging
 from abc import abstractmethod
 from collections.abc import Iterator
 
-from newsmerger.httpclient import HTTPClient
-
+from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 
 LOGGER = logging.getLogger(__name__)
 
-URI = str
+type URI = str
 
 
 class BaseProvider:
-    NAME: str
-
-    def __init__(self, source: SourceData) -> None:
+    def __init__(self, source: SourceData, *, fetcher: HTTPClient) -> None:
         self.source = source
+        self.fetcher = fetcher
 
     @abstractmethod
     def retrieve_items(self) -> Iterator[SourceItemData]: ...
 
 
 class IndexSiteProvider(BaseProvider):
-    def __init__(self, source: SourceData, *, fetcher: HTTPClient) -> None:
-        super().__init__(source)
-        self.fetcher = fetcher
+    """A site with an index page listing article URLs, one item per article."""
+
+    @property
+    def index_url(self) -> str:
+        return str(self.source.url)
 
     @abstractmethod
     def parse_index(self, content: bytes) -> Iterator[URI]: ...
@@ -37,21 +37,8 @@ class IndexSiteProvider(BaseProvider):
         return self.parse_item(self.fetcher.get(url))
 
     def retrieve_items(self) -> Iterator[SourceItemData]:
-        content = self.fetcher.get(str(self.source.url))
-        links = self.parse_index(content)
-
-        for url in links:
-            content = self.fetcher.get(url)
-
+        for url in self.parse_index(self.fetcher.get(self.index_url)):
             try:
-                entry_data = self.parse_item(content)
+                yield self.retrieve_item(url)
             except ValueError as e:
                 LOGGER.error(f"error '{e}' while parsing '{url}'")
-                continue
-
-            # TODO: is this the right place to do this check? maybe it should be done in parse_item instead
-            if entry_data.content is None:
-                LOGGER.warning(f"skipping entry with no content: {url}")
-                continue
-
-            yield entry_data

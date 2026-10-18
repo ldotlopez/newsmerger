@@ -3,7 +3,6 @@ import logging
 import re
 from collections.abc import Iterator
 from datetime import datetime
-from typing import ClassVar
 from urllib.parse import urljoin
 
 import bs4
@@ -46,9 +45,6 @@ def parse_datetime(tag: bs4.Tag) -> datetime:
 
 
 class Provider(IndexSiteProvider):
-    NAME = "prensaiberica"
-    EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
-
     def parse_index(self, content: bytes) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
         section = get_section(soup, "Castellón")
@@ -66,13 +62,6 @@ class Provider(IndexSiteProvider):
         image = head_meta_get_value(soup, {"property": "og:image"})
         url = head_meta_get_value(soup, {"property": "og:url"})
         author = soup.select_one(".redactor a").get_text().strip()
-        # pub_time = datetime.fromisoformat(
-        #     head_meta_get_value(soup, {"property": "article:published_time"})
-        # )
-        # mod_time = datetime.fromisoformat(
-        #     head_meta_get_value(soup, {"property": "article:modified_time"})
-        # )
-        #
         content = soup.select_one(".wrap-FULL")
         drop_selectors(content, [".container-mega", ".COLUMNA-DER"])
         prune_to_spine(content)
@@ -86,7 +75,6 @@ class Provider(IndexSiteProvider):
         try:
             mod_time = parse_datetime(soup.select_one(".fecha-mod"))
         except ValueError:
-            # LOGGER.warning(f"Could not parse modification date of '{url}'")
             mod_time = None
 
         return SourceItemData(
