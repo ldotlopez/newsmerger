@@ -71,7 +71,7 @@ def print_table(title: str, headers: list[str], rows: list[list[Any]]) -> None:
 
 
 def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
-    """Add --source/--since/--until/--limit, passed to the command as `scope`."""
+    """Add --source/--since/--until/--uid/--limit, passed to the command as `scope`."""
 
     @click.option("--source", default=None, help="Limit to one source id")
     @click.option(
@@ -83,6 +83,7 @@ def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     @click.option(
         "--until", type=click.DateTime(), default=None, help="Published before (UTC)"
     )
+    @click.option("--uid", "uids", multiple=True, help="Item uid (repeatable)")
     @click.option("--limit", type=int, default=None, help="At most this many items")
     @functools.wraps(command)
     def wrapper(
@@ -90,6 +91,7 @@ def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
         source: str | None,
         since: datetime | None,
         until: datetime | None,
+        uids: tuple[str, ...],
         limit: int | None,
         **kwargs: Any,
     ) -> R:
@@ -97,6 +99,7 @@ def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
             source=source,
             since=since.replace(tzinfo=UTC) if since else None,
             until=until.replace(tzinfo=UTC) if until else None,
+            uids=uids or None,
             limit=limit,
         )
         return command(*args, scope=scope, **kwargs)
