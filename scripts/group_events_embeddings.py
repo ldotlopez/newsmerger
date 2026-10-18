@@ -3,12 +3,12 @@
 anything over plain tag-Jaccard for event grouping?
 
 This is NOT wired into the processor lifecycle, the CLI, or the DB schema.
-It reads existing source items and their "tagger" annotations through the
-normal Database API and does everything else (embedding + scoring +
+It reads existing source items and their "tagger" annotations through
+Application and does everything else (embedding + scoring +
 clustering) in memory/on-disk-cache; nothing is written back to the DB.
 
-Why this exists: group_events.py/group_events_avglink.py cluster purely on
-tag-Jaccard, which misses synonym/variant tags ("BCE" vs "Banco Central
+Why this exists: the grouping_singlelink/grouping_avglink remixers cluster
+purely on tag-Jaccard, which misses synonym/variant tags ("BCE" vs "Banco Central
 Europeo") since it requires literal string overlap. This script embeds the
 *same* tags (via Ollama, matching tagger.py's local-model setup - no new
 external dependency) and blends cosine similarity with Jaccard, so it's
@@ -26,11 +26,9 @@ Usage:
     python scripts/group_events_embeddings.py --config config.yaml --review-threshold 0.75
     DISABLE_RICH=1 python scripts/group_events_embeddings.py --config config.yaml
 
-Requires an Ollama server reachable at OLLAMA_API_BASE (default matches
-tagger.py: http://localhost:11343 - note this is NOT Ollama's usual default
-port, 11434; kept identical to tagger.py's existing default for
-consistency, not verified here) with an embedding-capable model pulled
-(e.g. `ollama pull nomic-embed-text`).
+Requires an Ollama server reachable at OLLAMA_API_BASE (default
+http://localhost:11434, authenticated with OLLAMA_API_KEY if set) with an
+embedding-capable model pulled (e.g. `ollama pull nomic-embed-text`).
 """  # noqa: EXE001
 
 from __future__ import annotations
@@ -49,32 +47,22 @@ import ollama
 import rich_click as click
 from foundation.loglib import setup_logger
 
-from newsmerger.app import App
-from newsmerger.consts import PACKAGE_NAME
-from newsmerger.db import ProcessingScope
-from newsmerger.processors._grouping_scoring import ScoredItem, load_tagged_items
+from newsmerger.app import Application
+from newsmerger.consts import DISABLE_RICH, PACKAGE_NAME
+from newsmerger.llm import DEFAULT_OLLAMA_URL, ollama_client
+from newsmerger.models import ItemKey, ProcessingScope
+from newsmerger.remixers._grouping_scoring import (
+    ScoredItem,
+    UnionFind,
+    item_ref,
+    jaccard,
+    tagged_items,
+    time_decay,
+)
 
 LOGGER = logging.getLogger(f"{PACKAGE_NAME}.tools.group_events_embeddings")
 
-DISABLE_RICH = os.environ.get("DISABLE_RICH", "0").lower() not in ("0", "false", "")
-
 DEFAULT_EMBEDDING_MODEL = os.environ.get("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
-
-
-def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
-    if not a or not b:
-        return 0.0
-    intersection = a & b
-    if not intersection:
-        return 0.0
-    return len(intersection) / len(a | b)
-
-
-def time_decay(a: datetime | None, b: datetime | None, tau_hours: float) -> float:
-    if a is None or b is None:
-        return 1.0
-    delta_hours = abs((a - b).total_seconds()) / 3600.0
-    return math.exp(-delta_hours / tau_hours)
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -161,9 +149,9 @@ def build_embeddings(
     client: ollama.Client,
     model: str,
     cache: EmbeddingCache,
-) -> dict[str, list[float]]:
-    """uid -> embedding, one call per distinct tag-text not already cached."""
-    embeddings: dict[str, list[float]] = {}
+) -> dict[ItemKey, list[float]]:
+    """item key -> embedding, one call per distinct tag-text not already cached."""
+    embeddings: dict[ItemKey, list[float]] = {}
     cache_hits = 0
     cache_misses = 0
 
@@ -171,13 +159,13 @@ def build_embeddings(
         text = tags_to_text(si.raw_tags)
         cached = cache.get(model, text)
         if cached is not None:
-            embeddings[si.item.uid] = cached
+            embeddings[si.item.key] = cached
             cache_hits += 1
             continue
 
         embedding = embed_text(client, model, text)
         cache.set(model, text, embedding)
-        embeddings[si.item.uid] = embedding
+        embeddings[si.item.key] = embedding
         cache_misses += 1
 
     LOGGER.info(f"embeddings: {cache_hits} cache hits, {cache_misses} computed")
@@ -188,7 +176,9 @@ def build_embeddings(
 
 
 def build_matrices(
-    items: list[ScoredItem], embeddings: dict[str, list[float]], tau_hours: float | None
+    items: list[ScoredItem],
+    embeddings: dict[ItemKey, list[float]],
+    tau_hours: float | None,
 ) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
     """Three separate n x n matrices (diagonal unused): Jaccard, cosine, and
     time-decay. Kept apart rather than pre-combined so different
@@ -203,7 +193,7 @@ def build_matrices(
         jv = jaccard(items[i].tags, items[j].tags)
         cv = max(
             cosine_similarity(
-                embeddings[items[i].item.uid], embeddings[items[j].item.uid]
+                embeddings[items[i].item.key], embeddings[items[j].item.key]
             ),
             0.0,
         )
@@ -241,27 +231,11 @@ def combine_matrix(
     return combined
 
 
-class UnionFind:
-    def __init__(self, n: int):
-        self.parent = list(range(n))
-
-    def find(self, x: int) -> int:
-        while self.parent[x] != x:
-            self.parent[x] = self.parent[self.parent[x]]
-            x = self.parent[x]
-        return x
-
-    def union(self, x: int, y: int) -> None:
-        rx, ry = self.find(x), self.find(y)
-        if rx != ry:
-            self.parent[rx] = ry
-
-
 def cluster_from_matrix(
     matrix: list[list[float]], *, min_score: float
 ) -> list[list[int]]:
     """Single-link connected components over a precomputed score matrix -
-    same transitivity tradeoff as group_events.py."""
+    same transitivity tradeoff as the grouping_singlelink remixer."""
     n = len(matrix)
     uf = UnionFind(n)
     for i, j in combinations(range(n), 2):
@@ -415,7 +389,7 @@ def build_json_payload(
         return [
             {
                 "members": [
-                    {"uid": items[idx].item.uid, "title": items[idx].item.title}
+                    {"ref": item_ref(items[idx].item), "title": items[idx].item.title}
                     for idx in member_idxs
                 ]
             }
@@ -430,8 +404,8 @@ def build_json_payload(
         "hybrid_groups": groups_payload(hybrid_groups),
         "candidate_synonym_pairs": [
             {
-                "a_uid": items[i].item.uid,
-                "b_uid": items[j].item.uid,
+                "a": item_ref(items[i].item),
+                "b": item_ref(items[j].item),
                 "a_title": items[i].item.title,
                 "b_title": items[j].item.title,
                 "cosine": cos,
@@ -528,17 +502,19 @@ def main(
 
     scope = ProcessingScope(since=datetime.now(UTC) - timedelta(days=days))
     # Read-only: never create/alter schema from this tool.
-    with App.from_config_file(config_path, create_schema=False) as app:
-        items = load_tagged_items(app.db, scope)
+    with Application.from_config_file(config_path, create_schema=False) as app:
+        source_items = app.get_items(scope)
+        tags = app.get_annotation_values(source_items, processor="tagger", key="tags")
+    items = tagged_items(source_items, tags)
 
     if not items:
         LOGGER.warning("no tagged items found in scope - nothing to group")
         return
 
-    api_base = os.environ.get("OLLAMA_API_BASE", "http://localhost:11343")
-    api_key = os.environ.get("OLLAMA_API_KEY")
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    client = ollama.Client(host=api_base, headers=headers)
+    client = ollama_client(
+        os.environ.get("OLLAMA_API_BASE", DEFAULT_OLLAMA_URL),
+        os.environ.get("OLLAMA_API_KEY"),
+    )
 
     cache = EmbeddingCache(cache_file)
     embeddings = build_embeddings(

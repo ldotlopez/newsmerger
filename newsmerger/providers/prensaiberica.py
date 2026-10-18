@@ -2,7 +2,6 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
-from typing import ClassVar
 from urllib.parse import urljoin
 
 import feedparser
@@ -20,9 +19,6 @@ LOGGER = logging.getLogger(__name__)
 
 
 class Provider(IndexSiteProvider):
-    NAME = "prensaiberica"
-    EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
-
     def parse_index(self, content: bytes) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
 
