@@ -3,9 +3,11 @@
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
-1. [ ] **Rotate the leaked secrets** (owner). The Ollama API key and the
-   Telegram bot token are in git history; `config.yaml` now reads them from
-   `${OLLAMA_API_KEY}`, `${TELEGRAM_BOT_TOKEN}` and `${TELEGRAM_CHAT_ID}`.
+1. [ ] **Decide whether to rotate the secrets** (owner). The Ollama API key
+   and the Telegram bot token never reached git history (checked
+   2026-10-18): they only lived in the uncommitted `config.yaml`, which now
+   reads them from `${OLLAMA_API_KEY}`, `${TELEGRAM_BOT_TOKEN}` and
+   `${TELEGRAM_CHAT_ID}`. Rotate them if that file was shared elsewhere.
 
 2. [ ] **Rebuild the real database** (owner). The schema changed (source ids,
    `(source_id, uid)` keys, contents on disk, `artifacts.remixer`) and is
@@ -29,9 +31,10 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
   syntax-highlighted on a terminal otherwise.
 - [x] **Tests updated** to the reworked core, plus `Application`, remixer and
   identity coverage (73 tests).
-- [x] **`foundation.dblib.configure_connection`** applies `SQLITE_PRAGMAS` to
-  any connection; `Database` uses it instead of a copied list.
-  `foundation.dblib` and `foundation.plugin` now declare `__all__`.
+- [x] **`foundation.dblib` and `foundation.plugin` declare `__all__`.** The
+  shared `configure_connection` was tried and dropped: `dblib` is a shortcut
+  for direct `sqlite3` use, and newsmerger, on SQLAlchemy, keeps its own
+  `SQLITE_PRAGMAS`.
 - [x] **`rssfeed`** takes the newest `max_items` items, newest first, and
   emits the required channel `<description>` (plus `<link>` when configured).
 - [x] **TECH-DOC reconciliation** (decisions 0001–0004): source `id` required
