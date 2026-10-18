@@ -9,21 +9,17 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
    reads them from `${OLLAMA_API_KEY}`, `${TELEGRAM_BOT_TOKEN}` and
    `${TELEGRAM_CHAT_ID}`. Rotate them if that file was shared elsewhere.
 
-2. [ ] **Rebuild the real database** (owner). The schema changed (source ids,
-   `(source_id, uid)` keys, contents on disk, `artifacts.remixer`) and is
-   never migrated. No database exists at the default path on this machine;
-   where it does, rename `data.db` (with `-wal`/`-shm`) and `content/` to
-   `*.old-2026-10-18`, then `import`. Warning: `enrich` runs `telegram` and
-   reposts every summarized item in scope; use `--since`.
-
-3. [ ] **Fix the external artifact scripts** that read the removed
-   `summary:<uid>` artifacts, `markdownify.text` or the database directly;
-   move them onto `Application`.
-
 ---
 
 ## Done
 
+- [x] **External scripts**: none existed outside `scripts/`. The embeddings
+  experiment became the `grouping_embeddings` remixer (single-link over tag
+  overlap blended with tag embeddings), sharing `single_link_groups` with
+  `grouping_singlelink`; the script is gone.
+- [x] **`.env` support** (`python-dotenv`): `${VAR}` reads the environment,
+  then a `.env` next to the config file.
+- [x] **No database rebuild needed** (owner's call).
 - [x] **CLI inspection commands**: `items` (scope options), `annotations`
   (preview table; `--key` prints full values), `artifacts` (metadata, via
   the new `Application.list_artifacts`) and `artifact` (content to stdout,

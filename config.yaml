@@ -1,26 +1,27 @@
-# Secrets come from the environment: ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN},
-# ${TELEGRAM_CHAT_ID}. Write a literal dollar sign as $$.
+# Secrets come from the environment or from a .env file next to this one:
+# ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}.
+# Write a literal dollar sign as $$.
 
 sources:
-  # - id: elperiodicomediterraneo-castello
-  #   name: El Periódico Mediterraneo (Castelló ciudad)
-  #   provider: prensaiberica_plain
-  #   url: https://www.elperiodicomediterraneo.com/castello
-  #
-  # - id: castelloninformacion-castello
-  #   name: Castellón información (Castelló ciudad)
-  #   provider: castelloninformacion
-  #   url: https://www.castelloninformacion.com/noticies/castello/
-  #
-  # - id: castellonplaza
-  #   name: Castellón Plaza
-  #   provider: plaza
-  #   url: https://castellonplaza.com/castellon9/
+  - id: elperiodicomediterraneo-castello
+    name: El Periódico Mediterraneo (Castelló ciudad)
+    provider: prensaiberica_plain
+    url: https://www.elperiodicomediterraneo.com/castello
 
-  - id: juntagobiernolocal
-    name: Junta de Gobierno Local
-    provider: csjuntasgobierno
-    url: https://www.castello.es/es/sesiones
+  - id: castelloninformacion-castello
+    name: Castellón información (Castelló ciudad)
+    provider: castelloninformacion
+    url: https://www.castelloninformacion.com/noticies/castello/
+
+  - id: castellonplaza
+    name: Castellón Plaza
+    provider: plaza
+    url: https://castellonplaza.com/castellon9/
+
+  # - id: juntagobiernolocal
+  #   name: Junta de Gobierno Local
+  #   provider: csjuntasgobierno
+  #   url: https://www.castello.es/es/sesiones
 
   # - id: the-guardian-spain
   #   name: The Guardian (Spain)
@@ -52,3 +53,8 @@ remixers:
   - name: rssfeed
   - name: grouping_singlelink
   - name: grouping_avglink
+  - name: grouping_embeddings
+    params:
+      api_base: https://ollama.w.cuarentaydos.com
+      api_key: ${OLLAMA_API_KEY}
+      model: mxbai-embed-large:latest

@@ -26,7 +26,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | :--- | :--- |
 | `app.py` | `Application`, the single entry point: wires config, HTTP cache, database and plugins, runs the three phases and answers queries. The database is private to it. |
 | `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`) and read-only inspection (`items`, `annotations`, `artifacts`, `artifact`); builds an `Application` per invocation. |
-| `config.py` | Pydantic models for `config.yaml` (sources, processors, remixers, cache, database) and `${VAR}` expansion. |
+| `config.py` | Pydantic models for `config.yaml` (sources, processors, remixers, cache, database) and `${VAR}` expansion from the environment and a `.env` next to the config file. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), `SourceItem` (the item DTO), `Artifact` and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
 | `llm.py` | The Ollama client shared by the LLM processors. |
@@ -34,7 +34,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `providers/` | One module per site, each exposing `Provider`. |
 | `processors/` | One module per processor, each exposing `Processor`. |
 | `remixers/` | One module per remixer, each exposing `Remixer`. |
-| `scripts/` | Standalone tools built on `Application`: the URL pipeline and a grouping experiment. |
+| `scripts/` | Standalone tools built on `Application`: the URL pipeline. |
 
 Plugins of the three types are loaded by module name with
 `foundation.plugin.ClassLoader` (decision 0003). Processors and remixers run
@@ -139,8 +139,10 @@ dates take the import time. Re-importing identical items is a no-op.
 whole scope, regenerated on each run and stored as an `Artifact`, unique per
 `(remixer, name)`. Remixers read items, bulk annotations
 (`Database.get_annotation_values`, one query for many items) and other
-remixers' artifacts. The two grouping remixers share `GroupingRemixer` and
-differ only in their clustering step.
+remixers' artifacts. The three grouping remixers share `GroupingRemixer`
+and differ only in their clustering step: single-link and average-link over
+tag overlap, and single-link over tag overlap blended with tag embeddings
+(`grouping_embeddings`, computed with Ollama on every run).
 
 ## Pipelines
 

@@ -11,23 +11,27 @@ from typing import Any
 
 import click as plain_click
 import rich_click
-from foundation.loglib import setup_logger
+from foundation.clilib import (
+    RICH_DISABLED,
+    RICH_ENABLED,
+    click_logging_options,
+    get_stderr_console,
+    get_stdout_console,
+)
+from foundation.loglib import setup_logger_from_click
 from foundation.plugin import PluginError
-from rich.console import Console
 from rich.progress import track
 from rich.syntax import Syntax
 from rich.table import Table
 
 from .app import Application, UnsupportedProviderError
 from .config import ConfigError
-from .consts import DISABLE_RICH, PACKAGE_NAME
+from .consts import PACKAGE_NAME
 from .models import ProcessingScope, SourceItem
 
-click = plain_click if DISABLE_RICH else rich_click
+click = plain_click if RICH_DISABLED else rich_click
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
-
-console = Console(no_color=DISABLE_RICH, highlight=not DISABLE_RICH)
 
 # Errors a user can fix (bad config, unknown plugin...): reported without a traceback.
 USER_ERRORS = (ConfigError, PluginError, UnsupportedProviderError)
@@ -52,7 +56,7 @@ def app_from_context(ctx: click.Context) -> Application:
 
 
 def print_table(title: str, headers: list[str], rows: list[list[Any]]) -> None:
-    if DISABLE_RICH:
+    if RICH_DISABLED:
         print(title)
         for row in rows:
             print("\t".join(str(cell) for cell in row))
@@ -63,7 +67,7 @@ def print_table(title: str, headers: list[str], rows: list[list[Any]]) -> None:
         table.add_column(header)
     for row in rows:
         table.add_row(*(str(cell) for cell in row))
-    console.print(table)
+    get_stdout_console().print(table)
 
 
 def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
@@ -102,23 +106,25 @@ def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
 
 @click.group()
 @click.option("-c", "--config", "config_path", type=Path, default=None)
-@click.option(
-    "--log-level",
-    default="info",
-    show_default=True,
-    help="Level name, or a foundation.loglib spec such as 'info,db:debug'",
-)
-@click.option("-v", "--verbose", is_flag=True, help="Shortcut for --log-level debug")
+@click_logging_options
 @click.pass_context
 def cli(
-    ctx: click.Context, config_path: Path | None, log_level: str, verbose: bool
+    ctx: click.Context,
+    config_path: Path | None,
+    log_level: str,
+    verbose: int,
+    quiet: int,
 ) -> None:
-    logger = setup_logger(
+    # Logs go through foundation's shared stderr console, the same one the
+    # progress bars use, so live progress redraws around log records.
+    logger = setup_logger_from_click(
         PACKAGE_NAME,
-        log_level="debug" if verbose else log_level,
-        infect=not DISABLE_RICH,
+        log_level=log_level,
+        verbose=verbose,
+        quiet=quiet,
+        infect=RICH_ENABLED,
     )
-    if DISABLE_RICH:
+    if RICH_DISABLED:
         handler = logging.StreamHandler()
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -137,7 +143,12 @@ def import_cmd(ctx: click.Context) -> None:
 
     rows = []
     failed = 0
-    for source in track(app.sources, description="Importing", disable=DISABLE_RICH):
+    for source in track(
+        app.sources,
+        description="Importing",
+        console=get_stderr_console(),
+        disable=RICH_DISABLED,
+    ):
         try:
             items = app.import_source(source.id)
         except Exception as e:
@@ -161,7 +172,7 @@ def import_cmd(ctx: click.Context) -> None:
 def import_url_cmd(ctx: click.Context, source_id: str, url: str) -> None:
     """Import one article URL into a configured source."""
     item = app_from_context(ctx).import_url(source_id, url)
-    console.print(f"Imported '{item.title}' from {item.uri}")
+    click.echo(f"Imported '{item.title}' from {item.uri}")
 
 
 @cli.command("enrich")
@@ -290,7 +301,7 @@ def annotations_cmd(
     item = find_item(app, source_id, uid)
     annotations = app.get_annotations(item, processor=processor, key=key)
     if not annotations:
-        console.print(f"No annotations for '{source_id}/{uid}'")
+        click.echo(f"No annotations for '{source_id}/{uid}'")
         return
 
     rows = [
@@ -349,7 +360,7 @@ def artifact_cmd(ctx: click.Context, remixer: str, name: str) -> None:
         err=True,
     )
     lexer = lexer_for(artifact.content_type)
-    if not DISABLE_RICH and lexer and sys.stdout.isatty():
-        console.print(Syntax(artifact.content, lexer))
+    if RICH_ENABLED and lexer and sys.stdout.isatty():
+        get_stdout_console().print(Syntax(artifact.content, lexer))
     else:
         sys.stdout.write(artifact.content)
