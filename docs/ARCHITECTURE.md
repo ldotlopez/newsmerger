@@ -25,7 +25,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | Module | Responsibility |
 | :--- | :--- |
 | `app.py` | `Application`, the single entry point: wires config, HTTP cache, database and plugins, runs the three phases and answers queries. The database is private to it. |
-| `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`) and read-only inspection (`items`, `annotations`, `artifacts`, `artifact`); builds an `Application` per invocation. |
+| `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`) and read-only inspection (`items`, `annotations`, `artifacts`, `artifact`); builds an `Application` per invocation. Global logging and output options come from `foundation.clilib` and `foundation.loglib`. |
 | `config.py` | Pydantic models for `config.yaml` (sources, processors, remixers, cache, database) and `${VAR}` expansion from the environment and a `.env` next to the config file. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), `SourceItem` (the item DTO), `Artifact` and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
@@ -59,6 +59,79 @@ to other formats is a processor's job.
 Every item carries `content: bytes` and a `mimetype` without parameters.
 `SourceItemData` rejects `text/*` content that isn't UTF-8, so text is
 always UTF-8 and no charset is stored.
+
+### Writing a provider
+
+A provider is a module in `newsmerger/providers/` that exposes a class named
+`Provider`; the module name is what sources put in `provider:`. It is built
+with the configured `SourceData` and the shared cached `HTTPClient`
+(`self.source`, `self.fetcher`), and needs no registration.
+
+For a site with an index page (a section, an RSS feed) that links to one
+article per item, subclass `IndexSiteProvider`:
+
+```python
+import hashlib
+from collections.abc import Iterator
+
+import bs4
+from foundation.scrapelib import drop_selectors, prune_to_spine
+
+from ..models import SourceItemData
+from . import URI, IndexSiteProvider
+
+
+class Provider(IndexSiteProvider):
+    @property
+    def index_url(self) -> str:
+        # Optional: defaults to the source's url.
+        return str(self.source.url).rstrip("/") + "/feed/"
+
+    def parse_index(self, content: bytes) -> Iterator[URI]:
+        """Yield the article URLs found in the index page."""
+        ...
+
+    def parse_item(self, content: bytes) -> SourceItemData:
+        """Build one item from an article page."""
+        soup = bs4.BeautifulSoup(content.decode("utf-8"), features="html5lib")
+        if (article := soup.select_one("article")) is None:
+            raise ValueError("Article not found")
+        drop_selectors(article, [".ads", ".related"])
+        url = ...
+        return SourceItemData(
+            uid=hashlib.sha256(url.encode()).hexdigest(),
+            title=...,
+            uri=url,
+            content=str(prune_to_spine(article)).encode("utf-8"),
+            mimetype="text/html",
+            published_at=...,  # optional
+            modified_at=...,   # optional
+            data={"author": ..., "image": ...},  # any JSON-compatible extras
+        )
+```
+
+`retrieve_items` fetches the index and each article; a `ValueError` from
+`parse_item` is logged and that article is skipped, so raise it for pages
+that aren't articles. Only `IndexSiteProvider`s support `import-url`.
+
+For anything else (several items in one page, binary files), subclass
+`BaseProvider` and implement `retrieve_items()` yourself, fetching with
+`self.fetcher.get(url)`; `csjuntasgobierno` is an example.
+
+Rules every provider follows:
+
+- `uid` is deterministic and stable across runs (decision 0001). The
+  sha256 of the canonical article URL is the usual choice.
+- Keep the site's cleaned HTML; never convert it (that is `markdownify`'s
+  job). Text content must be UTF-8 and `mimetype` must have no parameters.
+- Only report dates the site gives you; missing ones take the import time.
+- `parse_item` works on bytes only, so it can be tested offline: save
+  sample pages in `tests/samples/` and add a case to
+  `tests/test_providers.py` (`fetcher=None` is enough for parsing).
+
+While developing, set `NEWSMERGER_PICKLE_CACHE=1` to cache each source's
+fetched items in a local `<source id>.pkl` file and skip re-scraping. Add the
+provider to the README's providers table.
 
 ## Persistence
 
