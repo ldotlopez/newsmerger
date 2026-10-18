@@ -846,3 +846,11 @@ class Database:
         if artifact is not None and artifact.content_sha256 is not None:
             artifact.content = self.contents.get(artifact.content_sha256).decode()
         return artifact
+
+    def list_artifacts(self, remixer: str | None = None) -> list[Artifact]:
+        """Artifacts by remixer and name, without their content."""
+        with self.session_scope() as sess:
+            query = sess.query(DBArtifact).order_by(DBArtifact.remixer, DBArtifact.name)
+            if remixer is not None:
+                query = query.filter(DBArtifact.remixer == remixer)
+            return [db_artifact.to_dto() for db_artifact in query]

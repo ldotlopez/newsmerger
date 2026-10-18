@@ -491,6 +491,20 @@ class ArtifactTests(DatabaseTestCase):
     def test_missing_artifact_is_none(self):
         self.assertIsNone(self.db.get_artifact("rssfeed", "missing"))
 
+    def test_list_artifacts_returns_metadata_without_content(self):
+        for remixer, name in (("rssfeed", "feed"), ("grouping_avglink", "current")):
+            self.db.save_artifact(Artifact(remixer, name, f"{name}!", "text/plain"))
+
+        listed = self.db.list_artifacts()
+        only_rss = self.db.list_artifacts("rssfeed")
+
+        self.assertEqual(
+            [(a.remixer, a.name) for a in listed],
+            [("grouping_avglink", "current"), ("rssfeed", "feed")],
+        )
+        self.assertTrue(all(a.content is None for a in listed))
+        self.assertEqual([a.name for a in only_rss], ["feed"])
+
 
 if __name__ == "__main__":
     unittest.main()

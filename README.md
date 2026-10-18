@@ -81,11 +81,23 @@ uv run newsmerger -c config.yaml enrich markdownify --source castellonplaza --li
 # Run every configured remixer in order, or just one
 uv run newsmerger -c config.yaml remix
 uv run newsmerger -c config.yaml remix rssfeed --since 2026-10-01
+
+# Inspect what is stored (read-only)
+uv run newsmerger -c config.yaml items --source castellonplaza --limit 20
+uv run newsmerger -c config.yaml annotations --source castellonplaza --uid <uid>
+uv run newsmerger -c config.yaml annotations --source castellonplaza --uid <uid> --key summary
+uv run newsmerger -c config.yaml artifacts
+uv run newsmerger -c config.yaml artifact rssfeed feed > feed.xml
 ```
 
-`enrich` and `remix` accept `--source` (a source id), `--since`, `--until`
-and `--limit`. `enrich --force` reprocesses everything in scope, ignored
+`enrich`, `remix` and `items` accept `--source` (a source id), `--since`,
+`--until` and `--limit`. `enrich --force` reprocesses everything in scope, ignored
 items included, with fresh retry attempts.
+
+`annotations` shows a one-line preview per key; `--key` prints full values
+(text as is, the rest as JSON). `artifact` writes the content to stdout and
+its metadata to stderr, so it can be redirected; a missing item or artifact
+is an error.
 
 Global options: `--log-level LEVEL` (default `info`; also accepts
 `foundation.loglib` specs such as `info,db:debug`) and `-v/--verbose`

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import functools
+import json
 import logging
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,12 +15,13 @@ from foundation.loglib import setup_logger
 from foundation.plugin import PluginError
 from rich.console import Console
 from rich.progress import track
+from rich.syntax import Syntax
 from rich.table import Table
 
 from .app import Application, UnsupportedProviderError
 from .config import ConfigError
 from .consts import DISABLE_RICH, PACKAGE_NAME
-from .models import ProcessingScope
+from .models import ProcessingScope, SourceItem
 
 click = plain_click if DISABLE_RICH else rich_click
 
@@ -206,3 +209,147 @@ def remix_cmd(ctx: click.Context, remixer: str | None, scope: ProcessingScope) -
         ["Remixer", "Artifacts"],
         [[name, ", ".join(names) or "-"] for name, names in produced.items()],
     )
+
+
+# --- Inspection -------------------------------------------------------------
+
+PREVIEW_LENGTH = 80
+
+
+def format_value(value: Any) -> str:
+    """An annotation value as text: strings as they are, the rest as JSON."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+
+def preview(value: Any) -> str:
+    """One line of the value: the first line of text, or compact JSON."""
+    if isinstance(value, str):
+        lines = value.splitlines()
+    else:
+        lines = [json.dumps(value, ensure_ascii=False, default=str)]
+    first = lines[0] if lines else ""
+    if len(lines) > 1 or len(first) > PREVIEW_LENGTH:
+        return first[: PREVIEW_LENGTH - 1] + "…"
+    return first
+
+
+def lexer_for(content_type: str) -> str | None:
+    for marker in ("json", "xml", "html"):
+        if marker in content_type:
+            return marker
+    return None
+
+
+def find_item(app: Application, source_id: str, uid: str) -> SourceItem:
+    items = app.get_items(ProcessingScope(source=source_id, uids=(uid,)))
+    if not items:
+        raise click.ClickException(f"item '{source_id}/{uid}' not found")
+    return items[0]
+
+
+@cli.command("items")
+@scope_options
+@click.pass_context
+@report_user_errors
+def items_cmd(ctx: click.Context, scope: ProcessingScope) -> None:
+    """List stored items, oldest first."""
+    items = app_from_context(ctx).get_items(scope)
+    print_table(
+        "Items",
+        ["Source", "UID", "Published", "Title"],
+        [
+            [
+                item.source.id,
+                item.uid,
+                f"{item.published_at:%Y-%m-%d %H:%M}",
+                item.title,
+            ]
+            for item in items
+        ],
+    )
+
+
+@cli.command("annotations")
+@click.option("--source", "source_id", required=True, help="Source id")
+@click.option("--uid", required=True, help="Item uid within the source")
+@click.option("--processor", default=None, help="Only this processor's annotations")
+@click.option("--key", default=None, help="Only this key, printed in full")
+@click.pass_context
+@report_user_errors
+def annotations_cmd(
+    ctx: click.Context,
+    source_id: str,
+    uid: str,
+    processor: str | None,
+    key: str | None,
+) -> None:
+    """Show an item's annotations: a preview table, or full values with --key."""
+    app = app_from_context(ctx)
+    item = find_item(app, source_id, uid)
+    annotations = app.get_annotations(item, processor=processor, key=key)
+    if not annotations:
+        console.print(f"No annotations for '{source_id}/{uid}'")
+        return
+
+    rows = [
+        (name, annotation_key, value)
+        for name, values in annotations.items()
+        for annotation_key, value in values.items()
+    ]
+    if key is None:
+        print_table(
+            f"Annotations of {source_id}/{uid}",
+            ["Processor", "Key", "Value"],
+            [
+                [name, annotation_key, preview(value)]
+                for name, annotation_key, value in rows
+            ],
+        )
+        return
+
+    for name, annotation_key, value in rows:
+        if len(rows) > 1:
+            click.echo(f"== {name}.{annotation_key}")
+        click.echo(format_value(value))
+
+
+@cli.command("artifacts")
+@click.option("--remixer", default=None, help="Only this remixer's artifacts")
+@click.pass_context
+@report_user_errors
+def artifacts_cmd(ctx: click.Context, remixer: str | None) -> None:
+    """List stored artifacts."""
+    artifacts = app_from_context(ctx).list_artifacts(remixer)
+    print_table(
+        "Artifacts",
+        ["Remixer", "Name", "Type", "Updated"],
+        [
+            [a.remixer, a.name, a.content_type, f"{a.updated_at:%Y-%m-%d %H:%M}"]
+            for a in artifacts
+        ],
+    )
+
+
+@cli.command("artifact")
+@click.argument("remixer")
+@click.argument("name")
+@click.pass_context
+@report_user_errors
+def artifact_cmd(ctx: click.Context, remixer: str, name: str) -> None:
+    """Print an artifact's content to stdout and its metadata to stderr."""
+    artifact = app_from_context(ctx).get_artifact(remixer, name)
+    if artifact is None or artifact.content is None:
+        raise click.ClickException(f"artifact '{remixer}/{name}' does not exist")
+
+    click.echo(
+        f"{remixer}/{name} · {artifact.content_type} · "
+        f"updated {artifact.updated_at:%Y-%m-%d %H:%M}",
+        err=True,
+    )
+    lexer = lexer_for(artifact.content_type)
+    if not DISABLE_RICH and lexer and sys.stdout.isatty():
+        console.print(Syntax(artifact.content, lexer))
+    else:
+        sys.stdout.write(artifact.content)
