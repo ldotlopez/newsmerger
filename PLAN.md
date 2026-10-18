@@ -22,6 +22,11 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
 ## Done
 
+- [x] **CLI inspection commands**: `items` (scope options), `annotations`
+  (preview table; `--key` prints full values), `artifacts` (metadata, via
+  the new `Application.list_artifacts`) and `artifact` (content to stdout,
+  metadata to stderr; missing is an error). Plain under `DISABLE_RICH`,
+  syntax-highlighted on a terminal otherwise.
 - [x] **Tests updated** to the reworked core, plus `Application`, remixer and
   identity coverage (73 tests).
 - [x] **`foundation.dblib.configure_connection`** applies `SQLITE_PRAGMAS` to

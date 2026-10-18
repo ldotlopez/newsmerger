@@ -185,6 +185,10 @@ class Application:
         """The artifact with its content, or None if it does not exist."""
         return self._db.get_artifact(remixer, name)
 
+    def list_artifacts(self, remixer: str | None = None) -> list[Artifact]:
+        """Artifacts' metadata, by remixer and name; `content` is None."""
+        return self._db.list_artifacts(remixer)
+
     def delete_annotations(
         self, *, processor: str | None = None, item: SourceItem | None = None
     ) -> int:

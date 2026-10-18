@@ -25,7 +25,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | Module | Responsibility |
 | :--- | :--- |
 | `app.py` | `Application`, the single entry point: wires config, HTTP cache, database and plugins, runs the three phases and answers queries. The database is private to it. |
-| `cli.py` | Click commands only (`import`, `import-url`, `enrich`, `remix`); builds an `Application` per invocation. |
+| `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`) and read-only inspection (`items`, `annotations`, `artifacts`, `artifact`); builds an `Application` per invocation. |
 | `config.py` | Pydantic models for `config.yaml` (sources, processors, remixers, cache, database) and `${VAR}` expansion. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), `SourceItem` (the item DTO), `Artifact` and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
