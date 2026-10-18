@@ -1,13 +1,15 @@
+"""Extracts entity tags from the article's markdown with an Ollama model."""
+
 import json
 import logging
-import os
 from typing import Any
 
-import ollama
 import pydantic
 
+from ..db import Database
+from ..llm import DEFAULT_OLLAMA_URL, ollama_client
 from ..models import SourceItem
-from . import ItemProcessor
+from . import BaseProcessor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -49,32 +51,22 @@ You are an expert entity extraction and content tagging assistant. Your sole tas
 """
 
 
-class Processor(ItemProcessor):
+class Processor(BaseProcessor):
     NAME = "tagger"
     REQUIRES = "markdownify"
 
     def __init__(
         self,
-        *args,
-        api_base: str | None = None,
-        model: str | None = None,
+        db: Database,
+        *,
+        model: str,
+        api_base: str = DEFAULT_OLLAMA_URL,
         api_key: str | None = None,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-
+        max_retries: int | None = None,
+    ) -> None:
+        super().__init__(db, max_retries=max_retries)
         self.model = model
-
-        api_base = api_base or os.environ.get(
-            "OLLAMA_API_BASE", "http://localhost:11343"
-        )
-        api_key = api_key or os.environ.get("OLLAMA_API_KEY")
-
-        headers = {}
-        if api_key:
-            headers.update({"Authorization": f"Bearer {api_key}"})
-
-        self.client = ollama.Client(host=api_base, headers=headers)
+        self.client = ollama_client(api_base, api_key)
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
         markdown = self.require_annotation(item, "markdownify", "markdown")
@@ -85,8 +77,8 @@ class Processor(ItemProcessor):
         )
 
         try:
-            data = json.loads(clean_json(resp.response))
-            llm_tags = ResponseBaseModel(data["items"]).root
+            parsed = json.loads(clean_json(resp.response))
+            llm_tags = ResponseBaseModel(parsed["items"]).root
         except (
             pydantic.ValidationError,
             KeyError,
@@ -116,17 +108,8 @@ def clean_json(text: str) -> str:
 
 
 def merge_tags(existing_tags: list[str], new_tags: list[str]) -> list[str]:
-    """Merge two lists of tags, ensuring uniqueness and preserving order."""
-
-    all_tags = existing_tags + new_tags
-
-    # create table with lowercased tags to ensure case-insensitive uniqueness
-    tlb = {x.lower(): [] for x in all_tags}
-
-    for tag in all_tags:
-        tlb[tag.lower()].append(tag)
-
-    # take the first occurrence of each tag (preserving original case)
-    merged = [tags[0] for tags in tlb.values()]
-
-    return merged
+    """Merge two tag lists case-insensitively, keeping the first spelling and order."""
+    merged: dict[str, str] = {}
+    for tag in existing_tags + new_tags:
+        merged.setdefault(tag.lower(), tag)
+    return list(merged.values())

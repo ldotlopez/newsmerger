@@ -1,26 +1,15 @@
-"""Example ArtifactProcessor: builds a single RSS feed from scoped items.
-
-Scope (--source/--since/--until/--limit) controls which items go into the
-feed. Produces one artifact named "feed".
-"""
+"""Extracts the article's markdown from HTML items, for downstream processors."""
 
 from typing import Any
 
 import trafilatura
 
 from ..models import SourceItem
-from . import ItemProcessor, SkipItem
+from . import BaseProcessor, SkipItem
 
 
-class Processor(ItemProcessor):
+class Processor(BaseProcessor):
     NAME = "markdownify"
-
-    def __init__(
-        self, *args, title: str = "newsmerger feed", max_items: int = 100, **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-        self.title = title
-        self.max_items = max_items
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
         if item.mimetype != "text/html":
@@ -31,22 +20,11 @@ class Processor(ItemProcessor):
         if not html.strip():
             raise SkipItem("empty content")
 
-        title = item.title
-
-        md = trafilatura.extract(html, output_format="markdown")
-        txt = trafilatura.extract(html, output_format="txt")
-
-        if not txt or not md:
+        markdown = trafilatura.extract(html, output_format="markdown")
+        if not markdown:
             raise SkipItem("empty extract")
 
-        add_title = title and (title not in txt[: len(txt) * 2])
-        if add_title:
-            txt = f"# {title}\n\n{txt}"
-            md = f"# {title}\n\n{md}"
+        if item.title and item.title not in markdown:
+            markdown = f"# {item.title}\n\n{markdown}"
 
-        results = {
-            "text": txt,
-            "markdown": md,
-        }
-
-        return results
+        return {"markdown": markdown}

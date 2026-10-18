@@ -3,116 +3,34 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 from datetime import datetime
-from typing import Any, Self, TypeVar
+from typing import Self
 
 from foundation.jsonlib import JsonCompatible
-from pydantic import BaseModel, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, HttpUrl, model_validator
+
+# (source id, uid): an item's identity. Each source is its own uid space.
+type ItemKey = tuple[str, str]
 
 
-class UidFieldMixin:
-    uid: str
+class SourceData(BaseModel):
+    """A configured source. `id` is its identity and must stay stable."""
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-SupportsUid = TypeVar("SupportsUid", bound=UidFieldMixin)
-
-
-class UidFromNameMixin(UidFieldMixin):
-    @model_validator(mode="before")
-    @classmethod
-    def id_from_name(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-
-        if data.get("uid"):
-            return data
-
-        seed = None
-        if data.get("provider") and data.get("url"):
-            seed = f"{data['provider']}:{data['url']}"
-        elif data.get("uri"):
-            seed = str(data["uri"])
-        elif data.get("name"):
-            seed = str(data["name"])
-        elif data.get("id"):
-            seed = str(data["id"])
-
-        if seed:
-            data["uid"] = hashlib.sha256(seed.encode()).hexdigest()
-
-        return data
-
-
-class SourceData(
-    UidFromNameMixin,
-    UidFieldMixin,
-    BaseModel,
-):
+    id: str
     name: str
     url: HttpUrl
     provider: str
 
-    def __hash__(self) -> int:
-        return hash(self.uid)
 
+class SourceItemData(BaseModel):
+    """A provider's output for one item, validated at the scraping boundary.
 
-@dataclasses.dataclass(frozen=False)
-class SourceItem:
-    source: SourceData
-    uid: str
-    title: str
-    uri: str
-    # None when read back from the database: load it with Database.get_content().
-    content: bytes | None = None
-    mimetype: str = "application/octet-stream"
-    content_sha256: str | None = None
-    data: JsonCompatible = dataclasses.field(default_factory=dict)
-    published_at: datetime | None = None
-    modified_at: datetime | None = None
-
-    def __post_init__(self) -> None:
-        if self.content is not None:
-            self.content_sha256 = hashlib.sha256(self.content).hexdigest()
-
-    @classmethod
-    def from_data(cls, source: SourceData, data: SourceItemData) -> SourceItem:
-        return cls(source=source, **data.model_dump())
-
-        # return cls(
-        #     source=source,
-        #     id=entry.id,
-        #     title=entry.title,
-        #     uri=entry.uri,
-        #     content=entry.content,
-        #     data=entry.data,
-        # )
-
-    def __hash__(self) -> int:
-        return hash((hash(self.source), self.uid))
-
-    def as_dict(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
-
-
-@dataclasses.dataclass(slots=True)
-class Artifact:
-    """A processor output derived from many items (an RSS feed, a newsletter).
-
-    Unique per (processor, name); the timestamps are set by the database.
+    `uid` is derived by the provider; it only has to be deterministic and
+    stable within its source.
     """
 
-    processor: str
-    name: str
-    content: str
-    content_type: str
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-class SourceItemData(
-    UidFromNameMixin,
-    UidFieldMixin,
-    BaseModel,
-):
+    uid: str
     title: str
     uri: str
     content: bytes
@@ -132,3 +50,65 @@ class SourceItemData(
             except UnicodeDecodeError as e:
                 raise ValueError(f"{self.mimetype} content is not UTF-8") from e
         return self
+
+
+@dataclasses.dataclass
+class SourceItem:
+    source: SourceData
+    uid: str
+    title: str
+    uri: str
+    # None when read back from the database: load it with Application.get_content().
+    content: bytes | None = None
+    mimetype: str = "application/octet-stream"
+    content_sha256: str | None = None
+    data: JsonCompatible = dataclasses.field(default_factory=dict)
+    published_at: datetime | None = None
+    modified_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.content is not None:
+            self.content_sha256 = hashlib.sha256(self.content).hexdigest()
+
+    @classmethod
+    def from_data(cls, source: SourceData, data: SourceItemData) -> SourceItem:
+        return cls(source=source, **data.model_dump())
+
+    @property
+    def key(self) -> ItemKey:
+        return (self.source.id, self.uid)
+
+    def __hash__(self) -> int:
+        return hash(self.key)
+
+
+@dataclasses.dataclass(slots=True)
+class Artifact:
+    """A remixer output derived from many items (an RSS feed, a newsletter).
+
+    Unique per (remixer, name); the timestamps are set by the database.
+    """
+
+    remixer: str
+    name: str
+    content: str | None
+    content_type: str
+    content_sha256: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.content is not None:
+            self.content_sha256 = hashlib.sha256(self.content.encode()).hexdigest()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ProcessingScope:
+    """Which items an operation applies to. Every field is optional and they
+    combine; an unset field means no restriction on that axis."""
+
+    source: str | None = None  # source id
+    since: datetime | None = None  # published_at >=
+    until: datetime | None = None  # published_at <
+    uids: tuple[str, ...] | None = None  # uids within `source`
+    limit: int | None = None

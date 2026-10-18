@@ -21,7 +21,7 @@ class TestPrensaIberica(unittest.TestCase):
     def setUp(self) -> None:
         self.provider = PrensaIbericaProvider(
             source=SourceData(
-                uid="test",
+                id="test",
                 name="test",
                 url="http://localhost/",
                 provider=self.NAME,
@@ -190,7 +190,11 @@ class TestPrensaIberica(unittest.TestCase):
 class TestSourceItemDataContent(unittest.TestCase):
     def make(self, content: bytes, mimetype: str) -> SourceItemData:
         return SourceItemData(
-            title="t", uri="https://example.test/a", content=content, mimetype=mimetype
+            uid="u",
+            title="t",
+            uri="https://example.test/a",
+            content=content,
+            mimetype=mimetype,
         )
 
     def test_text_must_be_utf8(self) -> None:

@@ -19,7 +19,6 @@ LOGGER = logging.getLogger(__name__)
 
 
 class Provider(IndexSiteProvider):
-    NAME = "prensaiberica_plain"
     EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
 
     def parse_index(self, content: bytes) -> Iterator[URI]:
@@ -98,7 +97,7 @@ class Provider(IndexSiteProvider):
             },
         )
 
-    # # --- Section exclusion helpers -------------------------------------
+    # --- Section exclusion helpers -------------------------------------
 
     def _find_excluded_containers(self, soup: bs4.BeautifulSoup) -> list[bs4.Tag]:
         """Find the container divs for sections we want to exclude entirely,
@@ -156,19 +155,3 @@ def _extract_href(article: bs4.Tag) -> str:
         raise ValueError(article)
 
     return cast(str, a_tag.get("href"))
-
-
-def _extract_image(container: bs4.Tag) -> str | None:
-    """Prefer the <picture><meta itemprop="url"> (the canonical, largest
-    rendition); fall back to the <img src> if that's missing."""
-    picture = container.find("picture", {"itemprop": "image"})
-    if picture is not None:
-        url_meta = picture.find("meta", {"itemprop": "url"})
-        if url_meta is not None and url_meta.get("content"):
-            return url_meta["content"]
-
-        img_tag = picture.find("img")
-        if img_tag is not None and img_tag.get("src"):
-            return img_tag["src"]
-
-    return None

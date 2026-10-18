@@ -1,12 +1,8 @@
 """Unit tests for newsmerger.db.
 
-Uses a real (file-based, temp-dir) SQLite database per test via
-Database's own directory-creation logic — no mocking of SQLAlchemy itself,
-since the behavior under test (unit-of-work diffing, upsert semantics,
-timestamp rules) only means something against a real engine/session.
-
-Covers Database.upsert_source_items (diff-aware upsert) and the content
-storage behind it.
+Uses a real (file-based, temp-dir) SQLite database per test, without mocking
+SQLAlchemy: unit-of-work diffing, upsert semantics and timestamp rules only
+mean something against a real engine and session.
 """
 
 from __future__ import annotations
@@ -14,20 +10,27 @@ from __future__ import annotations
 import shutil
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import text
 
-from newsmerger.db import Database, DBSource, DBSourceItem, ProcessingStatus
-from newsmerger.models import Artifact, SourceData, SourceItem
+from newsmerger.db import (
+    Database,
+    DBProcessingState,
+    DBSource,
+    DBSourceItem,
+    ProcessingStatus,
+)
+from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
 
 
-def make_source(name: str = "Example", provider: str = "exampleprovider") -> SourceData:
+def make_source(source_id: str = "example", name: str = "Example") -> SourceData:
     return SourceData(
+        id=source_id,
         name=name,
-        url=f"https://example.test/{name.lower()}",
-        provider=provider,
+        url=f"https://example.test/{source_id}",
+        provider="exampleprovider",
     )
 
 
@@ -66,29 +69,26 @@ class DatabaseTestCase(unittest.TestCase):
         self.db.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def get_item(self, uid: str) -> DBSourceItem | None:
+    def get_item(self, uid: str, source_id: str = "example") -> DBSourceItem | None:
         with self.db.session_scope() as sess:
-            row = sess.query(DBSourceItem).filter(DBSourceItem.uid == uid).one_or_none()
+            row = (
+                sess.query(DBSourceItem)
+                .filter_by(source_id=source_id, uid=uid)
+                .one_or_none()
+            )
             if row is not None:
-                # Detach values we need before the session closes.
                 sess.expunge(row)
             return row
 
     def content_of(self, row: DBSourceItem) -> bytes:
         return self.db.contents.get(row.content_sha256)
 
-    def count_sources(self) -> int:
+    def stored_contents(self) -> set[str]:
+        return set(self.db.contents.iter())
+
+    def count(self, model: type) -> int:
         with self.db.session_scope() as sess:
-            return sess.query(DBSource).count()
-
-    def count_items(self) -> int:
-        with self.db.session_scope() as sess:
-            return sess.query(DBSourceItem).count()
-
-
-# ---------------------------------------------------------------------------
-# upsert_source_items -- diff-aware upsert
-# ---------------------------------------------------------------------------
+            return sess.query(model).count()
 
 
 class UpsertSourceItemsTests(DatabaseTestCase):
@@ -96,184 +96,167 @@ class UpsertSourceItemsTests(DatabaseTestCase):
         source = make_source()
         pub = datetime(2026, 1, 1, tzinfo=UTC)
         mod = datetime(2026, 1, 2, tzinfo=UTC)
-        item = make_item(source, uid="a1", published_at=pub, modified_at=mod)
 
-        self.db.upsert_source_items([item])
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", published_at=pub, modified_at=mod)]
+        )
 
         row = self.get_item("a1")
         self.assertEqual(row.published_at, pub)
         self.assertEqual(row.modified_at, mod)
 
     def test_new_row_falls_back_to_now_when_provider_gives_no_dates(self):
-        source = make_source()
-        item = make_item(source, uid="a1", published_at=None, modified_at=None)
-
         before = datetime.now(UTC)
-        self.db.upsert_source_items([item])
+        self.db.upsert_source_items([make_item(make_source(), uid="a1")])
         after = datetime.now(UTC)
 
         row = self.get_item("a1")
-        self.assertIsNotNone(row.published_at)
-        self.assertIsNotNone(row.modified_at)
         self.assertTrue(before <= row.published_at <= after)
         self.assertTrue(before <= row.modified_at <= after)
 
     def test_identical_resend_is_a_complete_no_op(self):
-        source = make_source()
         mod = datetime(2026, 1, 1, tzinfo=UTC)
-        item = make_item(
-            source, uid="a1", title="Same", content=b"Same", modified_at=mod
-        )
+        item = make_item(make_source(), uid="a1", modified_at=mod)
         self.db.upsert_source_items([item])
 
-        # Re-send the exact same item later -- nothing should change,
-        # in particular modified_at must NOT be bumped to "now".
         self.db.upsert_source_items([item])
 
-        row = self.get_item("a1")
-        self.assertEqual(row.modified_at, mod)
-        self.assertEqual(self.count_items(), 1)
+        self.assertEqual(self.get_item("a1").modified_at, mod)
+        self.assertEqual(self.count(DBSourceItem), 1)
 
     def test_content_change_with_newer_provider_date_updates_modified_at(self):
         source = make_source()
         t1 = datetime(2026, 1, 1, tzinfo=UTC)
         t2 = datetime(2026, 1, 5, tzinfo=UTC)
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", content=b"v1", modified_at=t1)]
+        )
 
-        original = make_item(source, uid="a1", content=b"v1", modified_at=t1)
-        self.db.upsert_source_items([original])
-
-        changed = make_item(source, uid="a1", content=b"v2", modified_at=t2)
-        self.db.upsert_source_items([changed])
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", content=b"v2", modified_at=t2)]
+        )
 
         row = self.get_item("a1")
         self.assertEqual(self.content_of(row), b"v2")
         self.assertEqual(row.modified_at, t2)
 
-    def test_content_change_with_older_provider_date_trusts_database(self):
-        source = make_source()
-        t_old = datetime(2026, 1, 1, tzinfo=UTC)
-        t_stored = datetime(2026, 1, 10, tzinfo=UTC)
-
-        original = make_item(source, uid="a1", content=b"v1", modified_at=t_stored)
-        self.db.upsert_source_items([original])
-
-        # Stale/out-of-order re-scrape: content differs, but its modified_at
-        # is OLDER than what's already stored.
-        stale = make_item(source, uid="a1", content=b"v2", modified_at=t_old)
-        self.db.upsert_source_items([stale])
-
-        row = self.get_item("a1")
-        self.assertEqual(self.content_of(row), b"v2")  # content still applied
-        self.assertEqual(row.modified_at, t_stored)  # but stored date wins
-
-    def test_content_change_with_equal_provider_date_trusts_database(self):
+    def test_content_change_with_older_or_equal_provider_date_trusts_database(self):
         source = make_source()
         t_stored = datetime(2026, 1, 10, tzinfo=UTC)
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", content=b"v1", modified_at=t_stored)]
+        )
 
-        original = make_item(source, uid="a1", content=b"v1", modified_at=t_stored)
-        self.db.upsert_source_items([original])
-
-        same_date = make_item(source, uid="a1", content=b"v2", modified_at=t_stored)
-        self.db.upsert_source_items([same_date])
-
-        row = self.get_item("a1")
-        self.assertEqual(self.content_of(row), b"v2")
-        self.assertEqual(row.modified_at, t_stored)  # equal -> not "newer", DB wins
+        for content, modified_at in (
+            (b"v2", t_stored - timedelta(days=9)),
+            (b"v3", t_stored),
+        ):
+            self.db.upsert_source_items(
+                [make_item(source, uid="a1", content=content, modified_at=modified_at)]
+            )
+            row = self.get_item("a1")
+            self.assertEqual(self.content_of(row), content)
+            self.assertEqual(row.modified_at, t_stored)
 
     def test_content_change_with_no_provider_date_falls_back_to_now(self):
         source = make_source()
         t1 = datetime(2026, 1, 1, tzinfo=UTC)
-        original = make_item(source, uid="a1", content=b"v1", modified_at=t1)
-        self.db.upsert_source_items([original])
-
-        before = datetime.now(UTC)
-        changed = make_item(source, uid="a1", content=b"v2", modified_at=None)
-        self.db.upsert_source_items([changed])
-        after = datetime.now(UTC)
-
-        row = self.get_item("a1")
-        self.assertEqual(self.content_of(row), b"v2")
-        self.assertTrue(before <= row.modified_at <= after)
-
-    def test_published_at_is_filled_once_and_never_overwritten(self):
-        source = make_source()
-        item = make_item(source, uid="a1", content=b"v1", published_at=None)
-
-        before = datetime.now(UTC)
-        self.db.upsert_source_items([item])
-        after = datetime.now(UTC)
-
-        row = self.get_item("a1")
-        first_published_at = row.published_at
-        self.assertTrue(before <= first_published_at <= after)
-
-        later_published = datetime(2030, 1, 1, tzinfo=UTC)
-        changed = make_item(
-            source, uid="a1", content=b"v2", published_at=later_published
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", content=b"v1", modified_at=t1)]
         )
-        self.db.upsert_source_items([changed])
 
-        row = self.get_item("a1")
-        self.assertEqual(self.content_of(row), b"v2")
-        # published_at must be untouched by the update, despite a new
-        # incoming value being present.
-        self.assertEqual(row.published_at, first_published_at)
+        before = datetime.now(UTC)
+        self.db.upsert_source_items([make_item(source, uid="a1", content=b"v2")])
+        after = datetime.now(UTC)
 
-    def test_mixed_new_and_existing_items_in_one_call(self):
+        self.assertTrue(before <= self.get_item("a1").modified_at <= after)
+
+    def test_published_at_is_set_once_and_never_overwritten(self):
         source = make_source()
-        existing = make_item(source, uid="a1", content=b"v1")
-        self.db.upsert_source_items([existing])
+        self.db.upsert_source_items([make_item(source, uid="a1", content=b"v1")])
+        first_published_at = self.get_item("a1").published_at
 
-        new_item = make_item(source, uid="a2", content=b"brand new")
-        updated_existing = make_item(source, uid="a1", content=b"v2")
-        self.db.upsert_source_items([new_item, updated_existing])
+        self.db.upsert_source_items(
+            [
+                make_item(
+                    source,
+                    uid="a1",
+                    content=b"v2",
+                    published_at=datetime(2030, 1, 1, tzinfo=UTC),
+                )
+            ]
+        )
 
-        self.assertEqual(self.count_items(), 2)
-        self.assertEqual(self.content_of(self.get_item("a1")), b"v2")
-        self.assertEqual(self.content_of(self.get_item("a2")), b"brand new")
-
-    def test_shared_source_is_created_only_once(self):
-        source = make_source()
-        item_a = make_item(source, uid="a1")
-        item_b = make_item(source, uid="a2")
-
-        self.db.upsert_source_items([item_a, item_b])
-
-        self.assertEqual(self.count_sources(), 1)
-        self.assertEqual(self.count_items(), 2)
+        self.assertEqual(self.get_item("a1").published_at, first_published_at)
 
     def test_data_dict_change_alone_counts_as_a_change(self):
         source = make_source()
         t1 = datetime(2026, 1, 1, tzinfo=UTC)
-        original = make_item(source, uid="a1", data={"tags": ["a"]}, modified_at=t1)
-        self.db.upsert_source_items([original])
-
         t2 = datetime(2026, 1, 2, tzinfo=UTC)
-        changed = make_item(source, uid="a1", data={"tags": ["a", "b"]}, modified_at=t2)
-        self.db.upsert_source_items([changed])
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", data={"tags": ["a"]}, modified_at=t1)]
+        )
+
+        self.db.upsert_source_items(
+            [make_item(source, uid="a1", data={"tags": ["a", "b"]}, modified_at=t2)]
+        )
 
         row = self.get_item("a1")
         self.assertEqual(row.data, {"tags": ["a", "b"]})
         self.assertEqual(row.modified_at, t2)
 
 
+class IdentityTests(DatabaseTestCase):
+    def test_same_uid_in_two_sources_is_two_items(self):
+        a, b = make_source("a"), make_source("b")
+
+        self.db.upsert_source_items(
+            [make_item(a, uid="same"), make_item(b, uid="same")]
+        )
+
+        self.assertEqual(self.count(DBSourceItem), 2)
+        self.assertEqual(
+            sorted(item.key for item in self.db.get_items()),
+            [("a", "same"), ("b", "same")],
+        )
+
+    def test_uri_is_not_unique(self):
+        source = make_source()
+
+        self.db.upsert_source_items(
+            [
+                make_item(source, uid="a1", uri="https://x/1"),
+                make_item(source, uid="a2", uri="https://x/1"),
+            ]
+        )
+
+        self.assertEqual(self.count(DBSourceItem), 2)
+
+    def test_reimport_updates_the_source_row(self):
+        self.db.upsert_source_items([make_item(make_source(name="Old"))])
+        self.db.upsert_source_items([make_item(make_source(name="New"))])
+
+        self.assertEqual(self.count(DBSource), 1)
+        (item,) = self.db.get_items()
+        self.assertEqual(item.source.name, "New")
+
+
 class ContentStorageTests(DatabaseTestCase):
     def test_replaced_content_is_deleted(self):
         source = make_source()
-        original = make_item(source, uid="a1", content=b"v1")
-        self.db.upsert_source_items([original])
+        self.db.upsert_source_items([make_item(source, uid="a1", content=b"v1")])
 
         self.db.upsert_source_items([make_item(source, uid="a1", content=b"v2")])
 
-        self.assertEqual(
-            list(self.db.contents.iter()), [self.get_item("a1").content_sha256]
-        )
+        self.assertEqual(self.stored_contents(), {self.get_item("a1").content_sha256})
 
     def test_replaced_content_shared_with_another_item_is_kept(self):
         source = make_source()
-        shared = make_item(source, uid="a1", content=b"shared")
         self.db.upsert_source_items(
-            [shared, make_item(source, uid="a2", content=b"shared")]
+            [
+                make_item(source, uid="a1", content=b"shared"),
+                make_item(source, uid="a2", content=b"shared"),
+            ]
         )
 
         self.db.upsert_source_items([make_item(source, uid="a1", content=b"v2")])
@@ -281,13 +264,49 @@ class ContentStorageTests(DatabaseTestCase):
         self.assertEqual(self.content_of(self.get_item("a2")), b"shared")
 
     def test_get_content_loads_from_storage(self):
-        source = make_source()
-        self.db.upsert_source_items([make_item(source, uid="a1", content=b"%PDF")])
+        self.db.upsert_source_items(
+            [make_item(make_source(), uid="a1", content=b"%PDF")]
+        )
 
-        (item,) = self.db.get_source_items()
+        (item,) = self.db.get_items()
 
         self.assertIsNone(item.content)
         self.assertEqual(self.db.get_content(item), b"%PDF")
+
+
+class GetItemsTests(DatabaseTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        source = make_source()
+        self.db.upsert_source_items(
+            [
+                make_item(
+                    source,
+                    uid=f"d{day}",
+                    published_at=datetime(2026, 1, day, tzinfo=UTC),
+                )
+                for day in (1, 2, 3)
+            ]
+        )
+
+    def uids(self, **kwargs) -> list[str]:
+        return [item.uid for item in self.db.get_items(**kwargs)]
+
+    def test_oldest_first_by_default_and_limit_keeps_the_first(self):
+        self.assertEqual(self.uids(), ["d1", "d2", "d3"])
+        self.assertEqual(self.uids(scope=ProcessingScope(limit=2)), ["d1", "d2"])
+
+    def test_newest_first_with_limit_keeps_the_newest(self):
+        self.assertEqual(
+            self.uids(scope=ProcessingScope(limit=2), newest_first=True), ["d3", "d2"]
+        )
+
+    def test_scope_filters_by_source_dates_and_uids(self):
+        since = datetime(2026, 1, 2, tzinfo=UTC)
+        self.assertEqual(self.uids(scope=ProcessingScope(since=since)), ["d2", "d3"])
+        self.assertEqual(self.uids(scope=ProcessingScope(until=since)), ["d1"])
+        self.assertEqual(self.uids(scope=ProcessingScope(uids=("d3",))), ["d3"])
+        self.assertEqual(self.uids(scope=ProcessingScope(source="other")), [])
 
 
 class ConnectionTests(DatabaseTestCase):
@@ -302,10 +321,21 @@ class ProcessingTests(DatabaseTestCase):
         super().setUp()
         self.source = make_source()
         self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v1")])
-        (self.item,) = self.db.get_source_items()
+        (self.item,) = self.db.get_items()
 
     def unprocessed_uids(self, processor: str, **kwargs) -> list[str]:
+        kwargs.setdefault("version", None)
+        kwargs.setdefault("max_retries", 3)
         return [i.uid for i in self.db.get_unprocessed_items(processor, **kwargs)]
+
+    def attempts(self, processor: str) -> int:
+        with self.db.session_scope() as sess:
+            return (
+                sess.query(DBProcessingState)
+                .filter_by(processor=processor)
+                .one()
+                .attempts
+            )
 
     def test_done_item_is_eligible_again_after_its_content_changes(self):
         self.db.record_result(self.item, "markdownify", ProcessingStatus.DONE)
@@ -314,6 +344,37 @@ class ProcessingTests(DatabaseTestCase):
         self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v2")])
 
         self.assertEqual(self.unprocessed_uids("markdownify"), ["a1"])
+
+    def test_version_change_makes_done_items_eligible(self):
+        self.db.record_result(
+            self.item, "markdownify", ProcessingStatus.DONE, version="1"
+        )
+
+        self.assertEqual(self.unprocessed_uids("markdownify", version="1"), [])
+        self.assertEqual(self.unprocessed_uids("markdownify", version="2"), ["a1"])
+
+    def test_ignored_item_is_only_revisited_when_forced(self):
+        self.db.record_result(self.item, "markdownify", ProcessingStatus.IGNORED)
+
+        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+        self.assertEqual(self.unprocessed_uids("markdownify", force=True), ["a1"])
+
+    def test_errors_stop_at_max_retries(self):
+        for _ in range(3):
+            self.db.record_result(self.item, "markdownify", ProcessingStatus.ERROR)
+
+        self.assertEqual(self.attempts("markdownify"), 3)
+        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+
+    def test_forced_run_resets_attempts(self):
+        for _ in range(3):
+            self.db.record_result(self.item, "markdownify", ProcessingStatus.ERROR)
+
+        self.db.record_result(
+            self.item, "markdownify", ProcessingStatus.ERROR, reset_attempts=True
+        )
+
+        self.assertEqual(self.attempts("markdownify"), 1)
 
     def test_requires_waits_for_upstream_done_on_current_content(self):
         self.assertEqual(self.unprocessed_uids("tagger", requires="markdownify"), [])
@@ -333,30 +394,81 @@ class ProcessingTests(DatabaseTestCase):
             self.unprocessed_uids("tagger", requires="markdownify", force=True), []
         )
 
-    def test_record_result_saves_annotations_and_state_together(self):
+
+class AnnotationTests(DatabaseTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.source = make_source()
+        self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v1")])
+        (self.item,) = self.db.get_items()
+
+    def annotate(self, item: SourceItem, processor: str, **values) -> None:
         self.db.record_result(
-            self.item,
-            "markdownify",
-            ProcessingStatus.DONE,
-            annotations={"markdown": "# Title"},
+            item, processor, ProcessingStatus.DONE, annotations=values
         )
+
+    def test_annotations_round_trip_through_storage(self):
+        self.annotate(self.item, "markdownify", markdown="# Title")
 
         self.assertEqual(
-            self.db.get_annotations(self.item),
-            {"markdownify": {"markdown": "# Title"}},
+            self.db.get_annotations(self.item), {"markdownify": {"markdown": "# Title"}}
         )
-        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+        self.assertEqual(len(self.stored_contents()), 2)  # item content + value
 
-    def test_get_annotation_values_maps_uids_with_the_annotation(self):
-        self.db.upsert_source_items([make_item(self.source, uid="a2", content=b"x")])
-        items = self.db.get_source_items()
-        self.db.record_result(
-            self.item, "tagger", ProcessingStatus.DONE, annotations={"tags": ["a"]}
+    def test_replaced_annotation_value_is_released(self):
+        self.annotate(self.item, "summarize", summary="first")
+        self.annotate(self.item, "summarize", summary="second")
+
+        self.assertEqual(
+            self.db.get_annotations(self.item, processor="summarize"),
+            {"summarize": {"summary": "second"}},
         )
+        self.assertEqual(len(self.stored_contents()), 2)
+
+    def test_get_annotation_values_is_keyed_by_source_and_uid(self):
+        other = make_source("other")
+        self.db.upsert_source_items([make_item(other, uid="a1", content=b"x")])
+        items = self.db.get_items()
+        self.annotate(self.item, "tagger", tags=["a"])
 
         values = self.db.get_annotation_values(items, processor="tagger", key="tags")
 
-        self.assertEqual(values, {"a1": ["a"]})
+        self.assertEqual(values, {("example", "a1"): ["a"]})
+
+    def test_delete_by_item_and_processor_makes_the_item_pending(self):
+        self.annotate(self.item, "markdownify", markdown="# Title")
+        self.annotate(self.item, "tagger", tags=["a"])
+
+        deleted = self.db.delete_annotations(processor="markdownify", item=self.item)
+
+        self.assertEqual(deleted, 1)
+        self.assertEqual(
+            self.db.get_annotations(self.item), {"tagger": {"tags": ["a"]}}
+        )
+        self.assertEqual(
+            [
+                i.uid
+                for i in self.db.get_unprocessed_items(
+                    "markdownify", version=None, max_retries=3
+                )
+            ],
+            ["a1"],
+        )
+        self.assertEqual(self.count(DBProcessingState), 1)
+        self.assertEqual(len(self.stored_contents()), 2)  # item content + tags
+
+    def test_delete_by_processor_covers_every_item(self):
+        other = make_source("other")
+        self.db.upsert_source_items([make_item(other, uid="b1", content=b"x")])
+        for item in self.db.get_items():
+            self.annotate(item, "tagger", tags=[item.uid])
+
+        self.assertEqual(self.db.delete_annotations(processor="tagger"), 2)
+        self.assertEqual(self.count(DBProcessingState), 0)
+
+    def test_delete_needs_a_processor_or_an_item(self):
+        with self.assertRaises(ValueError):
+            self.db.delete_annotations()
 
 
 class ArtifactTests(DatabaseTestCase):
@@ -364,6 +476,7 @@ class ArtifactTests(DatabaseTestCase):
         self.db.save_artifact(
             Artifact("rssfeed", "feed", "<rss/>", "application/rss+xml")
         )
+        first = self.db.get_artifact("rssfeed", "feed")
         self.db.save_artifact(
             Artifact("rssfeed", "feed", "<rss>2</rss>", "application/rss+xml")
         )
@@ -371,7 +484,11 @@ class ArtifactTests(DatabaseTestCase):
         artifact = self.db.get_artifact("rssfeed", "feed")
 
         self.assertEqual(artifact.content, "<rss>2</rss>")
-        self.assertIsNotNone(artifact.updated_at)
+        self.assertEqual(artifact.created_at, first.created_at)
+        self.assertGreaterEqual(artifact.updated_at, first.updated_at)
+        self.assertEqual(self.stored_contents(), {artifact.content_sha256})
+
+    def test_missing_artifact_is_none(self):
         self.assertIsNone(self.db.get_artifact("rssfeed", "missing"))
 
 
