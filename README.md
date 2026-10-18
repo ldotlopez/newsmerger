@@ -221,6 +221,7 @@ uv run ruff check --fix .
 uv run ruff format .
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the internals and how
-to write a provider, [docs/decisions/](docs/decisions/) for the recorded
+See [docs/SPECIFICATION.md](docs/SPECIFICATION.md) for the full definition
+of the application, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
+internals and how to write a provider, [docs/decisions/](docs/decisions/) for the recorded
 design decisions and [PLAN.md](PLAN.md) for pending work.
