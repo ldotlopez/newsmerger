@@ -77,9 +77,10 @@ SQLite tables:
   `content_sha256` of their content.
 
 SQLAlchemy models never leave `db.py`: `Database` takes and returns DTOs.
-Every SQLite connection gets `foundation.dblib.configure_connection`, the
-settings `SQLite3DB` uses: foreign keys on, WAL, `busy_timeout`,
-`synchronous=NORMAL`, in-memory temp store. Item foreign keys are `ON DELETE CASCADE`.
+Every SQLite connection gets `SQLITE_PRAGMAS` from a SQLAlchemy `connect`
+listener: foreign keys on, WAL, `busy_timeout`, `synchronous=NORMAL`,
+in-memory temp store. newsmerger does not use `foundation.dblib`, which is a
+shortcut for code that uses `sqlite3` directly. Item foreign keys are `ON DELETE CASCADE`.
 `Base.metadata.create_all` creates missing tables only; it never alters an
 existing schema.
 
