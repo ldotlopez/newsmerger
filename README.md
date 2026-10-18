@@ -1,19 +1,26 @@
 # newsmerger
 
-Aggregates local news (Castelló) from several websites, stores the articles,
-and runs processing steps over them: markdown extraction, LLM summaries and
-tagging, Telegram publishing, event grouping and RSS feeds.
+Collects news from several websites, keeps the articles, and builds things
+from them: markdown copies, LLM summaries and tags, Telegram posts, event
+groupings and RSS feeds. It was written for local news (Castelló), but any
+site can be added with a provider.
 
-It works in three phases: **import** (providers fetch items from sources),
-**enrich** (processors annotate each item) and **remix** (remixers build
-artifacts from many items).
+It works in three phases:
+
+1. **import**: each configured **source** (a website) is fetched with its
+   **provider**, and every article becomes an **item**. Re-importing an
+   unchanged article does nothing; a changed one is updated in place.
+2. **enrich**: **processors** add **annotations** to each item (its markdown,
+   a summary, tags, the Telegram message it was posted as...).
+3. **remix**: **remixers** combine many items into **artifacts** (an RSS feed,
+   a list of events...).
 
 ## Requirements
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- The internal `foundation` library (installed as a regular dependency)
-- An Ollama server for the `summarize` and `tagger` processors
+- An Ollama server for the `summarize` and `tagger` processors and the
+  `grouping_embeddings` remixer
 
 ## Install
 
@@ -23,13 +30,14 @@ uv sync
 
 ## Configuration
 
-Pass a YAML file with `-c/--config`. Every section is optional.
+Pass a YAML file with `-c/--config`. Every section is optional;
+`config.example.yaml` is a starting point.
 
 ```yaml
 sources:
   - id: castellonplaza               # required, stable: part of each item's key
     name: Castellón Plaza
-    provider: plaza                  # module in newsmerger/providers/
+    provider: plaza                  # see "Providers" below
     url: https://castellonplaza.com/castellon9/
 
 db:
@@ -57,6 +65,11 @@ remixers:                            # run in this order by `remix`
       title: Castelló news
 ```
 
+A source's `id` identifies its items: its `url` and `provider` can change
+without losing anything, but renaming the `id` starts the source from
+scratch. Removing a source from the file keeps its items; they just stop
+being updated.
+
 `${VAR}` is replaced with the environment variable `VAR` when the file is
 loaded, or with `VAR` from a `.env` file next to the config file (the real
 environment wins). A missing variable is an error. Pass secrets (API keys,
@@ -71,8 +84,8 @@ TELEGRAM_CHAT_ID=...
 ```
 
 Only configured processors and remixers can run. Their `params` go to the
-plugin's constructor, and unknown params are rejected. Changing a plugin's
-params never regenerates existing annotations.
+plugin, and unknown params are rejected. Changing a plugin's params never
+regenerates existing annotations; use `enrich --force` for that.
 
 ## Usage
 
@@ -100,29 +113,49 @@ uv run newsmerger -c config.yaml artifact rssfeed feed > feed.xml
 ```
 
 `enrich`, `remix` and `items` accept `--source` (a source id), `--since`,
-`--until` and `--limit`. `enrich --force` reprocesses everything in scope, ignored
-items included, with fresh retry attempts.
+`--until` and `--limit`.
 
 `annotations` shows a one-line preview per key; `--key` prints full values
 (text as is, the rest as JSON). `artifact` writes the content to stdout and
 its metadata to stderr, so it can be redirected; a missing item or artifact
 is an error.
 
-Global options (from `foundation.clilib`): `--log-level LEVEL` (default
-`warning`; also accepts `foundation.loglib` specs such as `info,db:debug`),
-and `-v`/`-q`, repeatable, to raise or lower it one step each (`-v` shows
-progress messages, `-vv` debug). Set `DISABLE_RICH=1` (or `RICH_DISABLED=1`,
-or `NO_COLOR=1`) for plain output: no colors, tables or progress bars, one
-line per log record.
+Global options: `--log-level LEVEL` (default `warning`; also accepts specs
+such as `info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one
+step each (`-v` shows progress messages, `-vv` debug). Set `DISABLE_RICH=1`
+(or `RICH_DISABLED=1`, or `NO_COLOR=1`) for plain output: no colors, tables
+or progress bars, one line per log record.
 
-`enrich` runs `telegram` too when it is configured, and posts every
-summarized item in scope that it hasn't posted yet. On a fresh database,
-limit it with `--since`.
+### How `enrich` behaves
+
+- Each processor handles every item once. It runs again on an item only when
+  the item's content changed, or when the processor itself was upgraded.
+- A processor can skip items it does not apply to (e.g. `markdownify` on a
+  PDF). Skipped items stay skipped until their content changes.
+- Failures are retried on later runs, up to 3 attempts by default (the
+  `max_retries` param), waiting longer each time (1 min, 2 min, 4 min... up
+  to 24 h).
+- A processor only sees items its upstream processor finished (see the
+  *Reads* column below). Items skipped upstream never reach it.
+- `--force` reprocesses everything in scope, skipped items included, with
+  fresh retry attempts.
+
+`telegram` posts every summarized item in scope that it hasn't posted yet,
+and never posts the same item twice. On a fresh database, limit the first
+`enrich` with `--since`.
 
 ### Providers
 
-`prensaiberica`, `prensaiberica_plain`, `castelloninformacion`, `plaza`,
-`theguardian` (HTML articles) and `csjuntasgobierno` (PDF minutes).
+| Provider | Site | Content |
+| :--- | :--- | :--- |
+| `prensaiberica`, `prensaiberica_plain` | Prensa Ibérica papers (El Periódico Mediterráneo...) | HTML |
+| `castelloninformacion` | Castellón Información | HTML |
+| `plaza` | Castellón Plaza | HTML |
+| `theguardian` | The Guardian | HTML |
+| `csjuntasgobierno` | Index page of *juntas de gobierno* minutes | PDF |
+
+To support a new site, see
+[Writing a provider](docs/ARCHITECTURE.md#writing-a-provider).
 
 ### Processors
 
@@ -142,24 +175,31 @@ limit it with `--since`.
 | `grouping_avglink` | `current` | Clusters tagged items into events (average-link) |
 | `grouping_embeddings` | `current` | Clusters tagged items by tag overlap blended with tag embeddings (Ollama, single-link) |
 
-## Data
+Artifacts are rebuilt each time their remixer runs, so between runs they can
+lag behind the stored items.
 
-- The SQLite database holds sources, item metadata, processing state, and
-  references to annotations and artifacts.
-- Contents live outside the database, in `content_dir`, one file per sha256:
-  item contents (HTML, PDF, ...), annotation values (JSON) and artifacts.
-  Text content is always stored as UTF-8.
+## Data and backups
 
-The database runs in WAL mode, so back it up with SQLite's backup API (or
-with no process using it), not by copying `data.db` alone. Back up
-`content_dir` along with it.
+Everything lives in two places: the SQLite database (`db.uri`) and the
+content directory (`db.content_dir`), which holds article contents,
+annotation values and artifacts. Back up both together. The database runs in
+WAL mode, so back it up with SQLite's backup API (or with no process using
+it), not by copying `data.db` alone.
 
-The schema is created, never migrated: after a schema change, move the old
-`data.db` and `content_dir` aside and re-import.
+The schema is created, never migrated: after an upgrade that changes it,
+move the old `data.db` and `content_dir` aside and re-import.
+
+Run one newsmerger command at a time against the same data.
+
+## Known limitations
+
+- The same article in two sources is stored, and processed, twice.
+- Items of a removed source still appear in artifacts unless the remixer
+  filters them out.
 
 ## Scripting
 
-External tools use `Application`, the same core the CLI uses:
+Other tools use `Application`, the same core the CLI uses:
 
 ```python
 from pathlib import Path
@@ -181,9 +221,6 @@ uv run ruff check --fix .
 uv run ruff format .
 ```
 
-Set `NEWSMERGER_PICKLE_CACHE=1` to cache each source's fetched items in a
-local `<source id>.pkl` file while developing providers.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the internals,
-[docs/decisions/](docs/decisions/) for the recorded design decisions and
-[PLAN.md](PLAN.md) for pending work.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the internals and how
+to write a provider, [docs/decisions/](docs/decisions/) for the recorded
+design decisions and [PLAN.md](PLAN.md) for pending work.
