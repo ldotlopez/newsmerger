@@ -7,10 +7,16 @@ import unittest
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 from newsmerger.db import Database, ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceData, SourceItem
-from newsmerger.remixers import grouping_avglink, grouping_singlelink, rssfeed
+from newsmerger.remixers import (
+    grouping_avglink,
+    grouping_embeddings,
+    grouping_singlelink,
+    rssfeed,
+)
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 
@@ -79,8 +85,11 @@ class GroupingTests(RemixerTestCase):
             item, "tagger", ProcessingStatus.DONE, annotations={"tags": tags}
         )
 
-    def groups(self, module) -> list[list[str]]:
-        remixer = module.Remixer(self.db, tau_hours=None, days=10_000)
+    def groups(self, module, **params) -> list[list[str]]:
+        remixer = module.Remixer(self.db, tau_hours=None, days=10_000, **params)
+        return self.groups_of(remixer)
+
+    def groups_of(self, remixer) -> list[list[str]]:
         ((_, content, _),) = remixer.produce(ProcessingScope())
         return [
             sorted(member["uid"] for member in group["members"])
@@ -113,6 +122,61 @@ class GroupingTests(RemixerTestCase):
         remixer = grouping_singlelink.Remixer(self.db)
 
         self.assertEqual(list(remixer.produce(ProcessingScope())), [])
+
+
+class EmbeddingGroupingTests(RemixerTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.d1, self.d2, self.d3 = self.add_items(1, 2, 3)
+        # No tag overlap at all: only the embeddings can relate them.
+        for item, tags in (
+            (self.d1, ["BCE"]),
+            (self.d2, ["Banco Central Europeo"]),
+            (self.d3, ["pleno"]),
+        ):
+            self.db.record_result(
+                item, "tagger", ProcessingStatus.DONE, annotations={"tags": tags}
+            )
+
+    def remixer(self, embedding_weight: float) -> grouping_embeddings.Remixer:
+        remixer = grouping_embeddings.Remixer(
+            self.db,
+            model="embedder",
+            embedding_weight=embedding_weight,
+            tau_hours=None,
+            days=10_000,
+        )
+        remixer.client = Mock()
+        remixer.client.embed.return_value = Mock(
+            embeddings=[[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]]
+        )
+        return remixer
+
+    def groups_of(self, remixer) -> tuple[list[list[str]], dict]:
+        ((_, content, _),) = remixer.produce(ProcessingScope())
+        payload = json.loads(content)
+        groups = [
+            sorted(member["uid"] for member in group["members"])
+            for group in payload["groups"]
+        ]
+        return groups, payload["params"]
+
+    def test_embeddings_group_variants_without_shared_tags(self) -> None:
+        remixer = self.remixer(embedding_weight=0.5)
+
+        groups, params = self.groups_of(remixer)
+
+        self.assertEqual(groups, [["d1", "d2"], ["d3"]])
+        remixer.client.embed.assert_called_once_with(
+            model="embedder", input=["BCE", "Banco Central Europeo", "pleno"]
+        )
+        self.assertEqual(params["model"], "embedder")
+        self.assertEqual(params["embedding_weight"], 0.5)
+
+    def test_zero_weight_is_plain_tag_overlap(self) -> None:
+        groups, _ = self.groups_of(self.remixer(embedding_weight=0.0))
+
+        self.assertEqual(groups, [["d1"], ["d2"], ["d3"]])
 
 
 if __name__ == "__main__":

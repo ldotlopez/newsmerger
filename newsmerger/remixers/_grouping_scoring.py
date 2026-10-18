@@ -130,6 +130,38 @@ def pair_payload(a: ScoredItem, b: ScoredItem, score: float) -> dict[str, Any]:
     }
 
 
+def single_link_groups(
+    items: list[ScoredItem], scores: list[list[float]], min_score: float
+) -> list[dict[str, Any]]:
+    """Connected components of the pairs scoring at least `min_score`, one
+    payload dict per group (largest first) with its internal edges."""
+    union_find = UnionFind(len(items))
+    edges: list[tuple[int, int, float]] = []
+    for i, j in combinations(range(len(items)), 2):
+        if scores[i][j] >= min_score:
+            edges.append((i, j, scores[i][j]))
+            union_find.union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for idx in range(len(items)):
+        groups.setdefault(union_find.find(idx), []).append(idx)
+
+    payload = []
+    for members in sorted(groups.values(), key=len, reverse=True):
+        member_set = set(members)
+        payload.append(
+            {
+                "members": [member_payload(items[idx]) for idx in members],
+                "edges": [
+                    pair_payload(items[i], items[j], score)
+                    for i, j, score in sorted(edges, key=lambda edge: -edge[2])
+                    if i in member_set and j in member_set
+                ],
+            }
+        )
+    return payload
+
+
 class GroupingRemixer(BaseRemixer):
     """Groups the tagged items of the last `days` into events.
 
@@ -167,15 +199,19 @@ class GroupingRemixer(BaseRemixer):
 
         payload = {
             "generated_at": datetime.now(UTC).isoformat(),
-            "params": {
-                "algorithm": self.ALGORITHM,
-                "days": self.days,
-                "min_score": self.min_score,
-                "tau_hours": self.tau_hours,
-            },
+            "params": self.params(),
             "groups": self.group(scored),
         }
         yield ARTIFACT_NAME, json.dumps(payload, indent=2), "application/json"
+
+    def params(self) -> dict[str, Any]:
+        """The settings recorded in the artifact."""
+        return {
+            "algorithm": self.ALGORITHM,
+            "days": self.days,
+            "min_score": self.min_score,
+            "tau_hours": self.tau_hours,
+        }
 
     @abstractmethod
     def group(self, items: list[ScoredItem]) -> list[dict[str, Any]]:

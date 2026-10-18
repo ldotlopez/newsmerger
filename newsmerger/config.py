@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 import string
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import platformdirs
 import pydantic
 import yaml
+from dotenv import dotenv_values
 
 from .consts import PACKAGE_NAME
 from .models import SourceData
@@ -76,16 +77,28 @@ class Config(pydantic.BaseModel):
 
     @classmethod
     def from_file(cls, path: Path) -> Config:
-        return cls.from_text(path.read_text())
+        """Load a config file. `${VAR}` takes values from the environment,
+        then from a `.env` file next to the config file, if any."""
+        dotenv = {
+            name: value
+            for name, value in dotenv_values(path.parent / ".env").items()
+            if value is not None
+        }
+        return cls.from_text(path.read_text(), environ={**dotenv, **os.environ})
 
     @classmethod
-    def from_text(cls, text: str) -> Config:
-        """Parse YAML after expanding `${VAR}` references from the environment.
+    def from_text(
+        cls, text: str, *, environ: Mapping[str, str] | None = None
+    ) -> Config:
+        """Parse YAML after expanding `${VAR}` references from `environ`
+        (the process environment by default).
 
         A literal `$` must be written as `$$`.
         """
         try:
-            expanded = string.Template(text).substitute(os.environ)
+            expanded = string.Template(text).substitute(
+                os.environ if environ is None else environ
+            )
         except KeyError as e:
             raise ConfigError(f"environment variable {e} is not set") from e
         except ValueError as e:

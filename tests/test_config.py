@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from newsmerger.config import Config, ConfigError
@@ -29,6 +31,35 @@ class ConfigTests(unittest.TestCase):
             self.assertRaisesRegex(ConfigError, "'API_KEY' is not set"),
         ):
             Config.from_text("processors:\n  - name: x\n    params: {k: ${API_KEY}}\n")
+
+    def test_dotenv_next_to_the_config_fills_variables(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                "processors:\n  - name: x\n    params: {k: ${API_KEY}, m: ${MODEL}}\n"
+            )
+            (Path(directory) / ".env").write_text("API_KEY=from-dotenv\nMODEL=small\n")
+
+            with patch.dict("os.environ", {"MODEL": "from-environment"}, clear=True):
+                config = Config.from_file(config_path)
+
+        # The real environment wins over .env.
+        self.assertEqual(
+            config.get_processor("x").params,
+            {"k": "from-dotenv", "m": "from-environment"},
+        )
+
+    def test_config_without_dotenv_uses_the_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                "processors:\n  - name: x\n    params: {k: ${API_KEY}}\n"
+            )
+
+            with patch.dict("os.environ", {"API_KEY": "env"}, clear=True):
+                config = Config.from_file(config_path)
+
+        self.assertEqual(config.get_processor("x").params, {"k": "env"})
 
     def test_double_dollar_is_a_literal_dollar(self) -> None:
         config = Config.from_text(

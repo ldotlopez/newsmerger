@@ -58,8 +58,17 @@ remixers:                            # run in this order by `remix`
 ```
 
 `${VAR}` is replaced with the environment variable `VAR` when the file is
-loaded, and a missing variable is an error. Pass secrets (API keys, bot
-tokens) this way, never as literals. Write a literal `$` as `$$`.
+loaded, or with `VAR` from a `.env` file next to the config file (the real
+environment wins). A missing variable is an error. Pass secrets (API keys,
+bot tokens) this way, never as literals; `.env` is git-ignored. Write a
+literal `$` as `$$`, comments included.
+
+```sh
+# .env
+OLLAMA_API_KEY=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
 
 Only configured processors and remixers can run. Their `params` go to the
 plugin's constructor, and unknown params are rejected. Changing a plugin's
@@ -99,10 +108,12 @@ items included, with fresh retry attempts.
 its metadata to stderr, so it can be redirected; a missing item or artifact
 is an error.
 
-Global options: `--log-level LEVEL` (default `info`; also accepts
-`foundation.loglib` specs such as `info,db:debug`) and `-v/--verbose`
-(`debug`). Set `DISABLE_RICH=1` for plain output: no colors, tables or
-progress bars, one line per log record.
+Global options (from `foundation.clilib`): `--log-level LEVEL` (default
+`warning`; also accepts `foundation.loglib` specs such as `info,db:debug`),
+and `-v`/`-q`, repeatable, to raise or lower it one step each (`-v` shows
+progress messages, `-vv` debug). Set `DISABLE_RICH=1` (or `RICH_DISABLED=1`,
+or `NO_COLOR=1`) for plain output: no colors, tables or progress bars, one
+line per log record.
 
 `enrich` runs `telegram` too when it is configured, and posts every
 summarized item in scope that it hasn't posted yet. On a fresh database,
@@ -129,6 +140,7 @@ limit it with `--since`.
 | `rssfeed` | `feed` | RSS feed of the newest items in scope (`title`, `link`, `description`, `max_items`) |
 | `grouping_singlelink` | `current` | Clusters tagged items into events (single-link) |
 | `grouping_avglink` | `current` | Clusters tagged items into events (average-link) |
+| `grouping_embeddings` | `current` | Clusters tagged items by tag overlap blended with tag embeddings (Ollama, single-link) |
 
 ## Data
 
@@ -159,8 +171,7 @@ with Application.from_config_file(Path("config.yaml"), create_schema=False) as a
 ```
 
 `scripts/pipeline_url.py` imports one URL and runs a list of processors on
-it (the publish-news flow); `scripts/group_events_embeddings.py` is an
-experiment comparing tag embeddings with plain tag overlap for grouping.
+it (the publish-news flow).
 
 ## Development
 
