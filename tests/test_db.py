@@ -17,8 +17,10 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
-from newsmerger.db import Database, DBSource, DBSourceItem
-from newsmerger.models import SourceData, SourceItem
+from sqlalchemy import text
+
+from newsmerger.db import Database, DBSource, DBSourceItem, ProcessingStatus
+from newsmerger.models import Artifact, SourceData, SourceItem
 
 
 def make_source(name: str = "Example", provider: str = "exampleprovider") -> SourceData:
@@ -286,6 +288,91 @@ class ContentStorageTests(DatabaseTestCase):
 
         self.assertIsNone(item.content)
         self.assertEqual(self.db.get_content(item), b"%PDF")
+
+
+class ConnectionTests(DatabaseTestCase):
+    def test_foreign_keys_are_enforced(self):
+        with self.db.session_scope() as sess:
+            enabled = sess.execute(text("PRAGMA foreign_keys")).scalar()
+        self.assertEqual(enabled, 1)
+
+
+class ProcessingTests(DatabaseTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.source = make_source()
+        self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v1")])
+        (self.item,) = self.db.get_source_items()
+
+    def unprocessed_uids(self, processor: str, **kwargs) -> list[str]:
+        return [i.uid for i in self.db.get_unprocessed_items(processor, **kwargs)]
+
+    def test_done_item_is_eligible_again_after_its_content_changes(self):
+        self.db.record_result(self.item, "markdownify", ProcessingStatus.DONE)
+        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+
+        self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v2")])
+
+        self.assertEqual(self.unprocessed_uids("markdownify"), ["a1"])
+
+    def test_requires_waits_for_upstream_done_on_current_content(self):
+        self.assertEqual(self.unprocessed_uids("tagger", requires="markdownify"), [])
+
+        self.db.record_result(self.item, "markdownify", ProcessingStatus.DONE)
+        self.assertEqual(
+            self.unprocessed_uids("tagger", requires="markdownify"), ["a1"]
+        )
+
+        self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v2")])
+        self.assertEqual(self.unprocessed_uids("tagger", requires="markdownify"), [])
+
+    def test_requires_skips_items_upstream_ignored_even_with_force(self):
+        self.db.record_result(self.item, "markdownify", ProcessingStatus.IGNORED)
+
+        self.assertEqual(
+            self.unprocessed_uids("tagger", requires="markdownify", force=True), []
+        )
+
+    def test_record_result_saves_annotations_and_state_together(self):
+        self.db.record_result(
+            self.item,
+            "markdownify",
+            ProcessingStatus.DONE,
+            annotations={"markdown": "# Title"},
+        )
+
+        self.assertEqual(
+            self.db.get_annotations(self.item),
+            {"markdownify": {"markdown": "# Title"}},
+        )
+        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+
+    def test_get_annotation_values_maps_uids_with_the_annotation(self):
+        self.db.upsert_source_items([make_item(self.source, uid="a2", content=b"x")])
+        items = self.db.get_source_items()
+        self.db.record_result(
+            self.item, "tagger", ProcessingStatus.DONE, annotations={"tags": ["a"]}
+        )
+
+        values = self.db.get_annotation_values(items, processor="tagger", key="tags")
+
+        self.assertEqual(values, {"a1": ["a"]})
+
+
+class ArtifactTests(DatabaseTestCase):
+    def test_save_replaces_and_get_returns_the_artifact(self):
+        self.db.save_artifact(
+            Artifact("rssfeed", "feed", "<rss/>", "application/rss+xml")
+        )
+        self.db.save_artifact(
+            Artifact("rssfeed", "feed", "<rss>2</rss>", "application/rss+xml")
+        )
+
+        artifact = self.db.get_artifact("rssfeed", "feed")
+
+        self.assertEqual(artifact.content, "<rss>2</rss>")
+        self.assertIsNotNone(artifact.updated_at)
+        self.assertIsNone(self.db.get_artifact("rssfeed", "missing"))
 
 
 if __name__ == "__main__":
