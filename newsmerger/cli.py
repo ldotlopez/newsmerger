@@ -9,9 +9,8 @@ from pathlib import Path
 
 import rich
 import rich_click as click
-from foundation.cache import Cache, TTLValidator
+from foundation.cache import UserCache
 from foundation.loglib import setup_logger
-from foundation.storage import DiskStorage
 
 from newsmerger.config import Config, PipelineConfig
 from newsmerger.consts import PACKAGE_NAME
@@ -60,15 +59,16 @@ def processor_factory(name: str, db: Database, **params) -> BaseProcessor:
 class App:
     def __init__(self, config: Config):
         self.config = config
-        self.db = Database(self.config.db.uri)
-        self.cache = Cache(
-            storage=DiskStorage(base_dir=self.config.cache.base_dir),
-            validator=TTLValidator(expiration_time=self.config.cache.expiration),
+        self.db = Database(self.config.db.uri, self.config.db.content_dir)
+        self.cache = UserCache(
+            app=PACKAGE_NAME,
+            expiration_time=self.config.cache.expiration,
+            base_dir=self.config.cache.base_dir,
         )
         LOGGER.info(
             "using cache ("
-            + f"base_dir='{self.cache.storage}', "
-            + f"stat_expiration_time={config.cache.expiration}"
+            + f"base_dir='{self.config.cache.base_dir}', "
+            + f"expiration_time={config.cache.expiration}"
             + ")"
         )
         self.fetcher = HTTPClient(cache=self.cache)
@@ -76,7 +76,15 @@ class App:
     @classmethod
     def from_click_context(cls, ctx: click.Context) -> App:
         config_path = ctx.obj["config_path"]
-        return cls(config=Config.from_file(config_path) if config_path else Config())
+        app = cls(config=Config.from_file(config_path) if config_path else Config())
+        ctx.call_on_close(app.close)
+        return app
+
+    def close(self) -> None:
+        """Drop expired cache entries, then release the cache."""
+        # UserCache never prunes on its own; once per run keeps it bounded.
+        self.cache.prune()
+        self.cache.close()
 
     def import_source(self, provider: BaseProvider) -> list[SourceItem]:
         """Import items from a runtime provider instance and return raw entry data."""

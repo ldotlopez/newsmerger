@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any, Self, TypeVar
 
 from foundation.jsonlib import dump_json_compatible, load_json_compatible
+from foundation.storage import DiskStorage
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -148,7 +150,9 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
     # Uid is provider-derived (often sha256(uri), but not guaranteed), so
     # uri gets its own real uniqueness/index rather than relying on uid.
     uri: Mapped[str] = mapped_column(Text, unique=True, index=True)
-    content: Mapped[str] = mapped_column(Text)
+    mimetype: Mapped[str] = mapped_column(String(255))
+    # Key of the item's content in Database.contents.
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
     data: Mapped[dict] = mapped_column(CustomJSON, default=dict)
 
     # These are the ONLY two datetime columns on this table — they carry
@@ -167,6 +171,9 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
 
     __table_args__ = (
         Index("ix_source_items_source_id_published_at", "source_id", "published_at"),
+        CheckConstraint(
+            "length(content_sha256) = 64", name="ck_source_items_content_sha256"
+        ),
     )
 
     @classmethod
@@ -182,7 +189,8 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
             "uid": dto.uid,
             "title": dto.title,
             "uri": dto.uri,
-            "content": dto.content,
+            "mimetype": dto.mimetype,
+            "content_sha256": dto.content_sha256,
             "data": dto.data if isinstance(dto.data, dict) else {},
             "published_at": dto.published_at,
             "modified_at": dto.modified_at,
@@ -202,7 +210,8 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
         """
         self.title = dto.title
         self.uri = dto.uri
-        self.content = dto.content
+        self.mimetype = dto.mimetype
+        self.content_sha256 = dto.content_sha256
         self.data = dto.data if isinstance(dto.data, dict) else {}
         self.published_at = dto.published_at
         self.modified_at = dto.modified_at
@@ -214,7 +223,8 @@ class DBSourceItem(DtoTransferMixin[SourceItem], Base):
             uid=self.uid,
             title=self.title,
             uri=self.uri,
-            content=self.content,
+            mimetype=self.mimetype,
+            content_sha256=self.content_sha256,
             data=self.data,
             published_at=self.published_at,
             modified_at=self.modified_at,
@@ -349,12 +359,15 @@ class DBArtifact(Base):
 class Database:
     """Database connection and session management"""
 
-    def __init__(self, database_url: str, create_schema: bool = True):
+    def __init__(
+        self, database_url: str, content_dir: Path, create_schema: bool = True
+    ):
         """
         Initialize database connection.
 
         Args:
             database_url: SQLAlchemy database URL (e.g., 'sqlite:///newsmerger.db')
+            content_dir: directory holding item contents, keyed by their sha256
             create_schema: if True, create all tables defined on Base.metadata
                 that don't already exist (no-op for existing tables; does not
                 handle migrations of existing schemas — use Alembic for that).
@@ -375,6 +388,7 @@ class Database:
                 raise
 
         self.Session = sessionmaker(bind=self.engine)
+        self.contents = DiskStorage(content_dir)
         LOGGER.info(f"Using database at '{database_url}'")
 
     @staticmethod
@@ -401,6 +415,7 @@ class Database:
     def close(self):
         """Close all connections"""
         self.engine.dispose()
+        self.contents.close()
 
     @contextlib.contextmanager
     def session_scope(self) -> Iterator[Session]:
@@ -427,7 +442,7 @@ class Database:
 
         - New row: published_at/modified_at come from the provider if
           present, otherwise both default to "now".
-        - Existing row: title/uri/content/data are diffed against what's
+        - Existing row: title/uri/mimetype/content_sha256/data are diffed against what's
           stored. If nothing differs, the row is left untouched entirely
           (no write, no modified_at bump).
         - If something differs: modified_at is set to the provider's
@@ -445,21 +460,63 @@ class Database:
         for item in items:
             items_by_source[item.source].append(item)
 
+        replaced: set[str] = set()
         with self.session_scope() as sess:
             db_sources_map = dict(self._get_or_create_source_bulk(sess, sources))
 
             for source, source_items in items_by_source.items():
                 db_source = db_sources_map[source]
-                self._upsert_source_items_bulk(
+                replaced |= self._upsert_source_items_bulk(
                     sess, source_items, source_id=db_source.id
                 )
 
+        # Only once the rows are committed is it safe to drop old contents.
+        self._release_contents(replaced)
+
+    def get_content(self, item: SourceItem) -> bytes:
+        """Return the item's stored content.
+
+        Raise foundation.storage.EntryNotFoundError if the storage lost it.
+        """
+        if item.content_sha256 is None:
+            raise ValueError(f"item {item.uid} has no content reference")
+        return self.contents.get(item.content_sha256)
+
+    def _store_content(self, item: SourceItem) -> None:
+        """Write the item's content before the row that references it."""
+        if item.content is None or item.content_sha256 is None:
+            raise ValueError(f"item {item.uid} has no content to store")
+        self.contents.set(item.content_sha256, item.content)
+
+    def _release_contents(self, sha256s: set[str]) -> None:
+        """Delete the contents no item references any more.
+
+        shortcut: an upsert in another process that starts referencing one of
+        these between the check and the delete loses its content; add a lock
+        if imports ever run concurrently.
+        """
+        if not sha256s:
+            return
+        with self.session_scope() as sess:
+            referenced = {
+                sha256
+                for (sha256,) in sess.query(DBSourceItem.content_sha256).filter(
+                    DBSourceItem.content_sha256.in_(sha256s)
+                )
+            }
+        for sha256 in sha256s - referenced:
+            self.contents.delete(sha256)
+
     def _upsert_source_items_bulk(
         self, session: Session, items: list[SourceItem], *, source_id: int
-    ) -> None:
-        """Get-or-create-or-update DBSourceItems for one source's items."""
+    ) -> set[str]:
+        """Get-or-create-or-update DBSourceItems for one source's items.
+
+        Returns the sha256 of the contents the updated items stopped using.
+        """
+        replaced: set[str] = set()
         if not items:
-            return
+            return replaced
 
         items_by_uid = {item.uid: item for item in items}
         item_uids = list(dict.fromkeys(item.uid for item in items))
@@ -476,6 +533,7 @@ class Database:
             db_item = existing_by_uid.get(uid)
 
             if db_item is None:
+                self._store_content(item)
                 db_item = DBSourceItem.from_dto(
                     item,
                     source_id=source_id,
@@ -485,6 +543,11 @@ class Database:
                 session.add(db_item)
                 created += 1
                 continue
+
+            previous_sha256 = db_item.content_sha256
+            if previous_sha256 != item.content_sha256:
+                self._store_content(item)
+                replaced.add(previous_sha256)
 
             if self._apply_source_item_changes(session, db_item, item, now=now):
                 updated += 1
@@ -499,6 +562,8 @@ class Database:
 
         if created or updated:
             session.flush()
+
+        return replaced
 
     def _apply_source_item_changes(
         self, session: Session, db_item: DBSourceItem, dto: SourceItem, *, now: datetime
@@ -515,7 +580,7 @@ class Database:
         History, so trust it rather than hand-maintaining an equality check
         that has to be remembered every time a column is added.
 
-        ORDERING IS LOAD-BEARING. title/uri/content/data must be assigned
+        ORDERING IS LOAD-BEARING. title/uri/mimetype/content_sha256/data must be assigned
         BEFORE `session.is_modified()` is called, and modified_at/published_at
         must be assigned AFTER. If modified_at/published_at were set before
         the check, they'd count as "changes" themselves and `is_modified()`
@@ -524,7 +589,8 @@ class Database:
         """
         db_item.title = dto.title
         db_item.uri = dto.uri
-        db_item.content = dto.content
+        db_item.mimetype = dto.mimetype
+        db_item.content_sha256 = dto.content_sha256
         db_item.data = dto.data if isinstance(dto.data, dict) else {}
 
         # --- checkpoint: nothing below this line until the check itself ---

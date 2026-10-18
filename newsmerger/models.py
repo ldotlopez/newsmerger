@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any, Self, TypeVar
 
 from foundation.jsonlib import JsonCompatible
 from pydantic import BaseModel, HttpUrl, model_validator
@@ -61,10 +61,17 @@ class SourceItem:
     uid: str
     title: str
     uri: str
-    content: str | bytes = ""
-    data: JsonCompatible = dataclasses.field(default_factory=lambda: {})
+    # None when read back from the database: load it with Database.get_content().
+    content: bytes | None = None
+    mimetype: str = "application/octet-stream"
+    content_sha256: str | None = None
+    data: JsonCompatible = dataclasses.field(default_factory=dict)
     published_at: datetime | None = None
     modified_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.content is not None:
+            self.content_sha256 = hashlib.sha256(self.content).hexdigest()
 
     @classmethod
     def from_data(cls, source: SourceData, data: SourceItemData) -> SourceItem:
@@ -93,7 +100,20 @@ class SourceItemData(
 ):
     title: str
     uri: str
-    content: str
+    content: bytes
+    mimetype: str
     data: JsonCompatible = {}
     published_at: datetime | None = None
     modified_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def text_is_utf8(self) -> Self:
+        # Text is always stored as UTF-8, so the mimetype carries no charset.
+        if ";" in self.mimetype:
+            raise ValueError(f"mimetype must not have parameters: {self.mimetype!r}")
+        if self.mimetype.startswith("text/"):
+            try:
+                self.content.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise ValueError(f"{self.mimetype} content is not UTF-8") from e
+        return self

@@ -23,13 +23,18 @@ class Processor(ItemProcessor):
         self.max_items = max_items
 
     def process_item(self, item: SourceItem) -> dict[str, Any]:
-        if not item.content.strip():
+        if item.mimetype != "text/html":
+            raise SkipItem(f"unsupported mimetype '{item.mimetype}'")
+
+        # Parse a str, not bytes: content is UTF-8 whatever its <meta charset> says.
+        html = self.db.get_content(item).decode("utf-8")
+        if not html.strip():
             raise SkipItem("empty content")
 
         title = item.title
 
-        md = trafilatura.extract(item.content, output_format="markdown")
-        txt = trafilatura.extract(item.content, output_format="txt")
+        md = trafilatura.extract(html, output_format="markdown")
+        txt = trafilatura.extract(html, output_format="txt")
 
         if not txt or not md:
             raise SkipItem("empty extract")
