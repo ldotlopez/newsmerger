@@ -1,5 +1,9 @@
 # Architecture
 
+How the current code implements [SPECIFICATION.md](SPECIFICATION.md). The
+behavior rules (identity, change detection, retries, dependencies) are
+defined there and not repeated here.
+
 ```
 config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/, external tools
                           │
@@ -47,9 +51,6 @@ arguments.
 `IndexSiteProvider`s: fetch `index_url` (the source's URL unless the provider
 overrides it), `parse_index` it into article URLs, fetch each article and
 `parse_item` it. `import-url` uses `retrieve_item` to skip the index.
-
-Each provider derives its items' `uid`, which must be deterministic and
-stable within its source (decision 0001).
 
 HTML providers keep the article's cleaned HTML rather than converting it:
 `foundation.scrapelib.prune_to_spine` keeps the main node and its ancestors,
@@ -178,28 +179,25 @@ record of which row uses which content.
 
 ### Change detection
 
-`upsert_source_items` applies `title`, `uri`, `mimetype`, `content_sha256`
-and `data` (`DBSourceItem.update`), then asks `session.is_modified()` whether
-anything changed. Only then does it touch `modified_at` (never moved
-backwards). `published_at` is set on creation and never overwritten. Missing
-dates take the import time. Re-importing identical items is a no-op.
+`upsert_source_items` applies the compared fields with `DBSourceItem.update`,
+then asks `session.is_modified()` whether anything changed; only then does it
+touch `modified_at` (spec §4.1).
 
 ## Processors
 
+The eligibility and retry rules are in spec §4.2; this is where they live:
+
 - `BaseProcessor.process_item(item)` returns annotations for one item.
-  `Database.get_unprocessed_items` selects items that were never processed,
-  whose content changed since the last run, that failed with retries left and
-  backoff elapsed, or that were done by another processor `VERSION`. Raising
-  `SkipItem` marks the item `ignored`; `PartialFailure` saves partial results
-  and marks it `error`; any other exception marks it `error`. `run()` returns
-  a `RunSummary` (done, ignored, failed).
+  `Database.get_unprocessed_items` selects the eligible items (backoff in
+  `_backoff_seconds`, `MAX_RETRIES` overridable by the `max_retries` param,
+  version in `VERSION`). Raising `SkipItem` marks the item `ignored`;
+  `PartialFailure` saves partial results and marks it `error`; any other
+  exception marks it `error`. `run()` returns a `RunSummary` (done, ignored,
+  failed).
 - `Database.record_result` saves a run's annotations and state in one
-  transaction, recording the item's `content_sha256`. A content change or a
-  forced run resets the retry count.
-- `BaseProcessor.REQUIRES` names the processor whose output it reads. Only
-  items that processor finished on their current content are picked up (even
-  with `--force`), so an upstream skip is never a downstream error.
-  `require_annotation()` reads the upstream value.
+  transaction, recording the item's `content_sha256`.
+- `BaseProcessor.REQUIRES` names the upstream processor;
+  `require_annotation()` reads its value.
 - Dependencies: `summarize` and `tagger` read `markdownify.markdown`;
   `telegram` reads `summarize.summary` and stores the posted `message_id`,
   which also keeps it from ever posting an item twice.
