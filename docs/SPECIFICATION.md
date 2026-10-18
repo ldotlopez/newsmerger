@@ -136,7 +136,11 @@ the CLI.
   invalidation or staleness flag, so an artifact can lag behind its items
   between two runs.
 - With the artifact's `updated_at` and the items' dates, a remixer can be
-  incremental without state of its own.
+  incremental without state of its own. A remixer that needs state keeps it
+  in an artifact of its own and reads its previous version.
+- **External side effects** (e.g. posting to a chat) are allowed. The
+  remixer must record what it has done in its own state, so a later run does
+  not repeat it.
 - **Required artifact that does not exist:** the remixer decides (build
   without it or abort). Cycles between artifacts are the remixers'
   responsibility: each one reads the other's previous version.
