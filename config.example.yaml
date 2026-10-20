@@ -27,30 +27,30 @@ sources:
 cache:
   expiration: 21600
 
-processors:
-  - name: markdownify
-  - name: summarize
-    params:
-      api_base: http://localhost:11434
-      api_key: ${OLLAMA_API_KEY}
-      model: gemma4:12b
-  - name: tagger
-    params:
-      api_base: http://localhost:11434
-      api_key: ${OLLAMA_API_KEY}
-      model: gemma4:12b
+# Only plugins with a section are loaded; options left out take the plugin's
+# defaults, so an empty section enables a plugin as is. `enrich` and `remix`
+# run their objects in this order.
+plugins:
+  # Providers, named by sources' `provider:`.
+  prensaiberica_plain:
+  castelloninformacion:
+  plaza:
+  theguardian:
 
-remixers:
-  - name: telegram
-    params:
-      bot_token: ${TELEGRAM_BOT_TOKEN}
-      chat_id: ${TELEGRAM_CHAT_ID}
-      interval: 30                   # minutes between posts of the same source
-  - name: rssfeed
-  - name: grouping_singlelink
-  - name: grouping_avglink
-  - name: grouping_embeddings
-    params:
-      api_base: http://localhost:11434
-      api_key: ${OLLAMA_API_KEY}
-      model: mxbai-embed-large:latest
+  # Processors.
+  markdownify:
+  llm:                               # summarize, tagger and embed (Ollama)
+    api_base: http://localhost:11434
+    api_key: ${OLLAMA_API_KEY}
+    # Without these sections all three run with their default models.
+    summarize: {model: gemma4:12b}
+    tagger: {model: gemma4:12b}
+    embed: {model: mxbai-embed-large:latest}
+
+  # Remixers.
+  telegram:
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+    interval: 30                     # minutes between posts of the same source
+  rssfeed:
+  grouping:                          # singlelink, avglink and embeddings

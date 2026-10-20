@@ -9,6 +9,13 @@ Nothing scheduled.
 
 ## Done
 
+- [x] **Plugin bundles with `foundation.plugin.Register`** (decision 0003, revised):
+  one `plugins` namespace and config section; entry points validate their
+  own options (pydantic, with defaults) and return objects declared under
+  the `Provider`/`URLProvider`/`Processor`/`Remixer` protocols. `llm`
+  bundles `summarize`, `tagger` and the new `embed`; `grouping` bundles
+  `singlelink`, `avglink` and `embeddings`, which now reads stored
+  embeddings.
 - [x] **Secrets**: no rotation needed (never committed; owner's call).
 - [x] **External scripts**: none existed outside `scripts/`. The embeddings
   experiment became the `grouping_embeddings` remixer (single-link over tag

@@ -12,21 +12,23 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
+import pydantic
 from foundation.cache import UserCache
-from foundation.plugin import ClassLoader
+from foundation.plugin import EntryPointError, ProtocolConformanceError, Register
 
-from .config import Config
+from .config import Config, ConfigError, plugin_options_error
 from .consts import PACKAGE_NAME
 from .db import Database
 from .httpclient import HTTPClient
 from .models import Artifact, ItemKey, ProcessingScope, SourceData, SourceItem
-from .processors import BaseProcessor, RunSummary
-from .providers import BaseProvider, IndexSiteProvider
-from .remixers import BaseRemixer
+from .processors import Processor, RunSummary
+from .providers import Provider, URLProvider
+from .remixers import Remixer
 
-PROVIDERS = ClassLoader("newsmerger.providers", "Provider")
-PROCESSORS = ClassLoader("newsmerger.processors", "Processor")
-REMIXERS = ClassLoader("newsmerger.remixers", "Remixer")
+PLUGINS_NAMESPACE = "newsmerger.plugins"
+PLUGIN_ENTRY_POINT = "__newsmerger_plugin__"
+# register()'s own parameters: options with these names would collide with them.
+RESERVED_OPTIONS = ("self", "name")
 
 _USE_PICKLE_DATA = os.environ.get("NEWSMERGER_PICKLE_CACHE", "0").lower() not in (
     "0",
@@ -42,6 +44,16 @@ class UnsupportedProviderError(ValueError):
 class Application:
     def __init__(self, config: Config, *, create_schema: bool = True) -> None:
         self.config = config
+        plugins = load_plugins(config.plugins)
+        self._providers: dict[str, Provider] = objects_by_name(plugins, Provider)
+        self._processors: dict[str, Processor] = objects_by_name(plugins, Processor)
+        self._remixers: dict[str, Remixer] = objects_by_name(plugins, Remixer)
+        for source in config.sources:
+            if source.provider not in self._providers:
+                raise ConfigError(
+                    f"source '{source.id}': provider '{source.provider}' is not loaded"
+                )
+
         self._db = Database(
             config.db.uri, config.db.content_dir, create_schema=create_schema
         )
@@ -84,9 +96,6 @@ class Application:
 
     # --- Import ------------------------------------------------------------
 
-    def _provider(self, source: SourceData) -> BaseProvider:
-        return PROVIDERS.instantiate(source.provider, source, fetcher=self._fetcher)
-
     def import_source(self, source_id: str) -> list[SourceItem]:
         """Fetch every item of a configured source and store it."""
         source = self.config.get_source(source_id)
@@ -96,9 +105,10 @@ class Application:
             with pickle_path.open("rb") as fh:
                 items = pickle.load(fh)
         else:
+            provider = self._providers[source.provider]
             items = [
                 SourceItem.from_data(source, item_data)
-                for item_data in self._provider(source).retrieve_items()
+                for item_data in provider.retrieve_items(source, self._fetcher)
             ]
             if _USE_PICKLE_DATA:
                 with pickle_path.open("wb") as fh:
@@ -110,13 +120,13 @@ class Application:
     def import_url(self, source_id: str, url: str) -> SourceItem:
         """Fetch one item URL into a configured source, with its provider."""
         source = self.config.get_source(source_id)
-        provider = self._provider(source)
-        if not isinstance(provider, IndexSiteProvider):
+        provider = self._providers[source.provider]
+        if not isinstance(provider, URLProvider):
             raise UnsupportedProviderError(
                 f"provider '{source.provider}' does not support URL imports"
             )
 
-        item = SourceItem.from_data(source, provider.retrieve_item(url))
+        item = SourceItem.from_data(source, provider.retrieve_item(url, self._fetcher))
         self._db.upsert_source_items([item])
         return item
 
@@ -125,18 +135,17 @@ class Application:
     def run_processor(
         self, name: str, *, scope: ProcessingScope | None = None, force: bool = False
     ) -> RunSummary:
-        """Run one configured processor. `force` also resets attempts."""
-        params: dict[str, Any] = self.config.get_processor(name).params
-        processor: BaseProcessor = PROCESSORS.instantiate(name, self._db, **params)
-        return processor.run(scope=scope, force=force)
+        """Run one loaded processor. `force` also resets attempts."""
+        processor = lookup(self._processors, name, "processor")
+        return processor.enrich(self._db, scope=scope, force=force)
 
     def enrich(
         self, *, scope: ProcessingScope | None = None, force: bool = False
     ) -> dict[str, RunSummary]:
-        """Run every configured processor, in configuration order."""
+        """Run every loaded processor, in configuration order."""
         return {
-            plugin.name: self.run_processor(plugin.name, scope=scope, force=force)
-            for plugin in self.config.processors
+            name: self.run_processor(name, scope=scope, force=force)
+            for name in self._processors
         }
 
     # --- Remix -------------------------------------------------------------
@@ -144,17 +153,13 @@ class Application:
     def run_remixer(
         self, name: str, *, scope: ProcessingScope | None = None
     ) -> list[str]:
-        """Run one configured remixer; return the names of the artifacts saved."""
-        params: dict[str, Any] = self.config.get_remixer(name).params
-        remixer: BaseRemixer = REMIXERS.instantiate(name, self._db, **params)
-        return remixer.run(scope=scope)
+        """Run one loaded remixer; return the names of the artifacts saved."""
+        remixer = lookup(self._remixers, name, "remixer")
+        return remixer.remix(self._db, scope=scope)
 
     def remix(self, *, scope: ProcessingScope | None = None) -> dict[str, list[str]]:
-        """Run every configured remixer, in configuration order."""
-        return {
-            plugin.name: self.run_remixer(plugin.name, scope=scope)
-            for plugin in self.config.remixers
-        }
+        """Run every loaded remixer, in configuration order."""
+        return {name: self.run_remixer(name, scope=scope) for name in self._remixers}
 
     # --- Queries -----------------------------------------------------------
 
@@ -198,3 +203,52 @@ class Application:
         Returns the number of annotations deleted.
         """
         return self._db.delete_annotations(processor=processor, item=item)
+
+
+def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:
+    """Register every plugin with a config section, in configuration order,
+    passing it its section as keyword arguments."""
+    plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
+    for name, section in sections.items():
+        options = section or {}
+        for option in RESERVED_OPTIONS:
+            if option in options:
+                raise ConfigError(
+                    f"plugins.{name}: '{option}' is a reserved option name"
+                )
+        try:
+            plugins.register(name, **options)
+        except EntryPointError as e:
+            if isinstance(e.__cause__, pydantic.ValidationError):
+                raise plugin_options_error(name, e.__cause__) from e
+            raise
+    return plugins
+
+
+def objects_by_name[T](plugins: Register, protocol: type[T]) -> dict[str, T]:
+    """The loaded objects implementing `protocol`, by object name, in
+    configuration order. Names must be unique per protocol."""
+    objects: dict[str, T] = {}
+    owners: dict[str, str] = {}
+    for plugin, name, obj in plugins.get_by_protocol(protocol):
+        if name in owners:
+            raise ConfigError(
+                f"{protocol.__name__} '{name}' is provided by both plugin "
+                f"'{owners[name]}' and plugin '{plugin}'"
+            )
+        objects[name] = obj
+        owners[name] = plugin
+    if failed := plugins.get_conformance_warnings():
+        raise ProtocolConformanceError(
+            ", ".join(
+                f"'{entry.name}' is not a {entry.protocol.__name__}" for entry in failed
+            )
+        )
+    return objects
+
+
+def lookup[T](objects: dict[str, T], name: str, kind: str) -> T:
+    try:
+        return objects[name]
+    except KeyError:
+        raise ConfigError(f"{kind} '{name}' is not loaded") from None

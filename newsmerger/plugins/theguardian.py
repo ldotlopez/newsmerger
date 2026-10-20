@@ -3,13 +3,16 @@ import logging
 import re
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 from urllib.parse import urljoin
 
 import feedparser
 from foundation.scrapelib import drop_selectors, head_meta_get_value, soupify
 
-from ..models import SourceItemData
-from . import URI, IndexSiteProvider
+from ..httpclient import HTTPClient
+from ..models import SourceData, SourceItemData
+from ..providers import URI, IndexSiteProvider, URLProvider
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -17,14 +20,16 @@ LOGGER = logging.getLogger(__name__)
 NON_ARTICLE_RE = re.compile(r"/(live|video|gallery|audio|picture)/")
 
 
-class Provider(IndexSiteProvider):
-    def parse_index(self, content: bytes) -> Iterator[URI]:
+class TheGuardianProvider(IndexSiteProvider):
+    def parse_index(
+        self, content: bytes, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
         tag = soup.select_one('link[rel="alternate"][type="application/rss+xml"]')
         if tag is None or not (href := tag.attrs.get("href")):
             raise ValueError("Could not find RSS feed link in index page")
 
-        feed = feedparser.parse(self.fetcher.get(urljoin(self.index_url, href)))
+        feed = feedparser.parse(fetcher.get(urljoin(self.index_url(source), href)))
         for entry in feed["entries"]:
             if NON_ARTICLE_RE.search(entry["link"]):
                 LOGGER.debug(f"Skipping non-article entry '{entry['link']}'")
@@ -77,3 +82,8 @@ class Provider(IndexSiteProvider):
                 "tags": tags,
             },
         )
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    PluginOptions.model_validate(options)
+    return [("theguardian", URLProvider, TheGuardianProvider())]

@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 import pydantic
 
-from newsmerger.models import SourceData, SourceItemData
-from newsmerger.providers.prensaiberica import Provider as PrensaIbericaProvider
+from newsmerger.models import SourceItemData
+from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
 
 
 def read_sample(name: str) -> bytes:
@@ -16,18 +16,8 @@ def read_sample(name: str) -> bytes:
 
 
 class TestPrensaIberica(unittest.TestCase):
-    NAME = "prensaiberica"
-
     def setUp(self) -> None:
-        self.provider = PrensaIbericaProvider(
-            source=SourceData(
-                id="test",
-                name="test",
-                url="http://localhost/",
-                provider=self.NAME,
-            ),
-            fetcher=None,  # ty:ignore[invalid-argument-type]
-        )
+        self.provider = PrensaIbericaProvider()
 
     def check_parser(self, filename: str, expected: SourceItemData):
         buff = read_sample(filename)
@@ -173,12 +163,7 @@ class TestPrensaIberica(unittest.TestCase):
         content = read_sample("prensaiberica-item-132310503.html")
         fetcher = Mock()
         fetcher.get.return_value = content
-        provider = PrensaIbericaProvider(
-            source=self.provider.source,
-            fetcher=fetcher,
-        )
-
-        item = provider.retrieve_item("https://example.test/article")
+        item = self.provider.retrieve_item("https://example.test/article", fetcher)
 
         fetcher.get.assert_called_once_with("https://example.test/article")
         self.assertEqual(

@@ -3,6 +3,7 @@ import logging
 import re
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 from urllib.parse import urljoin
 
 import bs4
@@ -14,8 +15,10 @@ from foundation.scrapelib import (
     soupify,
 )
 
-from ..models import SourceItemData
-from . import URI, IndexSiteProvider
+from ..httpclient import HTTPClient
+from ..models import SourceData, SourceItemData
+from ..providers import URI, IndexSiteProvider, URLProvider
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,15 +47,17 @@ def parse_datetime(tag: bs4.Tag) -> datetime:
     return dt
 
 
-class Provider(IndexSiteProvider):
-    def parse_index(self, content: bytes) -> Iterator[URI]:
+class PlazaProvider(IndexSiteProvider):
+    def parse_index(
+        self, content: bytes, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
         section = get_section(soup, "Castellón")
         container = section.find_parent("div", {"class": "wrap-SUPERIOR"})
         headlines = container.find_all(["h2", "h3"], {"itemprop": "headline"})
         for h in headlines:
             path = h.find("a").attrs.get("href")
-            url = urljoin(str(self.source.url), path)
+            url = urljoin(str(source.url), path)
             yield url
 
     def parse_item(self, content: bytes) -> SourceItemData:
@@ -90,3 +95,8 @@ class Provider(IndexSiteProvider):
                 "image": image,
             },
         )
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    PluginOptions.model_validate(options)
+    return [("plaza", URLProvider, PlazaProvider())]

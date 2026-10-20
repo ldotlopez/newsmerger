@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import string
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -39,41 +39,27 @@ class DatabaseConfig(pydantic.BaseModel):
     )
 
 
-class PluginConfig(pydantic.BaseModel):
-    """A configured processor or remixer: its module name and constructor params."""
-
-    model_config = pydantic.ConfigDict(extra="forbid")
-    name: str
-    params: dict[str, Any] = {}
-
-
 class Config(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     sources: list[SourceData] = []
-    processors: list[PluginConfig] = []
-    remixers: list[PluginConfig] = []
+    # Plugin module name -> its options, validated by the plugin itself. Only
+    # plugins listed here are loaded; an empty section enables its defaults.
+    plugins: dict[str, dict[str, Any] | None] = {}
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
 
     @pydantic.model_validator(mode="after")
-    def names_are_unique(self) -> Config:
-        for section, names in (
-            ("source ids", [source.id for source in self.sources]),
-            ("processor names", [processor.name for processor in self.processors]),
-            ("remixer names", [remixer.name for remixer in self.remixers]),
-        ):
-            if len(names) != len(set(names)):
-                raise ValueError(f"{section} must be unique")
+    def source_ids_are_unique(self) -> Config:
+        ids = [source.id for source in self.sources]
+        if len(ids) != len(set(ids)):
+            raise ValueError("source ids must be unique")
         return self
 
     def get_source(self, source_id: str) -> SourceData:
-        return _find(self.sources, source_id, "source", lambda source: source.id)
-
-    def get_processor(self, name: str) -> PluginConfig:
-        return _find(self.processors, name, "processor", lambda plugin: plugin.name)
-
-    def get_remixer(self, name: str) -> PluginConfig:
-        return _find(self.remixers, name, "remixer", lambda plugin: plugin.name)
+        for source in self.sources:
+            if source.id == source_id:
+                return source
+        raise ConfigError(f"source '{source_id}' is not configured")
 
     @classmethod
     def from_file(cls, path: Path) -> Config:
@@ -110,8 +96,10 @@ class Config(pydantic.BaseModel):
             raise ConfigError(str(e)) from e
 
 
-def _find[T](entries: list[T], key: str, kind: str, get_key: Callable[[T], str]) -> T:
-    for entry in entries:
-        if get_key(entry) == key:
-            return entry
-    raise ConfigError(f"{kind} '{key}' is not configured")
+def plugin_options_error(plugin: str, error: pydantic.ValidationError) -> ConfigError:
+    """A plugin's rejected options, one line per error with its config path."""
+    lines = [
+        f"{'.'.join(map(str, ('plugins', plugin, *detail['loc'])))}: {detail['msg']}"
+        for detail in error.errors()
+    ]
+    return ConfigError("invalid plugin options:\n" + "\n".join(lines))
