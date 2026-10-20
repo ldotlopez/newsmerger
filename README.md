@@ -22,7 +22,8 @@ in the configuration.
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- An Ollama server for the `llm` plugin (`summarize`, `tagger` and `embed`)
+- An Ollama server for the `llm` plugin (`summarize`, `tagger`, `embed` and
+  `digest`)
 
 ## Install
 
@@ -187,11 +188,20 @@ per processor, `summarize` and `tagger`: `model` (default `gemma4:12b`);
 | `grouping` | `singlelink` | `current` | Clusters tagged items into events (single-link over tag overlap) |
 | `grouping` | `avglink` | `current` | Clusters tagged items into events (average-link over tag overlap) |
 | `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `embed` annotations (single-link) |
+| `llm` | `digest` | `<source id>` | Markdown digest of the highlights of each source in scope, written with Ollama from `markdownify.markdown` |
 
 Options:
 
 - `telegram`: `bot_token` and `chat_id` (required), `interval` in minutes
   (default 30).
+- `llm`'s `digest`, enabled only by its own section (`llm: {digest: ...}`,
+  next to the processors' sections): `model` (default `gemma4:12b`), `days`
+  (default 7: the scope when it sets no `--since`), `max_items` (newest items
+  per source, default 50), `max_article_chars` (each article's markdown is
+  cut to this, default 3000) and `context_length` (the model's context
+  window in tokens, default 32768). Meant for one source:
+  `remix digest --source <id>` for the last week, or `--since`/`--until` for
+  another period; `artifact digest <id>` shows it.
 - `rssfeed`: `title` (default `newsmerger feed`), `link`, `description`
   (default: the title), `max_items` (default 100).
 - `grouping`, per remixer: `min_score` (default 0.3), `tau_hours` (time
