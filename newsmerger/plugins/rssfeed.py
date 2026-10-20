@@ -7,39 +7,41 @@ Produces one artifact named "feed".
 import dataclasses
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from typing import Any
 from xml.sax.saxutils import escape
 
 from ..db import Database
 from ..models import ProcessingScope, SourceItem
-from . import BaseRemixer
+from ..remixers import BaseRemixer, Remixer
+from . import PluginObjects, PluginOptions
 
 RFC822 = "%a, %d %b %Y %H:%M:%S %z"
 
 
-class Remixer(BaseRemixer):
-    NAME = "rssfeed"
+class Options(PluginOptions):
+    title: str = "newsmerger feed"
+    link: str | None = None
+    description: str | None = None  # the title when unset
+    max_items: int = 100
 
-    def __init__(
-        self,
-        db: Database,
-        *,
-        title: str = "newsmerger feed",
-        link: str | None = None,
-        description: str | None = None,
-        max_items: int = 100,
-    ) -> None:
-        super().__init__(db)
-        self.title = title
-        self.link = link
-        self.description = description or title
-        self.max_items = max_items
 
-    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
+class RSSFeedRemixer(BaseRemixer):
+    name = "rssfeed"
+
+    def __init__(self, cfg: Options) -> None:
+        self.title = cfg.title
+        self.link = cfg.link
+        self.description = cfg.description or cfg.title
+        self.max_items = cfg.max_items
+
+    def produce(
+        self, db: Database, scope: ProcessingScope
+    ) -> Iterator[tuple[str, str, str]]:
         if scope.limit is None:
             scope = dataclasses.replace(scope, limit=self.max_items)
         yield (
             "feed",
-            self._build_feed(self.db.get_items(scope, newest_first=True)),
+            self._build_feed(db.get_items(scope, newest_first=True)),
             "application/rss+xml",
         )
 
@@ -69,3 +71,8 @@ class Remixer(BaseRemixer):
             f"{pub_date}"
             "</item>"
         )
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    remixer = RSSFeedRemixer(Options.model_validate(options))
+    return [(remixer.name, Remixer, remixer)]

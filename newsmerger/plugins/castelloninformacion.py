@@ -2,6 +2,7 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 
 import bs4
 import feedparser
@@ -12,18 +13,21 @@ from foundation.scrapelib import (
     prune_to_spine,
 )
 
-from ..models import SourceItemData
-from . import URI, IndexSiteProvider
+from ..httpclient import HTTPClient
+from ..models import SourceData, SourceItemData
+from ..providers import URI, IndexSiteProvider, URLProvider
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
 
-class Provider(IndexSiteProvider):
-    @property
-    def index_url(self) -> str:
-        return str(self.source.url).rstrip("/") + "/feed/"
+class CastellonInformacionProvider(IndexSiteProvider):
+    def index_url(self, source: SourceData) -> str:
+        return str(source.url).rstrip("/") + "/feed/"
 
-    def parse_index(self, content: bytes) -> Iterator[URI]:
+    def parse_index(
+        self, content: bytes, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[URI]:
         feed = feedparser.parse(content.decode("utf-8"))
         for entry in feed.entries:
             yield entry.link
@@ -63,3 +67,8 @@ class Provider(IndexSiteProvider):
                 "image": image,
             },
         )
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    PluginOptions.model_validate(options)
+    return [("castelloninformacion", URLProvider, CastellonInformacionProvider())]

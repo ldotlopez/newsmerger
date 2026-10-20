@@ -22,10 +22,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
+from pydantic import SecretStr
 
 from ..db import Database
 from ..models import ProcessingScope, SourceItem
-from . import BaseRemixer
+from ..remixers import BaseRemixer, Remixer
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,26 +58,31 @@ def build_caption(title: str, summary: str, uri: str) -> str:
     return heading + escaped_summary + footer
 
 
-class Remixer(BaseRemixer):
-    NAME = "telegram"
+class Options(PluginOptions):
+    bot_token: SecretStr
+    chat_id: str
+    interval: int = 30  # minutes between posts of the same source
 
-    def __init__(
-        self, db: Database, *, bot_token: str, chat_id: str, interval: int = 30
-    ) -> None:
-        super().__init__(db)
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.interval = timedelta(minutes=interval)
 
-    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
+class TelegramRemixer(BaseRemixer):
+    name = "telegram"
+
+    def __init__(self, cfg: Options) -> None:
+        self.bot_token = cfg.bot_token
+        self.chat_id = cfg.chat_id
+        self.interval = timedelta(minutes=cfg.interval)
+
+    def produce(
+        self, db: Database, scope: ProcessingScope
+    ) -> Iterator[tuple[str, str, str]]:
         now = datetime.now(UTC)
-        state = self._load_state(now)
-        self._enqueue(state, scope)
-        self._post_due(state, now)
+        state = self._load_state(db, now)
+        self._enqueue(db, state, scope)
+        self._post_due(db, state, now)
         yield "state", json.dumps(state, indent=2), "application/json"
 
-    def _load_state(self, now: datetime) -> dict[str, Any]:
-        artifact = self.db.get_artifact(self.NAME, "state")
+    def _load_state(self, db: Database, now: datetime) -> dict[str, Any]:
+        artifact = db.get_artifact(self.name, "state")
         if artifact is None or artifact.content is None:
             return {
                 "watermark": now.isoformat(),
@@ -85,39 +92,41 @@ class Remixer(BaseRemixer):
             }
         return json.loads(artifact.content)
 
-    def _enqueue(self, state: dict[str, Any], scope: ProcessingScope) -> None:
+    def _enqueue(
+        self, db: Database, state: dict[str, Any], scope: ProcessingScope
+    ) -> None:
         if scope.since is None and scope.uids is None:
             watermark = datetime.fromisoformat(state["watermark"])
             scope = dataclasses.replace(scope, since=watermark)
 
         known = {(source_id, uid) for source_id, uid in state["queue"]}
         known |= {(source_id, uid) for source_id, uid, _ in state["posted"]}
-        items = [item for item in self.db.get_items(scope) if item.key not in known]
-        summaries = self.db.get_annotation_values(
+        items = [item for item in db.get_items(scope) if item.key not in known]
+        summaries = db.get_annotation_values(
             items, processor="summarize", key="summary"
         )
         state["queue"].extend(list(item.key) for item in items if item.key in summaries)
 
-    def _post_due(self, state: dict[str, Any], now: datetime) -> None:
+    def _post_due(self, db: Database, state: dict[str, Any], now: datetime) -> None:
         for source_id in dict.fromkeys(source_id for source_id, _ in state["queue"]):
             last_post = state["last_post"].get(source_id)
             if last_post and now - datetime.fromisoformat(last_post) < self.interval:
                 continue
 
             uid = next(uid for queued, uid in state["queue"] if queued == source_id)
-            (item,) = self.db.get_items(ProcessingScope(source=source_id, uids=(uid,)))
+            (item,) = db.get_items(ProcessingScope(source=source_id, uids=(uid,)))
             try:
-                message_id = self._post(item)
+                message_id = self._post(db, item)
             except TelegramError as e:
-                LOGGER.warning(f"{self.NAME}: could not post {source_id}/{uid}: {e}")
+                LOGGER.warning(f"{self.name}: could not post {source_id}/{uid}: {e}")
                 continue
 
             state["queue"].remove([source_id, uid])
             state["posted"].append([source_id, uid, message_id])
             state["last_post"][source_id] = now.isoformat()
 
-    def _post(self, item: SourceItem) -> int:
-        summaries = self.db.get_annotation_values(
+    def _post(self, db: Database, item: SourceItem) -> int:
+        summaries = db.get_annotation_values(
             [item], processor="summarize", key="summary"
         )
         caption = build_caption(item.title, str(summaries[item.key]), item.uri)
@@ -140,7 +149,7 @@ class Remixer(BaseRemixer):
 
         try:
             response = requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/{endpoint}",
+                f"https://api.telegram.org/bot{self.bot_token.get_secret_value()}/{endpoint}",
                 json=payload,
                 timeout=30,
             )
@@ -152,3 +161,8 @@ class Remixer(BaseRemixer):
             raise TelegramError(result.get("description", str(result)))
 
         return result["result"]["message_id"]
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    remixer = TelegramRemixer(Options.model_validate(options))
+    return [(remixer.name, Remixer, remixer)]

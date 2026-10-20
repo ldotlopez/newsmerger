@@ -1,6 +1,6 @@
 # newsmerger: specification
 
-Consolidated version · 18 October 2026
+Consolidated version · 20 October 2026
 
 This document defines what newsmerger does, independently of how it is
 implemented. It is self-contained: it is the reference for rebuilding the
@@ -23,32 +23,28 @@ of this definition.
 | Term | Definition |
 | --- | --- |
 | **Source** | An entry of the `sources` configuration section, with `id`, `name`, `provider` and `url`. Its identity is its `id`. |
-| **Provider** | Plugin that knows how to handle one kind of site. One implementation serves every URL with the same structure. |
+| **Plugin** | A bundle enabled by an entry of the `plugins` configuration section. It provides one or more named providers, processors and remixers. |
+| **Provider** | Object that knows how to handle one kind of site. One implementation serves every URL with the same structure. |
 | **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. |
 | **uid** | The item's identifier within its source, produced by the provider. It must be deterministic and stable across runs; how it is computed is up to the provider. |
 | **Annotation** | Data derived from an item by a processor. Key: `(item, processor, key)`; a processor can emit several keys per item. |
-| **Processor** | Plugin that produces annotations for one item at a time. |
-| **Remixer** | Plugin that builds artifacts from many items. |
+| **Processor** | Object that produces annotations for one item at a time. |
+| **Remixer** | Object that builds artifacts from many items. |
 | **Artifact** | Aggregated output of a remixer (newsletter, RSS, web page...). Key: `(remixer, name)`. |
 
 ## 3. Configuration
 
-A single YAML file with the sections `sources`, `processors`, `remixers`,
-`cache` and `db`. All of them are optional. Each source names its provider
-explicitly:
+A single YAML file with the sections `sources`, `plugins`, `cache` and `db`.
+All of them are optional. Each source names its provider explicitly:
 
 ```yaml
 sources:
   - id: <stable id>        # required
     name: <readable name>
-    provider: <provider plugin>
+    provider: <provider name>
     url: <url>
-processors:
-  - name: <processor plugin>
-    params: {...}          # passed to the processor; includes max_retries
-remixers:
-  - name: <remixer plugin>
-    params: {...}          # passed to the remixer
+plugins:
+  <plugin>: {...}          # its options; empty for the plugin's defaults
 cache:
   expiration: <seconds>    # HTTP cache lifetime
 db:
@@ -59,10 +55,17 @@ db:
 `${VAR}` values are replaced with environment variables when the file is
 loaded; secrets (API keys, tokens) are always passed this way.
 
-Plugins of the three types (provider, processor and remixer) are loaded by
-`foundation.plugin.ClassLoader`. A source's `id` is part of its items' key,
-so it must be stable; its `url` and `provider` can change without losing
-items.
+Only plugins with an entry in `plugins` are loaded. Each plugin validates
+its own options and fills in defaults for the missing ones; invalid options
+are a configuration error that names their path (`plugins.<plugin>.<option>`).
+A plugin decides which of its objects its options enable; the built-in
+bundles enable all of them unless the options name some. Provider, processor
+and remixer names are unique per type across the loaded plugins; sources
+refer to providers, and annotations and artifacts to processors and
+remixers, by those names.
+
+A source's `id` is part of its items' key, so it must be stable; its `url`
+and `provider` can change without losing items.
 
 ## 4. Phases
 
@@ -124,7 +127,7 @@ Processors create annotations on items.
 - Changing a processor's configuration regenerates **nothing**. Annotations
   are kept until the item changes, the processor's version is bumped, or
   they are regenerated or deleted from `Application`.
-- `enrich` runs every configured processor, in the order of the YAML.
+- `enrich` runs every loaded processor, in the order of the YAML.
 
 ### 4.3 Remix
 

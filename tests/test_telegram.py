@@ -11,7 +11,12 @@ import requests
 
 from newsmerger.db import Database, ProcessingStatus
 from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
-from newsmerger.remixers.telegram import MAX_CAPTION_LENGTH, Remixer, build_caption
+from newsmerger.plugins.telegram import (
+    MAX_CAPTION_LENGTH,
+    Options,
+    TelegramRemixer,
+    build_caption,
+)
 
 SOURCE_A = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
 SOURCE_B = SourceData(id="b", name="B", url="https://b.test/", provider="plaza")
@@ -23,7 +28,7 @@ def ok_response(message_id: int = 42) -> Mock:
     return response
 
 
-@patch("newsmerger.remixers.telegram.requests.post")
+@patch("newsmerger.plugins.telegram.requests.post")
 class TelegramRemixerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
@@ -66,9 +71,8 @@ class TelegramRemixerTests(unittest.TestCase):
         )
 
     def run_remixer(self, scope: ProcessingScope | None = None) -> dict[str, Any]:
-        Remixer(self.db, bot_token="token", chat_id="chat", interval=30).run(
-            scope=scope
-        )
+        cfg = Options(bot_token="token", chat_id="chat", interval=30)
+        TelegramRemixer(cfg).remix(self.db, scope=scope)
         return json.loads(self.db.get_artifact("telegram", "state").content)
 
     def test_first_run_ignores_existing_items(self, post: Mock) -> None:
@@ -131,7 +135,7 @@ class TelegramRemixerTests(unittest.TestCase):
         self.add_summarized(SOURCE_A, 3)
         self.save_state()
 
-        with self.assertLogs("newsmerger.remixers.telegram", "WARNING") as logs:
+        with self.assertLogs("newsmerger.plugins.telegram", "WARNING") as logs:
             state = self.run_remixer()
 
         self.assertEqual(state["queue"], [["a", "d3"]])

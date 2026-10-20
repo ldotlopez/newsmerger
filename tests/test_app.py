@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from foundation.plugin import EntryClassConstructionError, PluginNotFoundError
+from foundation.plugin import PluginNotFoundError
 
 from newsmerger.app import Application, UnsupportedProviderError
 from newsmerger.config import Config, ConfigError
@@ -28,7 +28,9 @@ class ApplicationTests(unittest.TestCase):
         self.app.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def make_app(self, extra_yaml: str = "") -> Application:
+    def make_app(
+        self, plugins: str = "  markdownify:\n  rssfeed: {title: Test feed}\n"
+    ) -> Application:
         config = Config.from_text(
             f"""
 sources:
@@ -40,17 +42,15 @@ sources:
     name: Juntas
     provider: csjuntasgobierno
     url: https://www.castello.es/es/sesiones
-processors:
-  - name: markdownify
-remixers:
-  - name: rssfeed
-    params: {{title: Test feed}}
+plugins:
+  prensaiberica:
+  csjuntasgobierno:
+{plugins}
 db:
   uri: sqlite:///{self.tmp_dir}/data.db
   content_dir: {self.tmp_dir}/content
 cache:
   base_dir: {self.tmp_dir}/cache
-{extra_yaml}
 """
         )
         return Application(config)
@@ -67,7 +67,7 @@ cache:
         self.assertEqual(self.app.get_content(stored), item.content)
         self.assertEqual(item.key, stored.key)
 
-    def test_import_url_needs_an_index_site_provider(self) -> None:
+    def test_import_url_needs_a_url_provider(self) -> None:
         with self.assertRaises(UnsupportedProviderError):
             self.app.import_url("juntas", "https://example.test/acta.pdf")
 
@@ -101,25 +101,49 @@ cache:
         scope = ProcessingScope(source="mediterraneo")
         self.assertEqual(self.app.run_processor("markdownify", scope=scope).done, 1)
 
-    def test_only_configured_plugins_run(self) -> None:
-        with self.assertRaises(ConfigError):
+    def test_only_loaded_plugins_run(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "processor 'summarize' is not loaded"):
             self.app.run_processor("summarize")
-        with self.assertRaises(ConfigError):
-            self.app.run_remixer("grouping_avglink")
+        with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is not loaded"):
+            self.app.run_remixer("avglink")
 
-    def test_unknown_plugin_params_are_rejected(self) -> None:
+    def test_phases_run_every_loaded_object_in_configuration_order(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            "processors:\n  - name: markdownify\n    params: {version: '2'}\n"
+            "  rssfeed:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n"
         )
-        with self.assertRaises(EntryClassConstructionError):
-            self.app.run_processor("markdownify")
+
+        self.assertEqual(list(self.app.enrich()), ["markdownify"])
+        self.assertEqual(list(self.app.remix()), ["rssfeed", "avglink", "singlelink"])
+
+    def test_invalid_plugin_options_report_their_config_path(self) -> None:
+        with self.assertRaisesRegex(
+            ConfigError,
+            r"plugins\.markdownify\.max_retries: Input should be a valid integer.*\n"
+            r"plugins\.markdownify\.version: Extra inputs are not permitted",
+        ):
+            self.make_app("  markdownify: {version: '2', max_retries: many}\n")
+
+    def test_register_parameters_are_reserved_plugin_options(self) -> None:
+        for option in ("name", "self"):
+            with (
+                self.subTest(option=option),
+                self.assertRaisesRegex(
+                    ConfigError, f"'{option}' is a reserved option name"
+                ),
+            ):
+                self.make_app(f"  rssfeed: {{{option}: feed}}\n")
 
     def test_missing_plugin_module_is_a_plugin_error(self) -> None:
-        self.app.close()
-        self.app = self.make_app("processors:\n  - name: nonexistent\n")
         with self.assertRaises(PluginNotFoundError):
-            self.app.enrich()
+            self.make_app("  nonexistent:\n")
+
+    def test_sources_need_a_loaded_provider(self) -> None:
+        config = Config.from_text(
+            "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: plaza}\n"
+        )
+        with self.assertRaisesRegex(ConfigError, "provider 'plaza' is not loaded"):
+            Application(config)
 
 
 if __name__ == "__main__":

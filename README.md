@@ -15,12 +15,14 @@ It works in three phases:
 3. **remix**: **remixers** combine many items into **artifacts** (an RSS feed,
    a list of events...).
 
+Providers, processors and remixers come from **plugins**, which are enabled
+in the configuration.
+
 ## Requirements
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- An Ollama server for the `summarize` and `tagger` processors and the
-  `grouping_embeddings` remixer
+- An Ollama server for the `llm` plugin (`summarize`, `tagger` and `embed`)
 
 ## Install
 
@@ -47,23 +49,18 @@ db:
 cache:
   expiration: 21600                  # HTTP cache lifetime, in seconds
 
-processors:                          # run in this order by `enrich`
-  - name: markdownify
-  - name: summarize
-    params:
-      model: gemma4:12b
-      api_base: https://ollama.example.com
-      api_key: ${OLLAMA_API_KEY}
-
-remixers:                            # run in this order by `remix`
-  - name: telegram
-    params:
-      bot_token: ${TELEGRAM_BOT_TOKEN}
-      chat_id: ${TELEGRAM_CHAT_ID}
-      interval: 30                   # minutes between posts of the same source
-  - name: rssfeed
-    params:
-      title: Castelló news
+plugins:                             # only these are loaded, in this order
+  plaza:                             # empty: the plugin's defaults
+  markdownify:
+  llm:
+    api_base: https://ollama.example.com
+    api_key: ${OLLAMA_API_KEY}
+    summarize: {model: gemma4:12b}   # only summarize: tagger and embed are off
+  telegram:
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+  rssfeed:
+    title: Castelló news
 ```
 
 A source's `id` identifies its items: its `url` and `provider` can change
@@ -84,9 +81,18 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
-Only configured processors and remixers can run. Their `params` go to the
-plugin, and unknown params are rejected. Changing a plugin's params never
-regenerates existing annotations; use `enrich --force` for that.
+Only plugins with a section under `plugins` are loaded, and only their
+providers, processors and remixers can be used. A plugin's section holds its
+options: the missing ones take the defaults listed below, and unknown or
+invalid ones are rejected with their path (`plugins.llm.summarize.model:
+...`). `enrich` and `remix` run their objects in the order of this section.
+
+`llm` and `grouping` bundle several processors or remixers, each with its
+own subsection. With no subsections, all of them are enabled with their
+defaults; with some, only those are.
+
+Changing a plugin's options never regenerates existing annotations; use
+`enrich --force` for that.
 
 ## Usage
 
@@ -97,11 +103,11 @@ uv run newsmerger -c config.yaml import
 # Import a single article URL into a configured source
 uv run newsmerger -c config.yaml import-url --source castellonplaza <url>
 
-# Run every configured processor in order, or just one
+# Run every loaded processor in order, or just one
 uv run newsmerger -c config.yaml enrich
 uv run newsmerger -c config.yaml enrich markdownify --source castellonplaza --limit 20
 
-# Run every configured remixer in order, or just one
+# Run every loaded remixer in order, or just one
 uv run newsmerger -c config.yaml remix
 uv run newsmerger -c config.yaml remix rssfeed --since 2026-10-01
 
@@ -134,7 +140,7 @@ or progress bars, one line per log record.
 - A processor can skip items it does not apply to (e.g. `markdownify` on a
   PDF). Skipped items stay skipped until their content changes.
 - Failures are retried on later runs, up to 3 attempts by default (the
-  `max_retries` param), waiting longer each time (1 min, 2 min, 4 min... up
+  `max_retries` option), waiting longer each time (1 min, 2 min, 4 min... up
   to 24 h).
 - A processor only sees items its upstream processor finished (see the
   *Reads* column below). Items skipped upstream never reach it.
@@ -142,6 +148,8 @@ or progress bars, one line per log record.
   fresh retry attempts.
 
 ### Providers
+
+Each provider is a plugin of the same name, without options.
 
 | Provider | Site | Content |
 | :--- | :--- | :--- |
@@ -152,25 +160,45 @@ or progress bars, one line per log record.
 | `csjuntasgobierno` | Index page of *juntas de gobierno* minutes | PDF |
 
 To support a new site, see
-[Writing a provider](docs/ARCHITECTURE.md#writing-a-provider).
+[Writing a plugin](docs/ARCHITECTURE.md#writing-a-plugin).
 
 ### Processors
 
-| Processor | Reads | Does |
-| :--- | :--- | :--- |
-| `markdownify` | item content | Extracts the article's markdown from HTML items |
-| `summarize` | `markdownify.markdown` | Summarizes the article with Ollama |
-| `tagger` | `markdownify.markdown` | Extracts entity tags with Ollama |
+| Plugin | Processor | Reads | Does |
+| :--- | :--- | :--- | :--- |
+| `markdownify` | `markdownify` | item content | Extracts the article's markdown from HTML items |
+| `llm` | `summarize` | `markdownify.markdown` | Summarizes the article with Ollama |
+| `llm` | `tagger` | `markdownify.markdown` | Extracts entity tags with Ollama |
+| `llm` | `embed` | `tagger.tags`, `markdownify.markdown` | Embeds the tags (`tags_embedding`, plus the embedded `tags_text`) and the markdown (`markdown_embedding`) with Ollama |
+
+Every processor takes `max_retries` (default 3). Options of `llm`:
+`api_base` (default `http://localhost:11434`) and `api_key`, shared; then
+per processor, `summarize` and `tagger`: `model` (default `gemma4:12b`);
+`embed`: `model` (default `mxbai-embed-large:latest`) and `inputs`
+(default `[tags, markdown]`).
 
 ### Remixers
 
-| Remixer | Artifact | Does |
-| :--- | :--- | :--- |
-| `telegram` | `state` | Posts summarized items (title, summary, link) to a Telegram chat, at most one per source every `interval` minutes (`bot_token`, `chat_id`, `interval`) |
-| `rssfeed` | `feed` | RSS feed of the newest items in scope (`title`, `link`, `description`, `max_items`) |
-| `grouping_singlelink` | `current` | Clusters tagged items into events (single-link) |
-| `grouping_avglink` | `current` | Clusters tagged items into events (average-link) |
-| `grouping_embeddings` | `current` | Clusters tagged items by tag overlap blended with tag embeddings (Ollama, single-link) |
+| Plugin | Remixer | Artifact | Does |
+| :--- | :--- | :--- | :--- |
+| `telegram` | `telegram` | `state` | Posts summarized items (title, summary, link) to a Telegram chat, at most one per source every `interval` minutes |
+| `rssfeed` | `rssfeed` | `feed` | RSS feed of the newest items in scope |
+| `grouping` | `singlelink` | `current` | Clusters tagged items into events (single-link over tag overlap) |
+| `grouping` | `avglink` | `current` | Clusters tagged items into events (average-link over tag overlap) |
+| `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `embed` annotations (single-link) |
+
+Options:
+
+- `telegram`: `bot_token` and `chat_id` (required), `interval` in minutes
+  (default 30).
+- `rssfeed`: `title` (default `newsmerger feed`), `link`, `description`
+  (default: the title), `max_items` (default 100).
+- `grouping`, per remixer: `min_score` (default 0.3), `tau_hours` (time
+  decay, default 24; `null` disables it), `days` (default 7: the scope when
+  it sets no `--since`). `embeddings` adds `embedding` (`tags` or
+  `markdown`, default `tags`) and `embedding_weight` (0 to 1, default 0.5).
+  Items without the annotations a remixer reads are left out of its groups,
+  so `embeddings` needs `enrich` to have run `embed` first.
 
 Artifacts are rebuilt each time their remixer runs, so between runs they can
 lag behind the stored items.
@@ -230,5 +258,5 @@ uv run ruff format .
 
 See [docs/SPECIFICATION.md](docs/SPECIFICATION.md) for the full definition
 of the application, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
-internals and how to write a provider, [docs/decisions/](docs/decisions/) for the recorded
+internals and how to write a plugin, [docs/decisions/](docs/decisions/) for the recorded
 design decisions and [PLAN.md](PLAN.md) for pending work.

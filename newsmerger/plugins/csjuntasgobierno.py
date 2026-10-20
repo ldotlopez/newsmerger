@@ -4,13 +4,16 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from urllib.parse import urljoin
 
 import bs4
 from foundation.dtlib import get_local_tz
 
-from ..models import SourceItemData
-from . import BaseProvider
+from ..httpclient import HTTPClient
+from ..models import SourceData, SourceItemData
+from ..providers import Provider
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,24 +46,26 @@ class PreparseData:
     title: str
 
 
-class Provider(BaseProvider):
-    def retrieve_items(self) -> Iterator[SourceItemData]:
-        index = self.fetcher.get(str(self.source.url))
-        for protodata in self._iter_pdf_links(index):
+class CSJuntasGobiernoProvider:
+    def retrieve_items(
+        self, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[SourceItemData]:
+        index = fetcher.get(str(source.url))
+        for protodata in self._iter_pdf_links(index, str(source.url)):
             yield SourceItemData(
                 uid=hashlib.sha256(protodata.uri.encode("utf-8")).hexdigest(),
                 uri=protodata.uri,
                 title=protodata.title,
                 published_at=protodata.dt,
                 modified_at=protodata.dt,
-                content=self.fetcher.get(protodata.uri),
+                content=fetcher.get(protodata.uri),
                 mimetype="application/pdf",
                 data={
                     "type": protodata.type_,
                 },
             )
 
-    def _iter_pdf_links(self, content: bytes) -> Iterator[PreparseData]:
+    def _iter_pdf_links(self, content: bytes, base_url: str) -> Iterator[PreparseData]:
 
         soup = bs4.BeautifulSoup(content.decode("utf-8"), "html5lib")
 
@@ -71,7 +76,7 @@ class Provider(BaseProvider):
                 # Ignore this type of link, as it is not relevant for our purposes
                 # LOGGER.warning(f"not a pdf link: {href}")
                 continue
-            uri = urljoin(str(self.source.url), href)  # ty: ignore[invalid-argument-type]
+            uri = urljoin(base_url, href)  # ty: ignore[invalid-argument-type]
 
             # Parse the type
             if "orden del día" in link.get_text(strip=True).lower():
@@ -141,3 +146,8 @@ def get_date_from_text(tag: bs4.Tag, pattern: str | re.Pattern) -> re.Match:
         raise ValueError(f"Unable to extract date from: {text!r}")
 
     return m
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    PluginOptions.model_validate(options)
+    return [("csjuntasgobierno", Provider, CSJuntasGobiernoProvider())]

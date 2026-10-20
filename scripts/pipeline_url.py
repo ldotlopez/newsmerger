@@ -7,7 +7,7 @@ Pipelines live outside the core while the feature is in development
 
 Usage:
     python scripts/pipeline_url.py -c config.yaml --source castellonplaza \\
-        https://castellonplaza.com/... markdownify summarize telegram
+        https://castellonplaza.com/... markdownify summarize tagger
 """  # noqa: EXE001
 
 from __future__ import annotations

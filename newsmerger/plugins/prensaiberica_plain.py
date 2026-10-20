@@ -2,7 +2,7 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import bs4
 from foundation.scrapelib import (
@@ -12,16 +12,20 @@ from foundation.scrapelib import (
     soupify,
 )
 
-from ..models import SourceItemData
-from . import URI, IndexSiteProvider
+from ..httpclient import HTTPClient
+from ..models import SourceData, SourceItemData
+from ..providers import URI, IndexSiteProvider, URLProvider
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
 
-class Provider(IndexSiteProvider):
+class PrensaIbericaPlainProvider(IndexSiteProvider):
     EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
 
-    def parse_index(self, content: bytes) -> Iterator[URI]:
+    def parse_index(
+        self, content: bytes, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
 
         excluded_containers = self._find_excluded_containers(soup)
@@ -155,3 +159,8 @@ def _extract_href(article: bs4.Tag) -> str:
         raise ValueError(article)
 
     return cast(str, a_tag.get("href"))
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    PluginOptions.model_validate(options)
+    return [("prensaiberica_plain", URLProvider, PrensaIbericaPlainProvider())]

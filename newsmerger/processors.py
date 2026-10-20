@@ -1,10 +1,10 @@
 import dataclasses
 import logging
 from abc import abstractmethod
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from ..db import Database, ProcessingStatus
-from ..models import ProcessingScope, SourceItem
+from .db import Database, ProcessingStatus
+from .models import ProcessingScope, SourceItem
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,47 +39,54 @@ class RunSummary:
     failed: int = 0
 
 
-class BaseProcessor:
-    """Produces annotations for each eligible item.
+@runtime_checkable
+class Processor(Protocol):
+    """Annotates items. Its registered name keys its annotations and processing
+    state: entry points register each object under its own `name`."""
 
-    NAME is the processor's module name. Changing VERSION makes items it
-    finished eligible again. REQUIRES names the processor whose output this
-    one reads: only items it finished on their current content are picked up.
+    def enrich(
+        self, db: Database, *, scope: ProcessingScope | None = None, force: bool = False
+    ) -> RunSummary: ...
+
+
+class BaseProcessor:
+    """A Processor that produces annotations for each eligible item.
+
+    Changing `version` makes items it finished eligible again. `requires`
+    names the processor whose output this one reads: only items it finished
+    on their current content are picked up.
     """
 
-    NAME: str
-    VERSION: str | None = None
-    REQUIRES: str | None = None
-    MAX_RETRIES = 3
+    name: str
+    version: str | None = None
+    requires: str | None = None
 
-    def __init__(self, db: Database, *, max_retries: int | None = None) -> None:
-        self.db = db
-        if max_retries is not None:
-            self.MAX_RETRIES = max_retries
+    def __init__(self, *, max_retries: int = 3) -> None:
+        self.max_retries = max_retries
 
-    def run(
-        self, *, scope: ProcessingScope | None = None, force: bool = False
+    def enrich(
+        self, db: Database, *, scope: ProcessingScope | None = None, force: bool = False
     ) -> RunSummary:
-        items = self.db.get_unprocessed_items(
-            self.NAME,
-            version=self.VERSION,
-            max_retries=self.MAX_RETRIES,
+        items = db.get_unprocessed_items(
+            self.name,
+            version=self.version,
+            max_retries=self.max_retries,
             force=force,
             scope=scope,
-            requires=self.REQUIRES,
+            requires=self.requires,
         )
-        LOGGER.info(f"{self.NAME}: {len(items)} item(s) to process")
+        LOGGER.info(f"{self.name}: {len(items)} item(s) to process")
 
         summary = RunSummary()
         for item in items:
-            status, annotations, error = self._process(item)
-            self.db.record_result(
+            status, annotations, error = self._process(db, item)
+            db.record_result(
                 item,
-                self.NAME,
+                self.name,
                 status,
                 annotations=annotations,
                 error=error,
-                version=self.VERSION,
+                version=self.version,
                 reset_attempts=force,
             )
             match status:
@@ -92,32 +99,35 @@ class BaseProcessor:
         return summary
 
     def _process(
-        self, item: SourceItem
+        self, db: Database, item: SourceItem
     ) -> tuple[ProcessingStatus, dict[str, Any] | None, str | None]:
         """Run `process_item` and translate its outcome into a result."""
         try:
-            return ProcessingStatus.DONE, self.process_item(item), None
+            return ProcessingStatus.DONE, self.process_item(db, item), None
         except SkipItem as e:
-            LOGGER.info(f"{self.NAME} ignored '{item.uri}': {e}")
+            LOGGER.info(f"{self.name} ignored '{item.uri}': {e}")
             return ProcessingStatus.IGNORED, None, None
         except PartialFailure as e:
-            LOGGER.warning(f"{self.NAME} partial failure on '{item.uri}': {e.errors}")
+            LOGGER.warning(f"{self.name} partial failure on '{item.uri}': {e.errors}")
             error = "; ".join(f"{k}: {v}" for k, v in e.errors.items())
             return ProcessingStatus.ERROR, e.results, error
         except Exception as e:
-            LOGGER.exception(f"{self.NAME} failed on '{item.uri}'")
+            LOGGER.exception(f"{self.name} failed on '{item.uri}'")
             return ProcessingStatus.ERROR, None, str(e)
 
-    def require_annotation(self, item: SourceItem, processor: str, key: str) -> Any:
+    @staticmethod
+    def require_annotation(
+        db: Database, item: SourceItem, processor: str, key: str
+    ) -> Any:
         """Return an upstream processor's annotation, or raise if it is missing."""
-        annotations = self.db.get_annotations(item, processor=processor, key=key)
+        annotations = db.get_annotations(item, processor=processor, key=key)
         value = annotations.get(processor, {}).get(key)
         if not value:
             raise MissingAnnotationError(f"{processor}.{key} annotation is missing")
         return value
 
     @abstractmethod
-    def process_item(self, item: SourceItem) -> dict[str, Any]:
+    def process_item(self, db: Database, item: SourceItem) -> dict[str, Any]:
         """Return annotation key -> value on full success.
 
         Raise `SkipItem` if the item doesn't apply, `PartialFailure` if only

@@ -2,6 +2,7 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 from urllib.parse import urljoin
 
 import feedparser
@@ -12,14 +13,18 @@ from foundation.scrapelib import (
     soupify,
 )
 
-from ..models import SourceItemData
-from . import URI, IndexSiteProvider
+from ..httpclient import HTTPClient
+from ..models import SourceData, SourceItemData
+from ..providers import URI, IndexSiteProvider, URLProvider
+from . import PluginObjects, PluginOptions
 
 LOGGER = logging.getLogger(__name__)
 
 
-class Provider(IndexSiteProvider):
-    def parse_index(self, content: bytes) -> Iterator[URI]:
+class PrensaIbericaProvider(IndexSiteProvider):
+    def parse_index(
+        self, content: bytes, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
 
         if not (tag := soup.select_one('html head link[rel="alternate"]')):
@@ -37,8 +42,8 @@ class Provider(IndexSiteProvider):
             )
             return
 
-        feed_url = urljoin(str(self.source.url), href)
-        feed_content = self.fetcher.get(feed_url)
+        feed_url = urljoin(str(source.url), href)
+        feed_content = fetcher.get(feed_url)
         fc = feedparser.parse(feed_content)
         yield from (entry["link"] for entry in fc["entries"])
 
@@ -101,3 +106,8 @@ class Provider(IndexSiteProvider):
                 "tags": tags,
             },
         )
+
+
+def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+    PluginOptions.model_validate(options)
+    return [("prensaiberica", URLProvider, PrensaIbericaProvider())]

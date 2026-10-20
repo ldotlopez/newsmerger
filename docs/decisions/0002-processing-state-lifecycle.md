@@ -16,7 +16,7 @@ processor, waits for upstream processors, and reprocesses on a version bump.
   several keys. A partial failure saves the keys it obtained and counts as a
   retryable failure.
 - **Dependencies:** a processor names the processor it reads from
-  (`REQUIRES`). Only items that processor finished on their current content
+  (`requires`). Only items that processor finished on their current content
   are picked up, even when forced. Items still waiting spend no attempts.
   A finished upstream that lacks the needed annotation is a retryable failure.
 - **Outcomes:** done, ignored (permanent for that content), or error with
@@ -24,8 +24,8 @@ processor, waits for upstream processors, and reprocesses on a version bump.
 - **Reprocessing triggers**, and nothing else:
   - The item's content changes: every state becomes eligible with zero
     attempts.
-  - The processor's `VERSION` changes: done items are reprocessed.
-    `VERSION` is set in code only.
+  - The processor's `version` changes: done items are reprocessed.
+    `version` is set in code only.
   - A forced regeneration, which resets attempts.
   - Deleting annotations, which also deletes the processing state.
 - Changing a processor's configuration never regenerates anything.
