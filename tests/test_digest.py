@@ -137,7 +137,10 @@ class DigestPluginTests(unittest.TestCase):
         self.assertIsInstance(remixer, UnavailableRemixer)
         with self.assertLogs("newsmerger.remixers", "ERROR") as logs:
             self.assertEqual(remixer.remix(Mock()), [])
-        self.assertIn("digest: no llm is loaded; nothing produced", logs.output[0])
+        self.assertIn(
+            "digest: no llm is loaded (llm plugins must be listed before the plugins that use them); nothing produced",
+            logs.output[0],
+        )
 
 
 if __name__ == "__main__":

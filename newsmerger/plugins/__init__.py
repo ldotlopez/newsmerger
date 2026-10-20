@@ -31,14 +31,12 @@ class Services:
     def llm(self, name: str | None = None) -> LLM:
         """The LLM named `name`, or the default one (the first loaded) for
         None. Raise `LLMUnavailableError` if it is not loaded."""
+        hint = "llm plugins must be listed before the plugins that use them"
         if not self.llms:
-            raise LLMUnavailableError("no llm is loaded")
+            raise LLMUnavailableError(f"no llm is loaded ({hint})")
         if name is None:
             return next(iter(self.llms.values()))
         try:
             return self.llms[name]
         except KeyError:
-            raise LLMUnavailableError(
-                f"llm '{name}' is not loaded (llm plugins must be listed"
-                " before the plugins that use them)"
-            ) from None
+            raise LLMUnavailableError(f"llm '{name}' is not loaded ({hint})") from None

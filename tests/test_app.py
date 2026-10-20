@@ -154,7 +154,10 @@ cache:
 
         self.assertEqual(summaries["markdownify"].done, 1)
         self.assertEqual(summaries["tagger"], RunSummary())
-        self.assertIn("tagger: no llm is loaded; nothing processed", logs.output[0])
+        self.assertIn(
+            "tagger: no llm is loaded (llm plugins must be listed before the plugins that use them); nothing processed",
+            logs.output[0],
+        )
 
     def test_missing_plugin_module_is_a_plugin_error(self) -> None:
         with self.assertRaises(PluginNotFoundError):
