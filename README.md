@@ -23,7 +23,7 @@ in the configuration.
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
 - Optionally, an Ollama server for the `ollama` LLM plugin, which
-  `summarize`, `tagger` and `embed` use
+  `summarize`, `tagger`, `embed` and `digest` use
 
 ## Install
 
@@ -94,11 +94,11 @@ subsections, all of them are enabled with their defaults; with some, only
 those are.
 
 LLM plugins (`ollama`) provide a language model to the plugins listed after
-them. `summarize`, `tagger` and `embed` take `llm` (the LLM plugin to use;
-default: the first one listed) and `model` (default: that LLM's default
-model). One that cannot get its LLM, because none is loaded or the one it
-names is not, still loads, but `enrich` logs an error for it and processes
-nothing; its items stay pending. Everything else works without an LLM, but
+them. `summarize`, `tagger`, `embed` and `digest` take `llm` (the LLM plugin
+to use; default: the first one listed) and `model` (default: that LLM's
+default model). One that cannot get its LLM, because none is loaded or the
+one it names is not, still loads, but `enrich` or `remix` logs an error for
+it and does nothing; a processor's items stay pending. Everything else works without an LLM, but
 `grouping` and `telegram` read the tags and summaries those processors write.
 
 Changing a plugin's options never regenerates existing annotations; use
@@ -204,11 +204,19 @@ Options of `ollama`: `api_base` (default `http://localhost:11434`),
 | `grouping` | `singlelink` | `current` | Clusters tagged items into events (single-link over tag overlap) |
 | `grouping` | `avglink` | `current` | Clusters tagged items into events (average-link over tag overlap) |
 | `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `embed` annotations (single-link) |
+| `digest` | `digest` | `<source id>` | Markdown digest of the highlights of each source in scope, written with an LLM from `markdownify.markdown` |
 
 Options:
 
 - `telegram`: `bot_token` and `chat_id` (required), `interval` in minutes
   (default 30).
+- `digest`: `llm` and `model` (see above), `days` (default 7: the scope
+  when it sets no `--since`), `max_items` (newest items per source, default
+  50), `max_article_chars` (each article's markdown is cut to this, default
+  3000) and `context_length` (the model's context window in tokens, default
+  32768). Meant for one source: `remix digest --source <id>` for the last
+  week, or `--since`/`--until` for another period; `artifact digest <id>`
+  shows it.
 - `rssfeed`: `title` (default `newsmerger feed`), `link`, `description`
   (default: the title), `max_items` (default 100).
 - `grouping`, per remixer: `min_score` (default 0.3), `tau_hours` (time

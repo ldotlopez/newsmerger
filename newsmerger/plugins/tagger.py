@@ -8,7 +8,7 @@ from typing import Any
 import pydantic
 
 from ..db import Database
-from ..llms import LLM, LLMUnavailableError
+from ..llms import LLM, LLMUnavailableError, strip_code_fence
 from ..models import SourceItem
 from ..processors import BaseProcessor, Processor, UnavailableProcessor
 from . import PluginObjects, PluginOptions, Services
@@ -76,7 +76,7 @@ class TaggerProcessor(BaseProcessor):
         )
 
         try:
-            parsed = json.loads(clean_json(response))
+            parsed = json.loads(strip_code_fence(response))
             llm_tags = ResponseBaseModel(parsed["items"]).root
         except (
             pydantic.ValidationError,
@@ -96,14 +96,6 @@ class TaggerProcessor(BaseProcessor):
 
         LOGGER.debug(f"Tags for {item.title}: {results['tags']!r}")
         return results
-
-
-def clean_json(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1]  # Remove first line
-        text = text.rsplit("```", 1)[0]  # Remove last ```
-    return text.strip()
 
 
 def merge_tags(existing_tags: list[str], new_tags: list[str]) -> list[str]:

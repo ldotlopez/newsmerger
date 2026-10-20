@@ -19,6 +19,19 @@ class Remixer(Protocol):
     ) -> list[str]: ...
 
 
+class UnavailableRemixer:
+    """Stands in for a remixer that cannot run, such as one whose LLM is not
+    loaded: `remix` logs why and saves nothing."""
+
+    def __init__(self, name: str, reason: str) -> None:
+        self.name = name
+        self.reason = reason
+
+    def remix(self, db: Database, *, scope: ProcessingScope | None = None) -> list[str]:
+        LOGGER.error(f"{self.name}: {self.reason}; nothing produced")
+        return []
+
+
 class BaseRemixer:
     """A Remixer whose named artifacts are regenerated on every run.
 

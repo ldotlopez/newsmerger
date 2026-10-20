@@ -30,7 +30,12 @@ class OllamaLLM:
         self.embed_model = embed_model
 
     def prompt(
-        self, prompt: str, *, model: str | None = None, json_mode: bool = False
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        json_mode: bool = False,
+        context_length: int | None = None,
     ) -> str:
         # https://gemma4-ai.com/blog/gemma4-json-output
         response = self.client.generate(
@@ -38,6 +43,7 @@ class OllamaLLM:
             prompt=prompt,
             stream=False,
             format="json" if json_mode else None,
+            options={"num_ctx": context_length} if context_length else None,
         )
         return response.response
 
