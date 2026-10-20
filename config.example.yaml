@@ -46,6 +46,8 @@ plugins:
     summarize: {model: gemma4:12b}
     tagger: {model: gemma4:12b}
     embed: {model: mxbai-embed-large:latest}
+    # The weekly digest remixer runs only with its section.
+    digest: {model: gemma4:12b, days: 7}
 
   # Remixers.
   telegram:

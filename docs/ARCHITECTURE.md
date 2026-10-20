@@ -37,7 +37,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
 | `processors.py` | The `Processor` protocol, `BaseProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
 | `remixers.py` | The `Remixer` protocol and `BaseRemixer`. |
-| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, `llm` (`summarize`, `tagger`, `embed`), `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions` and `PluginObjects` live in its `__init__`. |
+| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, `llm` (`summarize`, `tagger`, `embed` and the `digest` remixer), `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions` and `PluginObjects` live in its `__init__`. |
 | `scripts/` | Standalone tools built on `Application`: the URL pipeline. |
 
 ## Plugins
@@ -78,7 +78,8 @@ triples.
 Bundles (`llm`, `grouping`) give each object a subsection of their options.
 With none, the entry point enables every object with its defaults; with
 some, only those, in their order. This is the plugins' convention, not the
-core's: an entry point is free to decide what its options enable.
+core's: an entry point is free to decide what its options enable. `llm`'s
+`digest` is the exception: it is enabled only by its own subsection.
 
 Bundles never import each other. `grouping.embeddings` reads the vectors
 `llm.embed` stores as annotations, the same way every grouping remixer
@@ -272,6 +273,13 @@ tag overlap, and single-link over tag overlap blended with the cosine
 similarity of the `embed` vectors (`embeddings`, which reads
 `embed.tags_embedding` or `embed.markdown_embedding` and leaves out items
 without one).
+
+`digest` (in `llm`, to share its Ollama client) writes one markdown artifact
+per source in scope, named by the source id. It reads `markdownify.markdown`
+of the newest `max_items` items per source published since `since` (default:
+the last `days`), cuts each to `max_article_chars`, sends them oldest first
+in one prompt and prepends a `# <source name>: <since> – <until>` title to
+the model's answer.
 
 `telegram` is the remixer with an external side effect (decision 0005). It
 reads `summarize.summary` and keeps its state in its own `state` artifact,
