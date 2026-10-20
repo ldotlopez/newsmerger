@@ -15,7 +15,7 @@ from foundation.scrapelib import (
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, URLProvider
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -161,6 +161,6 @@ def _extract_href(article: bs4.Tag) -> str:
     return cast(str, a_tag.get("href"))
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     PluginOptions.model_validate(options)
     return [("prensaiberica_plain", URLProvider, PrensaIbericaPlainProvider())]

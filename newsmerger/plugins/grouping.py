@@ -37,7 +37,7 @@ import pydantic
 from ..db import Database
 from ..models import ItemKey, ProcessingScope, SourceItem
 from ..remixers import BaseRemixer, Remixer
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -347,7 +347,7 @@ class EmbeddingsRemixer(GroupingRemixer):
         return single_link_groups(embedded, scores, self.min_score)
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     cfg = Options.model_validate(options)
     builders = {
         "singlelink": lambda: SingleLinkRemixer(cfg.singlelink),

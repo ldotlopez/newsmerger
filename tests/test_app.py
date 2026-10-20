@@ -14,6 +14,8 @@ from foundation.plugin import PluginNotFoundError
 from newsmerger.app import Application, UnsupportedProviderError
 from newsmerger.config import Config, ConfigError
 from newsmerger.models import ProcessingScope
+from newsmerger.plugins.ollama import OllamaLLM
+from newsmerger.processors import RunSummary
 
 SAMPLE = Path(__file__).parent / "samples" / "prensaiberica-item-132310503.html"
 SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
@@ -133,6 +135,26 @@ cache:
                 ),
             ):
                 self.make_app(f"  rssfeed: {{{option}: feed}}\n")
+
+    def test_llm_consumers_get_the_llm_of_a_plugin_listed_before(self) -> None:
+        self.app.close()
+        self.app = self.make_app("  ollama:\n  summarize:\n  embed: {llm: ollama}\n")
+
+        llm = self.app._processors["summarize"].llm
+        self.assertIsInstance(llm, OllamaLLM)
+        self.assertIs(self.app._processors["embed"].llm, llm)
+
+    def test_llm_consumers_without_their_llm_load_but_process_nothing(self) -> None:
+        self.app.close()
+        self.app = self.make_app("  markdownify:\n  tagger:\n  ollama:\n")
+        self.import_sample()
+
+        with self.assertLogs("newsmerger.processors", "ERROR") as logs:
+            summaries = self.app.enrich()
+
+        self.assertEqual(summaries["markdownify"].done, 1)
+        self.assertEqual(summaries["tagger"], RunSummary())
+        self.assertIn("tagger: no llm is loaded; nothing processed", logs.output[0])
 
     def test_missing_plugin_module_is_a_plugin_error(self) -> None:
         with self.assertRaises(PluginNotFoundError):

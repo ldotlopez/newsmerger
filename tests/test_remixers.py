@@ -10,7 +10,7 @@ from pathlib import Path
 
 from newsmerger.db import Database, ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceData, SourceItem
-from newsmerger.plugins import grouping, rssfeed
+from newsmerger.plugins import Services, grouping, rssfeed
 from newsmerger.remixers import Remixer
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
@@ -173,14 +173,16 @@ class EmbeddingGroupingTests(RemixerTestCase):
 
 class GroupingPluginTests(unittest.TestCase):
     def names(self, **options) -> list[str]:
-        return [name for name, _, _ in grouping.__newsmerger_plugin__(**options)]
+        return [
+            name for name, _, _ in grouping.__newsmerger_plugin__(Services(), **options)
+        ]
 
     def test_no_sections_enable_every_remixer(self) -> None:
         self.assertEqual(self.names(), ["singlelink", "avglink", "embeddings"])
 
     def test_sections_enable_only_the_listed_remixers_with_defaults(self) -> None:
         ((name, protocol, remixer),) = grouping.__newsmerger_plugin__(
-            avglink={"min_score": 0.5}
+            Services(), avglink={"min_score": 0.5}
         )
 
         self.assertEqual((name, protocol), ("avglink", Remixer))

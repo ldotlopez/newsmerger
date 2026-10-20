@@ -16,6 +16,10 @@ Nothing scheduled.
   bundles `summarize`, `tagger` and the new `embed`; `grouping` bundles
   `singlelink`, `avglink` and `embeddings`, which now reads stored
   embeddings.
+- [x] **LLM plugins** (decision 0006): the `LLM` protocol (`prompt`,
+  `embed`) and the `ollama` backend; `llm` split into the `summarize`,
+  `tagger` and `embed` plugins, which pick an LLM by name and get it from
+  the `services` every entry point receives.
 - [x] **Secrets**: no rotation needed (never committed; owner's call).
 - [x] **External scripts**: none existed outside `scripts/`. The embeddings
   experiment became the `grouping_embeddings` remixer (single-link over tag

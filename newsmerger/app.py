@@ -20,7 +20,9 @@ from .config import Config, ConfigError, plugin_options_error
 from .consts import PACKAGE_NAME
 from .db import Database
 from .httpclient import HTTPClient
+from .llms import LLM
 from .models import Artifact, ItemKey, ProcessingScope, SourceData, SourceItem
+from .plugins import Services
 from .processors import Processor, RunSummary
 from .providers import Provider, URLProvider
 from .remixers import Remixer
@@ -207,8 +209,10 @@ class Application:
 
 def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:
     """Register every plugin with a config section, in configuration order,
-    passing it its section as keyword arguments."""
+    passing it the services provided by the plugins before it and its section
+    as keyword arguments."""
     plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
+    services = Services()
     for name, section in sections.items():
         options = section or {}
         for option in RESERVED_OPTIONS:
@@ -217,11 +221,12 @@ def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:
                     f"plugins.{name}: '{option}' is a reserved option name"
                 )
         try:
-            plugins.register(name, **options)
+            plugins.register(name, services, **options)
         except EntryPointError as e:
             if isinstance(e.__cause__, pydantic.ValidationError):
                 raise plugin_options_error(name, e.__cause__) from e
             raise
+        services.llms = objects_by_name(plugins, LLM)
     return plugins
 
 

@@ -7,7 +7,7 @@ import trafilatura
 from ..db import Database
 from ..models import SourceItem
 from ..processors import BaseProcessor, Processor, SkipItem
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 
 class Options(PluginOptions):
@@ -36,7 +36,7 @@ class MarkdownifyProcessor(BaseProcessor):
         return {"markdown": markdown}
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     cfg = Options.model_validate(options)
     processor = MarkdownifyProcessor(max_retries=cfg.max_retries)
     return [(processor.name, Processor, processor)]

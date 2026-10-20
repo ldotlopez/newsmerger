@@ -35,25 +35,27 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
-| `processors.py` | The `Processor` protocol, `BaseProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
+| `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
 | `remixers.py` | The `Remixer` protocol and `BaseRemixer`. |
-| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, `llm` (`summarize`, `tagger`, `embed`), `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions` and `PluginObjects` live in its `__init__`. |
+| `llms.py` | The `LLM` protocol and `LLMUnavailableError`. |
+| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
 | `scripts/` | Standalone tools built on `Application`: the URL pipeline. |
 
 ## Plugins
 
 Plugins are loaded with `foundation.plugin.Register` (decision 0003). The
-core knows only the protocols in `providers.py`, `processors.py` and
-`remixers.py`, never a plugin's code or option models:
+core knows only the protocols in `providers.py`, `processors.py`,
+`remixers.py` and `llms.py`, never a plugin's code or option models:
 
-1. `Application.__init__` calls `register(name, **section)` for every entry
-   of `plugins:`, in order, on the `newsmerger.plugins` namespace. A plugin
-   without a section is never imported. An empty section is `{}`.
-2. The module's `__newsmerger_plugin__(**options)` validates the options
+1. `Application.__init__` calls `register(name, services, **section)` for
+   every entry of `plugins:`, in order, on the `newsmerger.plugins`
+   namespace. A plugin without a section is never imported. An empty
+   section is `{}`.
+2. The module's `__newsmerger_plugin__(services, **options)` validates the options
    with its own pydantic model (a `PluginOptions` subclass, so unknown keys
    are errors), builds its objects with the validated model and returns
    `[(name, Protocol, object), ...]`: one triple per object, declared under
-   `Provider`, `URLProvider`, `Processor` or `Remixer`.
+   `Provider`, `URLProvider`, `Processor`, `Remixer` or `LLM`.
 3. `Application` indexes the objects by name per protocol, with
    `get_by_protocol` (hierarchy-aware: a `URLProvider` is also a
    `Provider`), and checks that names are unique per protocol and that every
@@ -75,13 +77,20 @@ attribute that keys their annotations, state or artifacts; entry points
 register each one under `obj.name`. Providers' names exist only in their
 triples.
 
-Bundles (`llm`, `grouping`) give each object a subsection of their options.
+`services` is what the core shares with entry points (decision 0006): the
+LLMs of the plugins registered so far, by name, in configuration order.
+`services.llm(name)` returns the named one, or the first for `None`, and
+raises `LLMUnavailableError` if it is not loaded. An LLM consumer catches it
+and returns an `UnavailableProcessor` under its name, whose `enrich` logs
+the reason as an error and processes nothing.
+
+Bundles (`grouping`) give each object a subsection of their options.
 With none, the entry point enables every object with its defaults; with
 some, only those, in their order. This is the plugins' convention, not the
 core's: an entry point is free to decide what its options enable.
 
 Bundles never import each other. `grouping.embeddings` reads the vectors
-`llm.embed` stores as annotations, the same way every grouping remixer
+`embed` stores as annotations, the same way every grouping remixer
 reads `tagger.tags`.
 
 ## Providers
@@ -168,8 +177,8 @@ files), implement `retrieve_items(source, fetcher)` yourself, fetching with
 A plugin with options declares a `PluginOptions` subclass with defaults for
 the general case, so an empty section is enough to enable it, and passes the
 validated model to its objects' constructors; `markdownify`, `rssfeed` and
-`telegram` are examples, `llm` and `grouping` show bundles with
-subsections. Use `pydantic.SecretStr` for secrets, so they never show in a
+`telegram` are examples, `grouping` shows a bundle with subsections and
+`summarize` an LLM consumer. Use `pydantic.SecretStr` for secrets, so they never show in a
 `repr` or a traceback. Processors and remixers usually subclass
 `BaseProcessor` (`process_item(db, item)`) and `BaseRemixer`
 (`produce(db, scope)`), set `name` as a class attribute and are returned as
