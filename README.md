@@ -68,11 +68,12 @@ without losing anything, but renaming the `id` starts the source from
 scratch. Removing a source from the file keeps its items; they just stop
 being updated.
 
-`${VAR}` is replaced with the environment variable `VAR` when the file is
-loaded, or with `VAR` from a `.env` file next to the config file (the real
-environment wins). A missing variable is an error. Pass secrets (API keys,
-bot tokens) this way, never as literals; `.env` is git-ignored. Write a
-literal `$` as `$$`, comments included.
+`${VAR}` in a value is replaced with the environment variable `VAR` when the
+file is loaded, or with `VAR` from a `.env` file next to the config file (the
+real environment wins). A missing variable is an error. Pass secrets (API
+keys, bot tokens) this way, never as literals; `.env` is git-ignored.
+Comments and keys are left alone. Write a literal `$` in a value as `$$`,
+and quote a reference inside `{...}` or `[...]` (`{api_key: '${KEY}'}`).
 
 ```sh
 # .env

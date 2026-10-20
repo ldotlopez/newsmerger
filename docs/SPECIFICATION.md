@@ -52,8 +52,9 @@ db:
   content_dir: <path>      # default: <user data dir>/newsmerger/content
 ```
 
-`${VAR}` values are replaced with environment variables when the file is
-loaded; secrets (API keys, tokens) are always passed this way.
+`${VAR}` references in values are replaced with environment variables when
+the file is loaded; comments and keys are not expanded. Secrets (API keys,
+tokens) are always passed this way.
 
 Only plugins with an entry in `plugins` are loaded. Each plugin validates
 its own options and fills in defaults for the missing ones; invalid options
