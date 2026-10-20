@@ -1,7 +1,7 @@
 # Copy to config.yaml and adjust.
 # Secrets come from the environment or from a .env file next to this one:
 # ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}.
-# Write a literal dollar sign as $$.
+# Write a literal dollar sign in a value as $$; comments are not expanded.
 
 sources:
   - id: elperiodicomediterraneo-castello

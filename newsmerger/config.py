@@ -19,6 +19,15 @@ class ConfigError(ValueError):
     """The configuration file cannot be loaded."""
 
 
+class MissingVariableError(ConfigError):
+    """A `${VAR}` reference names a variable that is not set."""
+
+    def __init__(self, variable: str, location: str) -> None:
+        super().__init__(f"{location}: environment variable '{variable}' is not set")
+        self.variable = variable
+        self.location = location
+
+
 class CacheConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     base_dir: Path = pydantic.Field(
@@ -70,30 +79,59 @@ class Config(pydantic.BaseModel):
             for name, value in dotenv_values(path.parent / ".env").items()
             if value is not None
         }
-        return cls.from_text(path.read_text(), environ={**dotenv, **os.environ})
+        try:
+            return cls.from_text(path.read_text(), environ={**dotenv, **os.environ})
+        except MissingVariableError as e:
+            raise ConfigError(
+                f"{path}: {e}\n"
+                f"Set {e.variable} in the environment or in {path.parent / '.env'}."
+            ) from e
 
     @classmethod
     def from_text(
         cls, text: str, *, environ: Mapping[str, str] | None = None
     ) -> Config:
-        """Parse YAML after expanding `${VAR}` references from `environ`
-        (the process environment by default).
+        """Parse YAML, then expand `${VAR}` references in its string values
+        from `environ` (the process environment by default). Comments and
+        keys are never expanded.
 
-        A literal `$` must be written as `$$`.
+        A literal `$` in a value must be written as `$$`.
         """
+        parsed = yaml.safe_load(text) or {}
+        expanded = expand_variables(
+            parsed, os.environ if environ is None else environ, ()
+        )
         try:
-            expanded = string.Template(text).substitute(
-                os.environ if environ is None else environ
-            )
-        except KeyError as e:
-            raise ConfigError(f"environment variable {e} is not set") from e
-        except ValueError as e:
-            raise ConfigError(f"invalid ${{VAR}} reference: {e}") from e
-
-        try:
-            return cls(**(yaml.safe_load(expanded) or {}))
+            return cls(**expanded)
         except pydantic.ValidationError as e:
             raise ConfigError(str(e)) from e
+
+
+def expand_variables(
+    value: Any, environ: Mapping[str, str], location: tuple[str | int, ...]
+) -> Any:
+    """`value` with `${VAR}` references expanded in every string it holds.
+    `location` is its path in the config, for error messages."""
+    if isinstance(value, dict):
+        return {
+            key: expand_variables(item, environ, (*location, key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            expand_variables(item, environ, (*location, index))
+            for index, item in enumerate(value)
+        ]
+    if not isinstance(value, str):
+        return value
+    try:
+        return string.Template(value).substitute(environ)
+    except KeyError as e:
+        raise MissingVariableError(e.args[0], ".".join(map(str, location))) from e
+    except ValueError as e:
+        raise ConfigError(
+            f"{'.'.join(map(str, location))}: invalid ${{VAR}} reference: {e}"
+        ) from e
 
 
 def plugin_options_error(plugin: str, error: pydantic.ValidationError) -> ConfigError:
