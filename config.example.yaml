@@ -50,9 +50,12 @@ plugins:
 
   # LLM processors: `llm:` picks the LLM (default: the first listed) and
   # `model:` overrides its default model.
-  summarize:
+  summarize:                         # first LLM, its chat_model
   tagger:
+    llm: ollama
+    model: gemma4:12b
   embed:
+    inputs: [tags, markdown]         # first LLM, its embed_model
 
   # Remixers.
   telegram:
