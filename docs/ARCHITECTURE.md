@@ -36,9 +36,9 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
 | `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
-| `remixers.py` | The `Remixer` protocol and `BaseRemixer`. |
-| `llms.py` | The `LLM` protocol and `LLMUnavailableError`. |
-| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
+| `remixers.py` | The `Remixer` protocol, `BaseRemixer` and `UnavailableRemixer`. |
+| `llms.py` | The `LLM` protocol, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
+| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
 | `scripts/` | Standalone tools built on `Application`: the URL pipeline. |
 
 ## Plugins
@@ -81,8 +81,9 @@ triples.
 LLMs of the plugins registered so far, by name, in configuration order.
 `services.llm(name)` returns the named one, or the first for `None`, and
 raises `LLMUnavailableError` if it is not loaded. An LLM consumer catches it
-and returns an `UnavailableProcessor` under its name, whose `enrich` logs
-the reason as an error and processes nothing.
+and returns an `UnavailableProcessor` (or `UnavailableRemixer`) under its
+name, whose `enrich` (or `remix`) logs the reason as an error and does
+nothing.
 
 Bundles (`grouping`) give each object a subsection of their options.
 With none, the entry point enables every object with its defaults; with
@@ -281,6 +282,13 @@ tag overlap, and single-link over tag overlap blended with the cosine
 similarity of the `embed` vectors (`embeddings`, which reads
 `embed.tags_embedding` or `embed.markdown_embedding` and leaves out items
 without one).
+
+`digest` writes one markdown artifact per source in scope, named by the
+source id. It reads `markdownify.markdown` of the newest `max_items` items
+per source published since `since` (default: the last `days`), cuts each to
+`max_article_chars`, sends them oldest first in one prompt with a
+`context_length` window and prepends a `# <source name>: <since> – <until>`
+title to the model's answer.
 
 `telegram` is the remixer with an external side effect (decision 0005). It
 reads `summarize.summary` and keeps its state in its own `state` artifact,

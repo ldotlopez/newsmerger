@@ -16,13 +16,15 @@ the processors could not simply be split out and share the client.
 - **Type.** `LLM` is a fourth plugin type, defined by a `typing.Protocol` in
   `llms.py` with two methods: `prompt(prompt, *, model, json_mode)` and
   `embed(texts, *, model)`. Without `model`, the backend uses its own
-  default for each method.
+  default for each method. `prompt` also takes `context_length`, for long
+  prompts such as `digest`'s.
 - **Backends.** An LLM backend is a plugin providing one `LLM` object named
   after the plugin; `ollama` is the first, with `chat_model` and
   `embed_model` as its defaults.
-- **Consumers.** `summarize`, `tagger` and `embed` are separate plugins. Each
-  takes `llm` (the backend's name; `None`, the default, means no preference)
-  and `model` (overrides the backend's default).
+- **Consumers.** `summarize`, `tagger`, `embed` and the `digest` remixer are
+  separate plugins. Each takes `llm` (the backend's name; `None`, the
+  default, means no preference) and `model` (overrides the backend's
+  default).
 - **Services.** The core passes a `Services` object as the first positional
   argument of every entry point: `__newsmerger_plugin__(services,
   **options)`. It holds the LLMs of the plugins registered before, by name,
@@ -30,9 +32,10 @@ the processors could not simply be split out and share the client.
   first one for `None`, and raises `LLMUnavailableError` when none is loaded
   or the named one is not.
 - **Unavailable LLM.** A consumer that cannot get its LLM still loads: it
-  registers an `UnavailableProcessor` under its name, whose `enrich` logs
-  the reason as an error and processes nothing, leaving items pending. Error,
-  not warning: the processor's work is not done and nothing replaces it.
+  registers an `UnavailableProcessor` (`UnavailableRemixer` for `digest`)
+  under its name, which logs the reason as an error when run and does
+  nothing; a processor's items stay pending. Error, not warning: the work
+  is not done and nothing replaces it.
 - **Optional.** No LLM is needed to import, convert to markdown or build the
   RSS feed. Plugins that read LLM output (`grouping`, `telegram`) read
   annotations, not the `LLM`, and run on whatever is there.

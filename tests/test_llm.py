@@ -22,7 +22,12 @@ class StubLLM:
         self.calls: list[tuple[str, object, dict]] = []
 
     def prompt(
-        self, prompt: str, *, model: str | None = None, json_mode: bool = False
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        json_mode: bool = False,
+        context_length: int | None = None,
     ) -> str:
         self.calls.append(("prompt", prompt, {"model": model, "json_mode": json_mode}))
         return self.response
@@ -175,14 +180,26 @@ class OllamaTests(unittest.TestCase):
         llm = ollama.OllamaLLM(client, "chat", "embedder")
 
         self.assertEqual(llm.prompt("hi"), "ok")
-        llm.prompt("hi", model="other", json_mode=True)
+        llm.prompt("hi", model="other", json_mode=True, context_length=8192)
         self.assertEqual(llm.embed(["text"]), [[1.0, 2.0]])
 
         self.assertEqual(
             [call.kwargs for call in client.generate.call_args_list],
             [
-                {"model": "chat", "prompt": "hi", "stream": False, "format": None},
-                {"model": "other", "prompt": "hi", "stream": False, "format": "json"},
+                {
+                    "model": "chat",
+                    "prompt": "hi",
+                    "stream": False,
+                    "format": None,
+                    "options": None,
+                },
+                {
+                    "model": "other",
+                    "prompt": "hi",
+                    "stream": False,
+                    "format": "json",
+                    "options": {"num_ctx": 8192},
+                },
             ],
         )
         client.embed.assert_called_once_with(model="embedder", input=["text"])

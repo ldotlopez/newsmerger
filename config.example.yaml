@@ -64,3 +64,5 @@ plugins:
     interval: 30                     # minutes between posts of the same source
   rssfeed:
   grouping:                          # singlelink, avglink and embeddings
+  digest:                            # sends a week of articles per source
+    days: 7
