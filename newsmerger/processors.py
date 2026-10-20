@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+import time
 from abc import abstractmethod
 from typing import Any, Protocol, runtime_checkable
 
@@ -75,11 +76,25 @@ class BaseProcessor:
             scope=scope,
             requires=self.requires,
         )
-        LOGGER.info(f"{self.name}: {len(items)} item(s) to process")
+        total = len(items)
+        LOGGER.info(
+            f"{self.name}: {total} item(s) to process"
+            f" (version={self.version}, requires={self.requires}, force={force})"
+        )
 
         summary = RunSummary()
-        for item in items:
+        run_started = time.monotonic()
+        for position, item in enumerate(items, start=1):
+            LOGGER.info(
+                f"{self.name}: [{position}/{total}] '{item.title}' ({item.uri})"
+            )
+            item_started = time.monotonic()
             status, annotations, error = self._process(db, item)
+            LOGGER.debug(
+                f"{self.name}: '{item.uri}' {status.value}"
+                f" in {time.monotonic() - item_started:.2f}s"
+                f" (keys: {', '.join(annotations or {}) or '-'})"
+            )
             db.record_result(
                 item,
                 self.name,
@@ -96,6 +111,11 @@ class BaseProcessor:
                     summary.ignored += 1
                 case ProcessingStatus.ERROR:
                     summary.failed += 1
+
+        LOGGER.info(
+            f"{self.name}: finished in {time.monotonic() - run_started:.1f}s:"
+            f" {summary.done} done, {summary.ignored} ignored, {summary.failed} failed"
+        )
         return summary
 
     def _process(
