@@ -13,7 +13,7 @@ from foundation.dtlib import get_local_tz
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import Provider
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -148,6 +148,6 @@ def get_date_from_text(tag: bs4.Tag, pattern: str | re.Pattern) -> re.Match:
     return m
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     PluginOptions.model_validate(options)
     return [("csjuntasgobierno", Provider, CSJuntasGobiernoProvider())]

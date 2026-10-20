@@ -50,6 +50,21 @@ class Processor(Protocol):
     ) -> RunSummary: ...
 
 
+class UnavailableProcessor:
+    """Stands in for a processor that cannot run, such as one whose LLM is
+    not loaded: `enrich` logs why and leaves every item pending."""
+
+    def __init__(self, name: str, reason: str) -> None:
+        self.name = name
+        self.reason = reason
+
+    def enrich(
+        self, db: Database, *, scope: ProcessingScope | None = None, force: bool = False
+    ) -> RunSummary:
+        LOGGER.error(f"{self.name}: {self.reason}; nothing processed")
+        return RunSummary()
+
+
 class BaseProcessor:
     """A Processor that produces annotations for each eligible item.
 

@@ -39,13 +39,20 @@ plugins:
 
   # Processors.
   markdownify:
-  llm:                               # summarize, tagger and embed (Ollama)
+
+  # LLMs, for the processors listed after them. Without any, those
+  # processors log an error and do nothing.
+  ollama:
     api_base: http://localhost:11434
     api_key: ${OLLAMA_API_KEY}
-    # Without these sections all three run with their default models.
-    summarize: {model: gemma4:12b}
-    tagger: {model: gemma4:12b}
-    embed: {model: mxbai-embed-large:latest}
+    chat_model: gemma4:12b
+    embed_model: mxbai-embed-large:latest
+
+  # LLM processors: `llm:` picks the LLM (default: the first listed) and
+  # `model:` overrides its default model.
+  summarize:
+  tagger:
+  embed:
 
   # Remixers.
   telegram:

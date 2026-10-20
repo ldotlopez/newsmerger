@@ -12,7 +12,7 @@ from foundation.scrapelib import drop_selectors, head_meta_get_value, soupify
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, URLProvider
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +84,6 @@ class TheGuardianProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     PluginOptions.model_validate(options)
     return [("theguardian", URLProvider, TheGuardianProvider())]

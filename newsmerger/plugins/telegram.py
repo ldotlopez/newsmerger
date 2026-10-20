@@ -27,7 +27,7 @@ from pydantic import SecretStr
 from ..db import Database
 from ..models import ProcessingScope, SourceItem
 from ..remixers import BaseRemixer, Remixer
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -163,6 +163,6 @@ class TelegramRemixer(BaseRemixer):
         return result["result"]["message_id"]
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     remixer = TelegramRemixer(Options.model_validate(options))
     return [(remixer.name, Remixer, remixer)]

@@ -13,7 +13,7 @@ from xml.sax.saxutils import escape
 from ..db import Database
 from ..models import ProcessingScope, SourceItem
 from ..remixers import BaseRemixer, Remixer
-from . import PluginObjects, PluginOptions
+from . import PluginObjects, PluginOptions, Services
 
 RFC822 = "%a, %d %b %Y %H:%M:%S %z"
 
@@ -73,6 +73,6 @@ class RSSFeedRemixer(BaseRemixer):
         )
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
+def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     remixer = RSSFeedRemixer(Options.model_validate(options))
     return [(remixer.name, Remixer, remixer)]

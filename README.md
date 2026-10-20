@@ -22,7 +22,8 @@ in the configuration.
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- An Ollama server for the `llm` plugin (`summarize`, `tagger` and `embed`)
+- Optionally, an Ollama server for the `ollama` LLM plugin, which
+  `summarize`, `tagger` and `embed` use
 
 ## Install
 
@@ -52,10 +53,10 @@ cache:
 plugins:                             # only these are loaded, in this order
   plaza:                             # empty: the plugin's defaults
   markdownify:
-  llm:
+  ollama:                            # an LLM: listed before its users
     api_base: https://ollama.example.com
     api_key: ${OLLAMA_API_KEY}
-    summarize: {model: gemma4:12b}   # only summarize: tagger and embed are off
+  summarize:                         # the default LLM and its default model
   telegram:
     bot_token: ${TELEGRAM_BOT_TOKEN}
     chat_id: ${TELEGRAM_CHAT_ID}
@@ -85,12 +86,20 @@ TELEGRAM_CHAT_ID=...
 Only plugins with a section under `plugins` are loaded, and only their
 providers, processors and remixers can be used. A plugin's section holds its
 options: the missing ones take the defaults listed below, and unknown or
-invalid ones are rejected with their path (`plugins.llm.summarize.model:
+invalid ones are rejected with their path (`plugins.summarize.max_retries:
 ...`). `enrich` and `remix` run their objects in the order of this section.
 
-`llm` and `grouping` bundle several processors or remixers, each with its
-own subsection. With no subsections, all of them are enabled with their
-defaults; with some, only those are.
+`grouping` bundles several remixers, each with its own subsection. With no
+subsections, all of them are enabled with their defaults; with some, only
+those are.
+
+LLM plugins (`ollama`) provide a language model to the plugins listed after
+them. `summarize`, `tagger` and `embed` take `llm` (the LLM plugin to use;
+default: the first one listed) and `model` (default: that LLM's default
+model). One that cannot get its LLM, because none is loaded or the one it
+names is not, still loads, but `enrich` logs an error for it and processes
+nothing; its items stay pending. Everything else works without an LLM, but
+`grouping` and `telegram` read the tags and summaries those processors write.
 
 Changing a plugin's options never regenerates existing annotations; use
 `enrich --force` for that.
@@ -168,15 +177,23 @@ To support a new site, see
 | Plugin | Processor | Reads | Does |
 | :--- | :--- | :--- | :--- |
 | `markdownify` | `markdownify` | item content | Extracts the article's markdown from HTML items |
-| `llm` | `summarize` | `markdownify.markdown` | Summarizes the article with Ollama |
-| `llm` | `tagger` | `markdownify.markdown` | Extracts entity tags with Ollama |
-| `llm` | `embed` | `tagger.tags`, `markdownify.markdown` | Embeds the tags (`tags_embedding`, plus the embedded `tags_text`) and the markdown (`markdown_embedding`) with Ollama |
+| `summarize` | `summarize` | `markdownify.markdown` | Summarizes the article with an LLM |
+| `tagger` | `tagger` | `markdownify.markdown` | Extracts entity tags with an LLM |
+| `embed` | `embed` | `tagger.tags`, `markdownify.markdown` | Embeds the tags (`tags_embedding`, plus the embedded `tags_text`) and the markdown (`markdown_embedding`) with an LLM |
 
-Every processor takes `max_retries` (default 3). Options of `llm`:
-`api_base` (default `http://localhost:11434`) and `api_key`, shared; then
-per processor, `summarize` and `tagger`: `model` (default `gemma4:12b`);
-`embed`: `model` (default `mxbai-embed-large:latest`) and `inputs`
+Every processor takes `max_retries` (default 3). `summarize`, `tagger` and
+`embed` take `llm` and `model` (see above); `embed` also takes `inputs`
 (default `[tags, markdown]`).
+
+### LLMs
+
+| Plugin | LLM | Does |
+| :--- | :--- | :--- |
+| `ollama` | `ollama` | Prompts and embeddings with an Ollama server |
+
+Options of `ollama`: `api_base` (default `http://localhost:11434`),
+`api_key`, `chat_model` (default `gemma4:12b`) and `embed_model` (default
+`mxbai-embed-large:latest`).
 
 ### Remixers
 
