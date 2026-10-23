@@ -42,7 +42,7 @@ the newest rows lets their ids be reused.
   and `delete`. `--uid` goes away; `--source` stays as a filter.
   `ProcessingScope` takes item ids instead of uids. `inspect` and `delete`
   share the same option decorators and the same `Application` queries
-  (`find_items`, `find_annotations`, `find_artifacts`, `find_deliveries`),
+  (`get_items`, `find_annotations`, `list_artifacts`, `find_deliveries`),
   so `inspect X <args>` lists exactly what `delete X <args>` would delete.
   Filters combine with AND:
 

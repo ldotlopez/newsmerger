@@ -1,6 +1,6 @@
 # newsmerger: specification
 
-Consolidated version · 20 October 2026
+Consolidated version · 23 October 2026
 
 This document defines what newsmerger does, independently of how it is
 implemented. It is self-contained: it is the reference for rebuilding the
@@ -9,7 +9,8 @@ implementation and [decisions/](decisions/) records why it is that way.
 
 ## 1. Purpose and scope
 
-newsmerger is a pipeline for **acquiring, enriching and remixing** content,
+newsmerger is a pipeline for **acquiring, enriching, remixing and
+delivering** content,
 built for news and meant to grow into a personal collector of generic
 information. External tools that consume its results are outside the project
 and reach it only through the `Application` class.
@@ -23,14 +24,16 @@ of this definition.
 | Term | Definition |
 | --- | --- |
 | **Source** | An entry of the `sources` configuration section, with `id`, `name`, `provider` and `url`. Its identity is its `id`. |
-| **Plugin** | A bundle enabled by an entry of the `plugins` configuration section. It provides one or more named providers, processors and remixers. |
+| **Plugin** | A bundle enabled by an entry of the `plugins` configuration section. It provides one or more named providers, processors, remixers and sinks. |
 | **Provider** | Object that knows how to handle one kind of site. One implementation serves every URL with the same structure. |
-| **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. |
+| **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. It also has a numeric id, a local handle to select it that is never reused but changes if the database is rebuilt. |
 | **uid** | The item's identifier within its source, produced by the provider. It must be deterministic and stable across runs; how it is computed is up to the provider. |
 | **Annotation** | Data derived from an item by a processor. Key: `(item, processor, key)`; a processor can emit several keys per item. |
 | **Processor** | Object that produces annotations for one item at a time. |
 | **Remixer** | Object that builds artifacts from many items. |
 | **Artifact** | Aggregated output of a remixer (newsletter, RSS, web page...). Key: `(remixer, name)`. |
+| **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). |
+| **Delivery** | A sink's record of delivering one subject, an item or an artifact. Key: `(sink, subject)`. It records an external fact and is never regenerated. |
 
 ## 3. Configuration
 
@@ -60,10 +63,10 @@ Only plugins with an entry in `plugins` are loaded. Each plugin validates
 its own options and fills in defaults for the missing ones; invalid options
 are a configuration error that names their path (`plugins.<plugin>.<option>`).
 A plugin decides which of its objects its options enable; the built-in
-bundles enable all of them unless the options name some. Provider, processor
-and remixer names are unique per type across the loaded plugins; sources
-refer to providers, and annotations and artifacts to processors and
-remixers, by those names.
+bundles enable all of them unless the options name some. Provider,
+processor, remixer and sink names are unique per type across the loaded
+plugins; sources refer to providers, and annotations, artifacts and
+deliveries to processors, remixers and sinks, by those names.
 
 A source's `id` is part of its items' key, so it must be stable; its `url`
 and `provider` can change without losing items.
@@ -142,25 +145,56 @@ the CLI.
 - With the artifact's `updated_at` and the items' dates, a remixer can be
   incremental without state of its own. A remixer that needs state keeps it
   in an artifact of its own and reads its previous version.
-- **External side effects** (e.g. posting to a chat) are allowed. The
-  remixer must record what it has done in its own state, so a later run does
-  not repeat it.
+- Remixers have **no external side effects**: running one again only
+  rebuilds its artifacts. Acting on the outside world is the sinks' job.
 - **Required artifact that does not exist:** the remixer decides (build
   without it or abort). Cycles between artifacts are the remixers'
   responsibility: each one reads the other's previous version.
+
+### 4.4 Deliver
+
+Sinks deliver items or artifacts and record every delivery. They run after
+remix, so they see freshly built artifacts.
+
+- **Candidates:** the subjects that have no delivery for the sink yet. By
+  default, those of the last `lookback` hours (24; items by publication,
+  artifacts by creation); an explicit date or selection replaces that
+  window. An item sink can depend on a processor, like processors do, and
+  then only queues items that processor finished on their current content.
+- **States:** `queued`, `sending`, `done`, `error`. A delivery is marked
+  `sending` before the external call; one still `sending` when a run starts
+  was interrupted, its outcome is unknown, and it is never retried
+  automatically: it is settled by hand as `done` or `queued`.
+- **Retries:** failures are retried with the processors' backoff and
+  `max_retries` (3 by default). Requeuing gives failures fresh attempts.
+- **Order:** items are delivered first in, first out per source. A failure
+  at the head of a source's queue holds the source back until it is
+  delivered or exhausts its attempts.
+- **Rate limits** are the sink's: it chooses which pending deliveries go now.
+- **Forced delivery** sends explicitly selected subjects now, whatever their
+  state, with no backoff and no rate limit. It needs an explicit selection.
+- A subject is delivered at most once, unless an interrupted delivery is
+  settled as `queued` or a delivery is forced.
+- `deliver` runs every loaded sink, in the order of the YAML; `run` runs the
+  four phases in turn, and a failure in one does not stop the next.
 
 ## 5. API: the `Application` class
 
 The single entry point for external tools: a Python API used in the same
 process, not a network service. It offers:
 
-- **Queries** of items, annotations and artifacts. Querying an artifact that
-  does not exist returns an explicit "does not exist".
-- **Running** each of the three phases (import, enrich, remix).
+- **Queries** of items, annotations, artifacts and deliveries. Querying an
+  artifact that does not exist returns an explicit "does not exist".
+- **Running** each of the four phases (import, enrich, remix, deliver).
 - **Forced regeneration** of annotations, which resets the attempt counter.
 - **Deletion** of annotations, by processor, by item or both. Deleting also
   removes the processing state, so the item becomes pending again with
   attempts at zero.
+- **Deletion** of items and artifacts, with everything that references them
+  (processing state, annotations, deliveries).
+- **Settling** interrupted deliveries as `done` or `queued`.
+- A **write lock**: commands that write take it, so two of them never run
+  at the same time; the second fails at once.
 
 The database is not exposed: every query goes through `Application`.
 
@@ -177,6 +211,10 @@ The database is not exposed: every query goes through `Application`.
   - Annotation: producer, referenced item, key, `created_at` and
     `updated_at`.
   - Artifact: producer, name, content type, `created_at` and `updated_at`.
+- **Deliveries:** in the database, per `(sink, subject)`: status, attempts,
+  last error, the subject's `content_sha256` when delivered, an external
+  reference (e.g. a message id) and timestamps. Deleting the subject deletes
+  its deliveries.
 
 ## 7. Known limitations
 
@@ -189,6 +227,9 @@ The database is not exposed: every query goes through `Application`.
    filters them out.
 5. An item skipped by an upstream processor never reaches the processors
    that depend on it, and those processors keep no record of it.
+6. A deleted item that is still in its source's index comes back on the
+   next import, with a new id. Deleting it with its deliveries lets it be
+   delivered again.
 
 ## 8. Confirmed assumptions
 

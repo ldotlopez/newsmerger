@@ -8,9 +8,9 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 - [x] **1. `AUTOINCREMENT` and `scripts/migrate_autoincrement.py`.**
   `sqlite_autoincrement=True` on every table with an integer id; a
   one-shot script recreates the existing tables with it, keeping rows and
-  ids, with a test on a copy of a populated database. Run it on
-  `~/.local/share/newsmerger/data.db` only after asking, once everything is
-  implemented.
+  ids, with a test on a copy of a populated database. Run on
+  `~/.local/share/newsmerger/data.db` on 2026-10-23 (backup at
+  `data.db.bak-20261023`); it had no `telegram/state` to migrate.
 - [x] **2. Ids in the DTOs.** `id: int | None` on `SourceItem` and
   `Artifact`; an `Annotation` DTO (`id`, item id, `processor`, `key`,
   `updated_at`, `value`).
@@ -25,7 +25,7 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 - [x] **5. `inspect items|annotations|artifacts`** with `--format
   table|json`; remove `items`, `annotations`, `artifacts` and `artifact`.
   Tests for id parsing, JSON output and missing ids.
-- [ ] **Docs, when done:** propose the `README.md` (usage) and
+- [x] **Docs, when done:** propose the `README.md` (usage) and
   `ARCHITECTURE.md` (`cli.py`, `models.py`) updates.
 
 ## Sinks and the delivery ledger (decision 0007)
@@ -56,7 +56,7 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
   `deliver telegram`.
 - [x] **4. Dated `digest` names** (`<source>/<since>_<until>`) **and the
   `telegram_artifacts` sink** (`sendDocument`, option `artifacts`).
-- [ ] **Docs, when done:** propose the `ARCHITECTURE.md`, `README.md` and
+- [x] **Docs, when done:** propose the `ARCHITECTURE.md`, `README.md` and
   `SPECIFICATION.md` updates.
 
 - [x] **5. `delete items|annotations|artifacts`** (decision 0008), with the
