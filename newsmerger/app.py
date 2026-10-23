@@ -114,26 +114,9 @@ class Application:
             self._lock_file = None
 
     def lock(self) -> None:
-        """Take the exclusive write lock, a file next to the database, until
-        `close()`. Raise `LockedError` at once if another process holds it.
-        In-memory databases are private to their process and need none.
-
-        Every command that writes takes it, so writers never overlap.
-        """
-        url = make_url(self.config.db.uri)
-        if url.get_backend_name() != "sqlite" or url.database in (None, "", ":memory:"):
-            return
-        lock_path = Path(f"{url.database}.lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = lock_path.open("a")
-        try:
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            lock_file.close()
-            raise LockedError(
-                f"another newsmerger command is using the database ({lock_path})"
-            ) from None
-        self._lock_file = lock_file
+        """Take the write lock (see `write_lock`) until `close()`. Every
+        command that writes takes it, so writers never overlap."""
+        self._lock_file = write_lock(self.config.db.uri)
 
     @property
     def sources(self) -> list[SourceData]:
@@ -345,6 +328,28 @@ class Application:
         Returns the number of annotations deleted.
         """
         return self._db.delete_annotations(processor=processor, item=item)
+
+
+def write_lock(database_url: str) -> IO[str] | None:
+    """Take the exclusive write lock, a file next to the database, held
+    until the returned file is closed. Raise `LockedError` at once if another
+    process holds it. In-memory databases are private to their process and
+    need none (None).
+    """
+    url = make_url(database_url)
+    if url.get_backend_name() != "sqlite" or url.database in (None, "", ":memory:"):
+        return None
+    lock_path = Path(f"{url.database}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        raise LockedError(
+            f"another newsmerger command is using the database ({lock_path})"
+        ) from None
+    return lock_file
 
 
 def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:

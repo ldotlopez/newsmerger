@@ -51,11 +51,11 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
   `--requeue`, `--force` (requires `--item` or `--artifact`) and the scope
   options; `inspect deliveries` and `deliveries resolve`; `run` (all four phases, non-zero
   exit on failures); the exclusive lock file for writing commands.
-- [ ] **3. `telegram` item sink and `scripts/migrate_telegram_state.py`**
+- [x] **3. `telegram` item sink and `scripts/migrate_telegram_state.py`**
   (`posted` → `done` rows with `message_id`, `queue` → `queued` rows;
   `watermark` and `last_post` dropped). Run it before the first
   `deliver telegram`.
-- [ ] **4. Dated `digest` names** (`<source>/<since>_<until>`) **and the
+- [x] **4. Dated `digest` names** (`<source>/<since>_<until>`) **and the
   `telegram_artifacts` sink** (`sendDocument`, option `artifacts`).
 - [ ] **Docs, when done:** propose the `ARCHITECTURE.md`, `README.md` and
   `SPECIFICATION.md` updates.

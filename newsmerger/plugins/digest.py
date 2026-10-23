@@ -42,8 +42,10 @@ class Options(PluginOptions):
 
 class DigestRemixer(BaseRemixer):
     """Writes a markdown digest of each source in scope from the markdown of
-    its newest items of the last `days`; one artifact per source, named by
-    the source id. Items without `markdownify.markdown` are left out."""
+    its newest items of the last `days`; one artifact per source, named
+    `<source id>/<since>_<until>` (YYYY-MM-DD), so each period is a new
+    artifact and rebuilding one overwrites it. Items without
+    `markdownify.markdown` are left out."""
 
     name = "digest"
 
@@ -79,7 +81,8 @@ class DigestRemixer(BaseRemixer):
                 for item in reversed(source_items[: self.max_items])
             ]
             digest = self._write(source_items[0].source, articles, since, until)
-            yield source_id, digest, "text/markdown"
+            name = f"{source_id}/{since:%Y-%m-%d}_{until:%Y-%m-%d}"
+            yield name, digest, "text/markdown"
 
     def _write(
         self,

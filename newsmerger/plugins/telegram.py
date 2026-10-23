@@ -1,32 +1,28 @@
-"""Posts summarized items (title, summary and link) to a Telegram chat, at
-most one per source every `interval` minutes.
+"""Two sinks sharing one Telegram bot and chat (decision 0007):
 
-Each source has a FIFO queue. On every run, summarized items that are not
-queued or posted yet join their source's queue, oldest first, and the head of
-each queue is posted if its source's last post is at least `interval` minutes
-old. By default only items published since the remixer's first run are
-queued; a scope with `since` or `item_ids` queues the items it selects instead.
-An item is never posted twice; one that fails to post stays queued.
+- `telegram` posts summarized items (title, summary and link), oldest first,
+  at most one per source every `interval` minutes.
+- `telegram_artifacts` sends every artifact of the remixers listed in
+  `artifacts` (e.g. `[digest]`) as a document.
 
-Produces one artifact named "state" (JSON): the first run's time
-(`watermark`), the queue, the posted items with their message ids and the
-time of each source's last post.
+Each has an optional subsection of options. With none, both are enabled with
+their defaults; with some, only those. What was delivered is in the ledger
+(`inspect deliveries`), so nothing is ever posted twice unless forced.
 """
 
-import dataclasses
 import html
-import json
 import logging
-from collections.abc import Iterator
+import mimetypes
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pydantic
 import requests
 from pydantic import SecretStr
 
 from ..db import Database
-from ..models import ProcessingScope, SourceItem
-from ..remixers import BaseRemixer, Remixer
+from ..models import Artifact, Delivery, SourceItem
+from ..sinks import BaseArtifactSink, BaseItemSink, Sink
 from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
@@ -58,104 +54,46 @@ def build_caption(title: str, summary: str, uri: str) -> str:
     return heading + escaped_summary + footer
 
 
+class ItemSinkOptions(PluginOptions):
+    interval: int = 30  # minutes between posts of the same source
+    max_retries: int = 3
+    lookback: int = 24  # hours: the candidates without --since or --item
+
+
+class ArtifactSinkOptions(PluginOptions):
+    # Remixers whose artifacts are sent.
+    artifacts: list[str] = pydantic.Field(default_factory=list)
+    max_retries: int = 3
+    lookback: int = 24  # hours: the candidates without --since or --artifact
+
+
 class Options(PluginOptions):
     bot_token: SecretStr
     chat_id: str
-    interval: int = 30  # minutes between posts of the same source
+    telegram: ItemSinkOptions = ItemSinkOptions()
+    telegram_artifacts: ArtifactSinkOptions = ArtifactSinkOptions()
+
+    @pydantic.field_validator("telegram", "telegram_artifacts", mode="before")
+    @classmethod
+    def empty_section_takes_defaults(cls, value: Any) -> Any:
+        return {} if value is None else value
 
 
-class TelegramRemixer(BaseRemixer):
-    name = "telegram"
+class TelegramClient:
+    """Bot API calls to one chat."""
 
-    def __init__(self, cfg: Options) -> None:
-        self.bot_token = cfg.bot_token
-        self.chat_id = cfg.chat_id
-        self.interval = timedelta(minutes=cfg.interval)
+    def __init__(self, bot_token: SecretStr, chat_id: str) -> None:
+        self.bot_token = bot_token
+        self.chat_id = chat_id
 
-    def produce(
-        self, db: Database, scope: ProcessingScope
-    ) -> Iterator[tuple[str, str, str]]:
-        now = datetime.now(UTC)
-        state = self._load_state(db, now)
-        self._enqueue(db, state, scope)
-        self._post_due(db, state, now)
-        yield "state", json.dumps(state, indent=2), "application/json"
-
-    def _load_state(self, db: Database, now: datetime) -> dict[str, Any]:
-        artifact = db.get_artifact(self.name, "state")
-        if artifact is None or artifact.content is None:
-            return {
-                "watermark": now.isoformat(),
-                "queue": [],
-                "posted": [],
-                "last_post": {},
-            }
-        return json.loads(artifact.content)
-
-    def _enqueue(
-        self, db: Database, state: dict[str, Any], scope: ProcessingScope
-    ) -> None:
-        if scope.since is None and scope.item_ids is None:
-            watermark = datetime.fromisoformat(state["watermark"])
-            scope = dataclasses.replace(scope, since=watermark)
-
-        known = {(source_id, uid) for source_id, uid in state["queue"]}
-        known |= {(source_id, uid) for source_id, uid, _ in state["posted"]}
-        items = [item for item in db.get_items(scope) if item.key not in known]
-        summaries = db.get_annotation_values(
-            items, processor="summarize", key="summary"
-        )
-        state["queue"].extend(list(item.key) for item in items if item.key in summaries)
-
-    def _post_due(self, db: Database, state: dict[str, Any], now: datetime) -> None:
-        for source_id in dict.fromkeys(source_id for source_id, _ in state["queue"]):
-            last_post = state["last_post"].get(source_id)
-            if last_post and now - datetime.fromisoformat(last_post) < self.interval:
-                continue
-
-            uid = next(uid for queued, uid in state["queue"] if queued == source_id)
-            (item,) = (
-                item
-                for item in db.get_items(ProcessingScope(source=source_id))
-                if item.uid == uid
-            )
-            try:
-                message_id = self._post(db, item)
-            except TelegramError as e:
-                LOGGER.warning(f"{self.name}: could not post {source_id}/{uid}: {e}")
-                continue
-
-            state["queue"].remove([source_id, uid])
-            state["posted"].append([source_id, uid, message_id])
-            state["last_post"][source_id] = now.isoformat()
-
-    def _post(self, db: Database, item: SourceItem) -> int:
-        summaries = db.get_annotation_values(
-            [item], processor="summarize", key="summary"
-        )
-        caption = build_caption(item.title, str(summaries[item.key]), item.uri)
-        image = item.data.get("image")
-        if isinstance(image, str) and image.strip():
-            endpoint = "sendPhoto"
-            payload = {
-                "chat_id": self.chat_id,
-                "photo": image,
-                "caption": caption,
-                "parse_mode": "HTML",
-            }
-        else:
-            endpoint = "sendMessage"
-            payload = {
-                "chat_id": self.chat_id,
-                "text": caption,
-                "parse_mode": "HTML",
-            }
-
+    def post(self, method: str, **request: Any) -> int:
+        """Call `method` with `requests.post` keyword arguments; return the
+        id of the message sent."""
         try:
             response = requests.post(
-                f"https://api.telegram.org/bot{self.bot_token.get_secret_value()}/{endpoint}",
-                json=payload,
+                f"https://api.telegram.org/bot{self.bot_token.get_secret_value()}/{method}",
                 timeout=30,
+                **request,
             )
             result = response.json()
         except requests.RequestException as e:
@@ -163,10 +101,103 @@ class TelegramRemixer(BaseRemixer):
             raise TelegramError(type(e).__name__) from None
         if not result.get("ok"):
             raise TelegramError(result.get("description", str(result)))
-
         return result["result"]["message_id"]
 
 
+class TelegramSink(BaseItemSink):
+    name = "telegram"
+    requires = "summarize"
+
+    def __init__(self, client: TelegramClient, cfg: ItemSinkOptions) -> None:
+        super().__init__(max_retries=cfg.max_retries, lookback=cfg.lookback)
+        self.client = client
+        self.interval = timedelta(minutes=cfg.interval)
+
+    def select(
+        self, db: Database, pending: list[tuple[Delivery, SourceItem]], now: datetime
+    ) -> list[tuple[Delivery, SourceItem]]:
+        """The head of each source's queue, once it is due and the source's
+        last delivery is `interval` old."""
+        last_delivery = db.last_delivery_by_source(self.name)
+        heads: dict[str, tuple[Delivery, SourceItem]] = {}
+        for delivery, item in pending:
+            heads.setdefault(item.source.id, (delivery, item))
+        never = datetime.min.replace(tzinfo=UTC)
+        return [
+            (delivery, item)
+            for source_id, (delivery, item) in heads.items()
+            if self.is_due(delivery, now)
+            and now - last_delivery.get(source_id, never) >= self.interval
+        ]
+
+    def send(self, db: Database, subject: SourceItem) -> dict[str, int]:
+        summaries = db.get_annotation_values(
+            [subject], processor="summarize", key="summary"
+        )
+        caption = build_caption(subject.title, str(summaries[subject.key]), subject.uri)
+        image = subject.data.get("image")
+        if isinstance(image, str) and image.strip():
+            payload = {
+                "chat_id": self.client.chat_id,
+                "photo": image,
+                "caption": caption,
+                "parse_mode": "HTML",
+            }
+            message_id = self.client.post("sendPhoto", json=payload)
+        else:
+            payload = {
+                "chat_id": self.client.chat_id,
+                "text": caption,
+                "parse_mode": "HTML",
+            }
+            message_id = self.client.post("sendMessage", json=payload)
+        return {"message_id": message_id}
+
+
+class TelegramArtifactSink(BaseArtifactSink):
+    """Sends artifacts as documents, which avoids the 4096-character limit
+    of messages."""
+
+    name = "telegram_artifacts"
+
+    def __init__(self, client: TelegramClient, cfg: ArtifactSinkOptions) -> None:
+        super().__init__(
+            cfg.artifacts, max_retries=cfg.max_retries, lookback=cfg.lookback
+        )
+        self.client = client
+
+    def send(self, db: Database, subject: Artifact) -> dict[str, int]:
+        artifact = db.get_artifact(subject.remixer, subject.name)
+        if artifact is None or artifact.content is None:
+            raise LookupError(f"artifact {subject.remixer}/{subject.name} is gone")
+        extension = mimetypes.guess_extension(artifact.content_type) or ".txt"
+        filename = f"{artifact.remixer}-{artifact.name.replace('/', '_')}{extension}"
+        message_id = self.client.post(
+            "sendDocument",
+            data={
+                "chat_id": self.client.chat_id,
+                "caption": f"{artifact.remixer}/{artifact.name}",
+            },
+            files={
+                "document": (
+                    filename,
+                    artifact.content.encode(),
+                    artifact.content_type,
+                )
+            },
+        )
+        return {"message_id": message_id}
+
+
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    remixer = TelegramRemixer(Options.model_validate(options))
-    return [(remixer.name, Remixer, remixer)]
+    cfg = Options.model_validate(options)
+    client = TelegramClient(cfg.bot_token, cfg.chat_id)
+    builders = {
+        "telegram": lambda: TelegramSink(client, cfg.telegram),
+        "telegram_artifacts": lambda: TelegramArtifactSink(
+            client, cfg.telegram_artifacts
+        ),
+    }
+    enabled = [name for name in options if name in builders] or list(builders)
+    sinks = [builders[name]() for name in enabled]
+    return [(sink.name, Sink, sink) for sink in sinks]

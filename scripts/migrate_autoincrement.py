@@ -3,8 +3,8 @@
 (decision 0008), keeping every row and id. Runs once; tables that already
 have it are left alone, so running it again does nothing.
 
-Back the database up first, and run it while no other newsmerger command
-uses the database.
+Back the database up first. It takes the write lock, so it fails at once
+if another newsmerger command is using the database.
 
 Usage:
     python scripts/migrate_autoincrement.py -c config.yaml
@@ -20,6 +20,7 @@ from sqlalchemy import MetaData, Table, make_url
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.schema import CreateIndex, CreateTable
 
+from newsmerger.app import LockedError, write_lock
 from newsmerger.config import Config
 from newsmerger.db import Base
 
@@ -102,7 +103,15 @@ def main(config_path: Path | None) -> None:
     if not db_path.exists():
         raise click.ClickException(f"database not found: {db_path}")
 
-    migrated = migrate(db_path)
+    try:
+        lock = write_lock(config.db.uri)
+    except LockedError as e:
+        raise click.ClickException(str(e)) from e
+    try:
+        migrated = migrate(db_path)
+    finally:
+        if lock is not None:
+            lock.close()
     click.echo(f"Migrated {', '.join(migrated)}" if migrated else "Nothing to migrate")
 
 
