@@ -6,8 +6,14 @@ from unittest.mock import Mock
 
 import pydantic
 
-from newsmerger.models import SourceItemData
+from newsmerger.models import SourceData, SourceItemData
 from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
+from newsmerger.plugins.telegram_channel import (
+    TelegramChannelProvider,
+    parse_article,
+    parse_preview,
+    preview_url,
+)
 
 
 def read_sample(name: str) -> bytes:
@@ -170,6 +176,81 @@ class TestPrensaIberica(unittest.TestCase):
             item.uid,
             "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8",
         )
+
+
+ARTICLE = b"""<!DOCTYPE html><html><head>
+<meta property="og:url" content="https://example.test/news/a.html">
+<meta property="og:title" content="A title">
+</head><body><article><p>Body</p></article></body></html>"""
+
+
+class TestTelegramChannel(unittest.TestCase):
+    PAGE_URL = "https://t.me/s/mediterraneoelperiodico"
+
+    def source(self, url: str = "https://t.me/mediterraneoelperiodico") -> SourceData:
+        return SourceData(id="tg", name="tg", url=url, provider="telegram_channel")
+
+    def test_preview_url_accepts_channel_and_preview_urls(self) -> None:
+        self.assertEqual(preview_url(self.source()), self.PAGE_URL)
+        self.assertEqual(preview_url(self.source(self.PAGE_URL + "/")), self.PAGE_URL)
+        with self.assertRaises(ValueError):
+            preview_url(self.source("https://t.me/"))
+
+    def test_parse_preview(self) -> None:
+        content = read_sample("telegram-channel-mediterraneoelperiodico.html")
+        posts, older = parse_preview(content, self.PAGE_URL)
+
+        self.assertEqual(len(posts), 20)
+        self.assertEqual(older, self.PAGE_URL + "?before=5154")
+        first = posts[0]
+        self.assertEqual(first.id, "mediterraneoelperiodico/5154")
+        self.assertEqual(first.links, ["https://mrf.lu/2vjWp"])
+        self.assertEqual(
+            first.published_at,
+            datetime.datetime(2026, 10, 22, 7, 34, 7, tzinfo=datetime.UTC),
+        )
+        self.assertTrue(first.text.startswith("Amenaza con un machete"))
+        for post in posts:
+            self.assertFalse(any("t.me/" in link for link in post.links))
+
+    def test_parse_article_uses_canonical_url(self) -> None:
+        item = parse_article(ARTICLE)
+        self.assertEqual(item.uri, "https://example.test/news/a.html")
+        self.assertEqual(item.title, "A title")
+        self.assertEqual(item.mimetype, "text/html")
+
+    def test_parse_article_rejects_non_articles(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_article(b"%PDF-1.7 \xff\xfe")
+        with self.assertRaises(ValueError):
+            parse_article(b"<html><head><title>406</title></head></html>")
+
+    def test_retrieve_items_one_item_per_link_and_skips_bad_pages(self) -> None:
+        pages = {
+            self.PAGE_URL: read_sample("telegram-channel-mediterraneoelperiodico.html"),
+            "https://mrf.lu/2vjWp": ARTICLE,
+        }
+        fetcher = Mock()
+        fetcher.get.side_effect = lambda url: pages.get(url, b"not html")
+
+        with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
+            items = list(
+                TelegramChannelProvider(pages=1).retrieve_items(self.source(), fetcher)
+            )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].data["telegram_post"], "mediterraneoelperiodico/5154")
+        self.assertEqual(items[0].published_at.hour, 7)
+        # One preview page plus one fetch per linked article.
+        self.assertEqual(fetcher.get.call_count, 21)
+
+    def test_retrieve_items_rejects_non_public_channels(self) -> None:
+        fetcher = Mock()
+        fetcher.get.return_value = b"<html><head></head><body></body></html>"
+        with self.assertRaises(ValueError):
+            list(
+                TelegramChannelProvider(pages=1).retrieve_items(self.source(), fetcher)
+            )
 
 
 class TestSourceItemDataContent(unittest.TestCase):
