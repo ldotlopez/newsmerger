@@ -35,14 +35,14 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Global logging and output options come from `foundation.clilib` and `foundation.loglib`. |
 | `config.py` | Pydantic models for `config.yaml` (sources, plugins, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope`. |
-| `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
+| `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
 | `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
 | `remixers.py` | The `Remixer` protocol, `BaseRemixer` and `UnavailableRemixer`. |
 | `sinks.py` | The `Sink` protocol, `BaseItemSink`, `BaseArtifactSink`, `UnavailableSink` and `SelectionRequiredError`. |
 | `llms.py` | The `LLM` protocol, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
-| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram` (the `telegram` and `telegram_artifacts` sinks). `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
+| `plugins/` | The plugin bundles: one module per site provider (`telegram_channel` included), `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram` (the `telegram` and `telegram_artifacts` sinks). `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
 | `scripts/` | Standalone tools: the URL pipeline, built on `Application`, and the one-shot migrations `migrate_autoincrement.py` and `migrate_telegram_state.py`. |
 
 ## Plugins
