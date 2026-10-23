@@ -21,6 +21,7 @@ from foundation.clilib import (
 )
 from foundation.loglib import setup_logger_from_click
 from foundation.plugin import PluginError
+from foundation.storage import EntryNotFoundError
 from rich.progress import track
 from rich.syntax import Syntax
 from rich.table import Table
@@ -35,7 +36,7 @@ from .db import (
     ITEM_SORTS,
     DeliveryStatus,
 )
-from .models import ProcessingScope
+from .models import ProcessingScope, SourceItem
 from .processors import RunSummary
 from .sinks import SelectionRequiredError
 
@@ -83,7 +84,7 @@ def print_table(title: str, headers: list[str], rows: list[list[Any]]) -> None:
 
     table = Table(title=title)
     for header in headers:
-        table.add_column(header)
+        table.add_column(header, overflow="fold")  # ids and URIs stay whole
     for row in rows:
         table.add_row(*(str(cell) for cell in row))
     get_stdout_console().print(table)
@@ -514,6 +515,31 @@ def inspect_group() -> None:
     """Show what is stored (read-only)."""
 
 
+def print_item(item: SourceItem, annotations: list[tuple[int, str, str]]) -> None:
+    """One item as field/value rows, one row per annotation."""
+    dates = (item.published_at, item.modified_at)
+    published, modified = (f"{d:%Y-%m-%d %H:%M}" if d else "" for d in dates)
+    print_table(
+        f"Item {item.id}",
+        ["Field", "Value"],
+        [
+            ["Source", item.source.id],
+            ["UID", item.uid],
+            ["Title", item.title],
+            ["URI", item.uri],
+            ["Published", published],
+            ["Modified", modified],
+            ["Mimetype", item.mimetype],
+            ["Content", f"inspect content --sha256 {item.content_sha256}"],
+            ["Data", format_value(item.data)],
+            *(
+                [f"Annotation #{annotation_id}", f"{processor}.{key}"]
+                for annotation_id, processor, key in annotations
+            ),
+        ],
+    )
+
+
 @inspect_group.command("items")
 @scope_options
 @sort_option(ITEM_SORTS)
@@ -523,7 +549,10 @@ def inspect_group() -> None:
 def inspect_items_cmd(
     ctx: click.Context, scope: ProcessingScope, sort: str, output_format: str
 ) -> None:
-    """Items in scope, with the ids and keys of their annotations."""
+    """Items in scope, with the ids and keys of their annotations.
+
+    One --item in table format shows all its fields, one row per annotation.
+    """
     app = app_from_context(ctx)
     items = app.get_items(scope, sort=sort)
     if scope.limit is None:  # with a limit, a requested item may just be cut off
@@ -554,6 +583,10 @@ def inspect_items_cmd(
                 for item in items
             ]
         )
+        return
+
+    if len(scope.item_ids or ()) == 1 and items:
+        print_item(items[0], annotations.get(items[0].id, []))
         return
 
     print_table(
@@ -702,6 +735,19 @@ def inspect_artifacts_cmd(
                 for a in artifacts
             ],
         )
+
+
+@inspect_group.command("content")
+@click.option("--sha256", required=True, help="The content's sha256")
+@click.pass_context
+@report_user_errors
+def inspect_content_cmd(ctx: click.Context, sha256: str) -> None:
+    """Stored content (of an item, annotation or artifact) as is, to stdout."""
+    try:
+        content = app_from_context(ctx).get_stored_content(sha256)
+    except EntryNotFoundError as e:
+        raise click.ClickException(f"no content {sha256}") from e
+    click.echo(content, nl=False)
 
 
 @inspect_group.command("deliveries")

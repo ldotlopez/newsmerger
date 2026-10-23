@@ -257,6 +257,9 @@ class Application:
     def get_content(self, item: SourceItem) -> bytes:
         return self._db.get_content(item)
 
+    def get_stored_content(self, sha256: str) -> bytes:
+        return self._db.get_stored_content(sha256)
+
     def get_annotations(
         self,
         item: SourceItem,
