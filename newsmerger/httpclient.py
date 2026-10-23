@@ -29,13 +29,13 @@ class HTTPClient:
         self.session = requests.Session()
         self.session.headers.update(headers)
 
-    def get(self, url: str, *, cache: bool = True) -> bytes:
-        return self.fetch("GET", url, cache=cache)
+    def get(self, url: str, *, use_cache: bool = True) -> bytes:
+        return self.fetch("GET", url, use_cache=use_cache)
 
     def fetch(
-        self, method: str, url: str, *args, cache: bool = True, **kwargs
+        self, method: str, url: str, *args, use_cache: bool = True, **kwargs
     ) -> bytes:
-        is_cacheable = cache and method.upper() == "GET"
+        is_cacheable = use_cache and method.upper() == "GET"
 
         if is_cacheable:
             try:

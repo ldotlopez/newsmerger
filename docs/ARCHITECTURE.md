@@ -35,7 +35,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Global logging and output options come from `foundation.clilib` and `foundation.loglib`. |
 | `config.py` | Pydantic models for `config.yaml` (sources, plugins, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope`. |
-| `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, cache=False)` skips. |
+| `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
 | `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |

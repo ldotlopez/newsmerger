@@ -231,7 +231,9 @@ class TestTelegramChannel(unittest.TestCase):
             "https://mrf.lu/2vjWp": ARTICLE,
         }
         fetcher = Mock()
-        fetcher.get.side_effect = lambda url, cache=True: pages.get(url, b"not html")
+        fetcher.get.side_effect = lambda url, use_cache=True: pages.get(
+            url, b"not html"
+        )
 
         with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
             items = list(
@@ -243,7 +245,7 @@ class TestTelegramChannel(unittest.TestCase):
         self.assertEqual(items[0].published_at.hour, 7)
         # One uncached preview page plus one cached fetch per linked article.
         self.assertEqual(fetcher.get.call_count, 21)
-        self.assertEqual(fetcher.get.call_args_list[0].kwargs, {"cache": False})
+        self.assertEqual(fetcher.get.call_args_list[0].kwargs, {"use_cache": False})
         self.assertEqual(fetcher.get.call_args_list[1].kwargs, {})
 
     def test_retrieve_items_rejects_non_public_channels(self) -> None:
