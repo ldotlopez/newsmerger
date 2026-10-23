@@ -106,6 +106,25 @@ class Artifact:
 
 
 @dataclasses.dataclass(slots=True)
+class Delivery:
+    """A sink's record of delivering one subject, an item or an artifact
+    (decision 0007). `status` is a `db.DeliveryStatus`."""
+
+    sink: str
+    status: str
+    item_id: int | None = None
+    artifact_id: int | None = None
+    attempts: int = 0
+    last_error: str | None = None
+    content_sha256: str | None = None  # the subject's content when delivered
+    external_ref: JsonCompatible = None  # e.g. {"message_id": ...}
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    artifact_name: str | None = None  # "<remixer>/<name>", read back only
+    id: int | None = None
+
+
+@dataclasses.dataclass(slots=True)
 class Annotation:
     """One key a processor stored for an item, with its value."""
 

@@ -48,6 +48,7 @@ from sqlalchemy.types import TypeDecorator
 from .models import (
     Annotation,
     Artifact,
+    Delivery,
     ItemKey,
     ProcessingScope,
     SourceData,
@@ -335,6 +336,100 @@ class DBArtifact(Base):
         self.updated_at = dto.updated_at
 
 
+class DeliveryStatus(enum.StrEnum):
+    QUEUED = "queued"
+    SENDING = "sending"  # committed before the external call
+    DONE = "done"
+    ERROR = "error"
+
+
+class DBDelivery(Base):
+    """The delivery ledger: one row per (sink, subject), the record of an
+    external fact, never regenerated (decision 0007)."""
+
+    __tablename__ = "deliveries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sink: Mapped[str] = mapped_column(String(255))
+    source_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_items.id", ondelete="CASCADE"), nullable=True
+    )
+    artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(50))
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_ref: Mapped[Any] = mapped_column(CustomJSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    artifact: Mapped[DBArtifact | None] = relationship()
+
+    __table_args__ = (
+        CheckConstraint(
+            "(source_item_id IS NULL) != (artifact_id IS NULL)",
+            name="ck_deliveries_one_subject",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'sending', 'done', 'error')",
+            name="ck_deliveries_status",
+        ),
+        UniqueConstraint("sink", "source_item_id"),
+        UniqueConstraint("sink", "artifact_id"),
+        Index("ix_deliveries_sink_status", "sink", "status"),
+        AUTOINCREMENT,
+    )
+
+    @classmethod
+    def from_dto(cls, dto: Delivery) -> Self:
+        return cls(
+            sink=dto.sink,
+            source_item_id=dto.item_id,
+            artifact_id=dto.artifact_id,
+            status=dto.status,
+            attempts=dto.attempts,
+            last_error=dto.last_error,
+            content_sha256=dto.content_sha256,
+            external_ref=dto.external_ref,
+            created_at=dto.created_at,
+            updated_at=dto.updated_at,
+        )
+
+    def to_dto(self) -> Delivery:
+        return Delivery(
+            sink=self.sink,
+            status=self.status,
+            item_id=self.source_item_id,
+            artifact_id=self.artifact_id,
+            attempts=self.attempts,
+            last_error=self.last_error,
+            content_sha256=self.content_sha256,
+            external_ref=self.external_ref,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            artifact_name=(
+                f"{self.artifact.remixer}/{self.artifact.name}"
+                if self.artifact is not None
+                else None
+            ),
+            id=self.id,
+        )
+
+    def update(self, dto: Delivery) -> None:
+        self.sink = dto.sink
+        self.source_item_id = dto.item_id
+        self.artifact_id = dto.artifact_id
+        self.status = dto.status
+        self.attempts = dto.attempts
+        self.last_error = dto.last_error
+        self.content_sha256 = dto.content_sha256
+        self.external_ref = dto.external_ref
+        self.created_at = dto.created_at
+        self.updated_at = dto.updated_at
+
+
 def _encode_value(value: Any) -> tuple[str, bytes]:
     """An annotation value as stored: its JSON bytes and their sha256."""
     encoded = dump_json_compatible(value).encode()
@@ -591,14 +686,7 @@ class Database:
                 & (DBProcessingState.processor == processor),
             )
             if requires is not None:
-                upstream = aliased(DBProcessingState)
-                query = query.join(
-                    upstream,
-                    (upstream.source_item_id == DBSourceItem.id)
-                    & (upstream.processor == requires)
-                    & (upstream.status == ProcessingStatus.DONE)
-                    & (upstream.content_sha256 == DBSourceItem.content_sha256),
-                )
+                query = self._join_finished(query, requires)
             query = self._apply_scope(query, scope).order_by(DBSourceItem.published_at)
 
             result = []
@@ -611,6 +699,18 @@ class Database:
                 if scope.limit and len(result) >= scope.limit:
                     break
             return result
+
+    @staticmethod
+    def _join_finished(query: Query, processor: str) -> Query:
+        """Keep the items `processor` finished on their current content."""
+        upstream = aliased(DBProcessingState)
+        return query.join(
+            upstream,
+            (upstream.source_item_id == DBSourceItem.id)
+            & (upstream.processor == processor)
+            & (upstream.status == ProcessingStatus.DONE)
+            & (upstream.content_sha256 == DBSourceItem.content_sha256),
+        )
 
     @staticmethod
     def _is_eligible(
@@ -981,3 +1081,186 @@ class Database:
             if limit:
                 query = query.limit(limit)
             return [db_artifact.to_dto() for db_artifact in query]
+
+    # --- Deliveries --------------------------------------------------------
+
+    def queue_item_deliveries(
+        self, sink: str, scope: ProcessingScope, *, requires: str | None = None
+    ) -> int:
+        """Queue the items in scope that have no row for `sink`; return how
+        many. With `requires`, only items that processor finished on their
+        current content."""
+        now = datetime.now(UTC)
+        with self.session_scope() as sess:
+            recorded = sess.query(DBDelivery.source_item_id).filter(
+                DBDelivery.sink == sink, DBDelivery.source_item_id.is_not(None)
+            )
+            query = sess.query(DBSourceItem.id).filter(DBSourceItem.id.not_in(recorded))
+            if requires is not None:
+                query = self._join_finished(query, requires)
+            query = self._apply_scope(query, scope).order_by(DBSourceItem.published_at)
+            if scope.limit:
+                query = query.limit(scope.limit)
+            item_ids = [item_id for (item_id,) in query]
+            sess.add_all(
+                DBDelivery.from_dto(
+                    Delivery(
+                        sink=sink,
+                        status=DeliveryStatus.QUEUED,
+                        item_id=item_id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                for item_id in item_ids
+            )
+        return len(item_ids)
+
+    def queue_artifact_deliveries(
+        self,
+        sink: str,
+        remixers: Iterable[str],
+        *,
+        since: datetime | None = None,
+        names: Iterable[tuple[str, str]] | None = None,
+    ) -> int:
+        """Queue the artifacts of `remixers` that have no row for `sink`,
+        created since `since` and named in `names` when given; return how
+        many."""
+        now = datetime.now(UTC)
+        with self.session_scope() as sess:
+            recorded = sess.query(DBDelivery.artifact_id).filter(
+                DBDelivery.sink == sink, DBDelivery.artifact_id.is_not(None)
+            )
+            query = sess.query(DBArtifact.id).filter(
+                DBArtifact.remixer.in_(list(remixers)),
+                DBArtifact.id.not_in(recorded),
+            )
+            if since is not None:
+                query = query.filter(DBArtifact.created_at >= since)
+            if names is not None:
+                query = query.filter(
+                    tuple_(DBArtifact.remixer, DBArtifact.name).in_(list(names))
+                )
+            artifact_ids = [artifact_id for (artifact_id,) in query]
+            sess.add_all(
+                DBDelivery.from_dto(
+                    Delivery(
+                        sink=sink,
+                        status=DeliveryStatus.QUEUED,
+                        artifact_id=artifact_id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                for artifact_id in artifact_ids
+            )
+        return len(artifact_ids)
+
+    def get_item_deliveries(
+        self,
+        sink: str,
+        scope: ProcessingScope | None = None,
+        *,
+        statuses: Iterable[DeliveryStatus] | None = None,
+    ) -> list[tuple[Delivery, SourceItem]]:
+        """The sink's rows for items in scope, with their items, oldest item
+        first (the FIFO order)."""
+        scope = scope or ProcessingScope()
+        with self.session_scope() as sess:
+            query = (
+                sess.query(DBDelivery, DBSourceItem)
+                .join(DBSourceItem, DBDelivery.source_item_id == DBSourceItem.id)
+                .filter(DBDelivery.sink == sink)
+            )
+            if statuses is not None:
+                query = query.filter(DBDelivery.status.in_(list(statuses)))
+            query = self._apply_scope(query, scope).order_by(
+                DBSourceItem.published_at, DBSourceItem.id
+            )
+            return [(row.to_dto(), db_item.to_dto()) for row, db_item in query]
+
+    def get_artifact_deliveries(
+        self,
+        sink: str,
+        *,
+        statuses: Iterable[DeliveryStatus] | None = None,
+        names: Iterable[tuple[str, str]] | None = None,
+    ) -> list[tuple[Delivery, Artifact]]:
+        """The sink's rows for artifacts, with their metadata (no content),
+        oldest artifact first."""
+        with self.session_scope() as sess:
+            query = (
+                sess.query(DBDelivery, DBArtifact)
+                .join(DBArtifact, DBDelivery.artifact_id == DBArtifact.id)
+                .filter(DBDelivery.sink == sink)
+            )
+            if statuses is not None:
+                query = query.filter(DBDelivery.status.in_(list(statuses)))
+            if names is not None:
+                query = query.filter(
+                    tuple_(DBArtifact.remixer, DBArtifact.name).in_(list(names))
+                )
+            query = query.order_by(DBArtifact.created_at, DBArtifact.id)
+            return [(row.to_dto(), db_artifact.to_dto()) for row, db_artifact in query]
+
+    def save_delivery(self, delivery: Delivery) -> None:
+        """Store a row's new state, stamped now, in its own transaction."""
+        if delivery.id is None:
+            raise ValueError("only stored deliveries can be saved")
+        delivery.updated_at = datetime.now(UTC)
+        with self.session_scope() as sess:
+            sess.get_one(DBDelivery, delivery.id).update(delivery)
+
+    def last_delivery_by_source(self, sink: str) -> dict[str, datetime]:
+        """When `sink` last delivered an item of each source."""
+        with self.session_scope() as sess:
+            rows = (
+                sess.query(DBSourceItem.source_id, DBDelivery.updated_at)
+                .join(DBSourceItem, DBDelivery.source_item_id == DBSourceItem.id)
+                .filter(
+                    DBDelivery.sink == sink,
+                    DBDelivery.status == DeliveryStatus.DONE,
+                )
+                .all()
+            )
+        # The latest per source in Python: func.max() would bypass UTCDateTime.
+        last: dict[str, datetime] = {}
+        for source_id, delivered_at in rows:
+            if source_id not in last or delivered_at > last[source_id]:
+                last[source_id] = delivered_at
+        return last
+
+    def find_deliveries(
+        self,
+        scope: ProcessingScope | None = None,
+        *,
+        sink: str | None = None,
+        status: DeliveryStatus | None = None,
+        artifact_names: Iterable[tuple[str, str]] | None = None,
+    ) -> list[Delivery]:
+        """Ledger rows in creation order. Item filters in `scope` keep item
+        rows only and `artifact_names` artifact rows only; filters combine
+        and `limit` counts rows."""
+        scope = scope or ProcessingScope()
+        with self.session_scope() as sess:
+            query = (
+                sess.query(DBDelivery)
+                .outerjoin(DBSourceItem, DBDelivery.source_item_id == DBSourceItem.id)
+                .outerjoin(DBArtifact, DBDelivery.artifact_id == DBArtifact.id)
+            )
+            query = self._apply_scope(query, scope)
+            if sink is not None:
+                query = query.filter(DBDelivery.sink == sink)
+            if status is not None:
+                query = query.filter(DBDelivery.status == status)
+            if artifact_names is not None:
+                query = query.filter(
+                    tuple_(DBArtifact.remixer, DBArtifact.name).in_(
+                        list(artifact_names)
+                    )
+                )
+            query = query.order_by(DBDelivery.id)
+            if scope.limit:
+                query = query.limit(scope.limit)
+            return [row.to_dto() for row in query]
