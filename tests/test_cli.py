@@ -217,6 +217,7 @@ class InspectCommandTests(unittest.TestCase):
         app.get_items.assert_called_once_with(
             ProcessingScope(source="plaza", item_ids=(7,))
         )
+        self.assertEqual(list(app.get_annotation_keys.call_args.args[0]), [7])
         self.assertIn("Title", result.output)
         self.assertIn("12 summarize.summary", result.output)
 

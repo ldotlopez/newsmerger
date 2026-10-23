@@ -509,7 +509,7 @@ def inspect_items_cmd(
     items = app.get_items(scope)
     if scope.limit is None:  # with a limit, a requested item may just be cut off
         check_found("item", scope.item_ids or (), (item.id for item in items))
-    annotations = app.get_annotation_keys(items)
+    annotations = app.get_annotation_keys(item.id for item in items)
 
     if output_format == "json":
         print_json(
@@ -726,3 +726,160 @@ def inspect_deliveries_cmd(
             for d in deliveries
         ],
     )
+
+
+# --- Deletion ---------------------------------------------------------------
+
+force_delete_option = click.option(
+    "--force",
+    is_flag=True,
+    help="Also delete what has deliveries, and their ledger rows, so it can be"
+    " delivered again",
+)
+
+
+def require_selection(*filters: object) -> None:
+    """Refuse a selection that names no filter or id: it would match all."""
+    if not any(filters):
+        raise click.UsageError("name a filter or an id to select what to delete")
+
+
+@cli.group("delete")
+def delete_group() -> None:
+    """Delete stored data, without asking. `inspect` with the same options
+    lists what would be deleted."""
+
+
+@delete_group.command("items")
+@scope_options
+@force_delete_option
+@click.pass_context
+@report_user_errors
+def delete_items_cmd(ctx: click.Context, scope: ProcessingScope, force: bool) -> None:
+    """Delete items with their processing state, annotations and deliveries.
+
+    Items with deliveries are skipped unless --force. An item still in its
+    source's index comes back on the next import, with a new id.
+    """
+    require_selection(scope.source, scope.since, scope.until, scope.item_ids)
+    app = app_from_context(ctx, write=True)
+    items = app.get_items(scope)
+    if scope.limit is None:
+        check_found("item", scope.item_ids or (), (item.id for item in items))
+
+    delivered: set[int | None] = set()
+    if items and not force:
+        selected = ProcessingScope(item_ids=tuple(item.id for item in items))
+        delivered = {d.item_id for d in app.find_deliveries(selected)}
+        for item_id in sorted(delivered):
+            click.echo(f"Skipped item {item_id}: it has deliveries (--force)", err=True)
+
+    deleted = app.delete_items(item.id for item in items if item.id not in delivered)
+    click.echo(f"Deleted {deleted} item(s)")
+
+
+@delete_group.command("annotations")
+@scope_options
+@annotation_options
+@click.pass_context
+@report_user_errors
+def delete_annotations_cmd(
+    ctx: click.Context,
+    scope: ProcessingScope,
+    processor: str | None,
+    key: str | None,
+    annotation_ids: tuple[int, ...],
+) -> None:
+    """Delete annotations per processor: every key of that processor on the
+    item, with its processing state, so the item becomes pending again.
+
+    A --key or --annotation selection widens to the rest of its processor's
+    keys on that item, with a warning.
+    """
+    require_selection(
+        scope.source,
+        scope.since,
+        scope.until,
+        scope.item_ids,
+        processor,
+        key,
+        annotation_ids,
+    )
+    app = app_from_context(ctx, write=True)
+    annotations = app.find_annotations(
+        scope, processor=processor, key=key, annotation_ids=annotation_ids or None
+    )
+    if scope.limit is None:
+        check_found("annotation", annotation_ids, (a.id for a in annotations))
+
+    targets = sorted({(a.item_id, a.processor) for a in annotations})
+    selected = {a.id for a in annotations}
+    keys = app.get_annotation_keys(item_id for item_id, _ in targets)
+    for item_id, target in targets:
+        if widened := [
+            f"{annotation_id} {target}.{annotation_key}"
+            for annotation_id, row_processor, annotation_key in keys.get(item_id, [])
+            if row_processor == target and annotation_id not in selected
+        ]:
+            click.echo(
+                f"Also deleting {', '.join(widened)} of item {item_id}: annotations"
+                " are deleted per processor",
+                err=True,
+            )
+
+    deleted = sum(
+        app.delete_annotations(processor=target, item_id=item_id)
+        for item_id, target in targets
+    )
+    click.echo(
+        f"Deleted {deleted} annotation(s); {len(targets)} (item, processor)"
+        " pair(s) are pending again"
+    )
+
+
+@delete_group.command("artifacts")
+@artifact_options
+@force_delete_option
+@click.pass_context
+@report_user_errors
+def delete_artifacts_cmd(
+    ctx: click.Context,
+    remixer: str | None,
+    artifact_ids: tuple[tuple[str, str], ...],
+    limit: int | None,
+    force: bool,
+) -> None:
+    """Delete artifacts with their deliveries; the next run of their
+    remixer rebuilds them.
+
+    Artifacts with deliveries are skipped unless --force.
+    """
+    require_selection(remixer, artifact_ids)
+    app = app_from_context(ctx, write=True)
+    artifacts = app.list_artifacts(remixer, names=artifact_ids or None, limit=limit)
+    if limit is None:
+        check_found(
+            "artifact",
+            (f"{r}/{n}" for r, n in artifact_ids),
+            (f"{a.remixer}/{a.name}" for a in artifacts),
+        )
+
+    delivered: set[str | None] = set()
+    if artifacts and not force:
+        delivered = {
+            d.artifact_name
+            for d in app.find_deliveries(
+                artifact_names=[(a.remixer, a.name) for a in artifacts]
+            )
+        }
+        for name in sorted(n for n in delivered if n is not None):
+            click.echo(
+                f"Skipped artifact {name}: it has deliveries (--force)", err=True
+            )
+
+    deleted = app.delete_artifacts(
+        (a.remixer, a.name)
+        for a in artifacts
+        if f"{a.remixer}/{a.name}" not in delivered
+    )
+    click.echo(f"Deleted {deleted} artifact(s)")

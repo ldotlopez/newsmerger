@@ -880,11 +880,11 @@ class Database:
         return result
 
     def get_annotation_keys(
-        self, items: Iterable[SourceItem]
+        self, item_ids: Iterable[int]
     ) -> dict[int, list[tuple[int, str, str]]]:
         """The `(id, processor, key)` of each item's annotations, by item id,
         read in a single query. Items without annotations are absent."""
-        item_ids = [item.id for item in items]
+        item_ids = list(item_ids)
         if not item_ids:
             return {}
         with self.session_scope() as sess:
@@ -991,14 +991,14 @@ class Database:
         }
 
     def delete_annotations(
-        self, *, processor: str | None = None, item: SourceItem | None = None
+        self, *, processor: str | None = None, item_id: int | None = None
     ) -> int:
         """Delete annotations by processor, by item, or both, together with
         their processing state, so the items become pending again.
 
         Returns the number of annotations deleted.
         """
-        if processor is None and item is None:
+        if processor is None and item_id is None:
             raise ValueError("give a processor, an item, or both")
 
         with self.session_scope() as sess:
@@ -1009,8 +1009,7 @@ class Database:
                     DBItemAnnotation.processor == processor
                 )
                 states = states.filter(DBProcessingState.processor == processor)
-            if item is not None:
-                item_id = self._get_item_row(sess, item).id
+            if item_id is not None:
                 annotations = annotations.filter(
                     DBItemAnnotation.source_item_id == item_id
                 )
@@ -1020,6 +1019,35 @@ class Database:
             deleted = annotations.delete(synchronize_session=False)
             states.delete(synchronize_session=False)
 
+        self._release_contents(released)
+        return deleted
+
+    def delete_items(self, item_ids: Iterable[int]) -> int:
+        """Delete items with everything that references them (processing
+        state, annotations, deliveries) and release their contents; return
+        how many were deleted."""
+        item_ids = list(item_ids)
+        if not item_ids:
+            return 0
+        with self.session_scope() as sess:
+            released = {
+                sha256
+                for (sha256,) in sess.query(DBSourceItem.content_sha256).filter(
+                    DBSourceItem.id.in_(item_ids)
+                )
+            }
+            released |= {
+                sha256
+                for (sha256,) in sess.query(DBItemAnnotation.content_sha256).filter(
+                    DBItemAnnotation.source_item_id.in_(item_ids)
+                )
+            }
+            # The foreign keys cascade to state, annotations and deliveries.
+            deleted = (
+                sess.query(DBSourceItem)
+                .filter(DBSourceItem.id.in_(item_ids))
+                .delete(synchronize_session=False)
+            )
         self._release_contents(released)
         return deleted
 
@@ -1060,6 +1088,21 @@ class Database:
         if artifact is not None and artifact.content_sha256 is not None:
             artifact.content = self.contents.get(artifact.content_sha256).decode()
         return artifact
+
+    def delete_artifacts(self, names: Iterable[tuple[str, str]]) -> int:
+        """Delete the `(remixer, name)` artifacts with their deliveries and
+        release their contents; return how many were deleted."""
+        names = list(names)
+        if not names:
+            return 0
+        with self.session_scope() as sess:
+            query = sess.query(DBArtifact).filter(
+                tuple_(DBArtifact.remixer, DBArtifact.name).in_(names)
+            )
+            released = {artifact.content_sha256 for artifact in query}
+            deleted = query.delete(synchronize_session=False)
+        self._release_contents(released)
+        return deleted
 
     def list_artifacts(
         self,

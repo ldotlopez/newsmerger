@@ -455,7 +455,7 @@ class AnnotationTests(DatabaseTestCase):
         self.annotate(self.item, "tagger", tags=["a"], tags_text="a")
         self.annotate(self.item, "markdownify", markdown="# T")
 
-        keys = self.db.get_annotation_keys([self.item, other])
+        keys = self.db.get_annotation_keys([self.item.id, other.id])
 
         self.assertEqual(
             keys,
@@ -501,7 +501,9 @@ class AnnotationTests(DatabaseTestCase):
         self.annotate(self.item, "markdownify", markdown="# Title")
         self.annotate(self.item, "tagger", tags=["a"])
 
-        deleted = self.db.delete_annotations(processor="markdownify", item=self.item)
+        deleted = self.db.delete_annotations(
+            processor="markdownify", item_id=self.item.id
+        )
 
         self.assertEqual(deleted, 1)
         self.assertEqual(
@@ -706,6 +708,43 @@ class DeliveryTests(DatabaseTestCase):
             sess.query(DBSourceItem).filter_by(uid="d1").delete()
 
         self.assertEqual(self.count(DBDelivery), 2)
+
+
+class DeleteTests(DatabaseTestCase):
+    def test_deleting_items_cascades_and_releases_their_contents(self):
+        source = make_source()
+        kept, gone = (
+            make_item(source, uid="a1", content=b"kept"),
+            make_item(source, uid="a2", content=b"gone"),
+        )
+        self.db.upsert_source_items([kept, gone])
+        for item in (kept, gone):
+            self.db.record_result(
+                item,
+                "summarize",
+                ProcessingStatus.DONE,
+                annotations={"summary": f"S {item.uid}"},
+            )
+        self.db.queue_item_deliveries("telegram", ProcessingScope())
+
+        self.assertEqual(self.db.delete_items([gone.id]), 1)
+        self.assertEqual(self.db.delete_items([]), 0)
+
+        self.assertEqual([item.uid for item in self.db.get_items()], ["a1"])
+        self.assertEqual(self.count(DBProcessingState), 1)
+        self.assertEqual(self.count(DBDelivery), 1)
+        self.assertEqual(len(self.stored_contents()), 2)  # a1 content + summary
+
+    def test_deleting_artifacts_cascades_and_releases_their_contents(self):
+        for name in ("a/1", "a/2"):
+            self.db.save_artifact(Artifact("digest", name, name, "text/markdown"))
+        self.db.queue_artifact_deliveries("telegram_artifacts", ["digest"])
+
+        self.assertEqual(self.db.delete_artifacts([("digest", "a/1")]), 1)
+
+        self.assertEqual([a.name for a in self.db.list_artifacts()], ["a/2"])
+        self.assertEqual(self.count(DBDelivery), 1)
+        self.assertEqual(len(self.stored_contents()), 1)
 
 
 if __name__ == "__main__":
