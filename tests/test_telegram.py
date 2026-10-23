@@ -124,8 +124,8 @@ class TelegramRemixerTests(unittest.TestCase):
         self.save_state(
             posted=[["a", "d1", 7]], last_post={"a": "9999-01-01T00:00:00+00:00"}
         )
-        uids = self.run_remixer(ProcessingScope(source="a", uids=("d1", "d2")))
-        self.assertEqual(uids["queue"], [["a", "d2"]])
+        ids = self.run_remixer(ProcessingScope(item_ids=(1, 2)))
+        self.assertEqual(ids["queue"], [["a", "d2"]])
         post.assert_not_called()
 
     def test_failed_post_stays_queued_without_leaking_the_token(

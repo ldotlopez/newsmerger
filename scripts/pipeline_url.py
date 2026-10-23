@@ -39,7 +39,7 @@ def main(
 
     with Application.from_config_file(config_path) as app:
         item = app.import_url(source_id, url)
-        scope = ProcessingScope(source=item.source.id, uids=(item.uid,))
+        scope = ProcessingScope(item_ids=(item.id,))
         for processor in processors:
             app.run_processor(processor, scope=scope, force=force)
             if not app.get_annotations(item, processor=processor):

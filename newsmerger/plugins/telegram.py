@@ -5,7 +5,7 @@ Each source has a FIFO queue. On every run, summarized items that are not
 queued or posted yet join their source's queue, oldest first, and the head of
 each queue is posted if its source's last post is at least `interval` minutes
 old. By default only items published since the remixer's first run are
-queued; a scope with `since` or `uids` queues the items it selects instead.
+queued; a scope with `since` or `item_ids` queues the items it selects instead.
 An item is never posted twice; one that fails to post stays queued.
 
 Produces one artifact named "state" (JSON): the first run's time
@@ -95,7 +95,7 @@ class TelegramRemixer(BaseRemixer):
     def _enqueue(
         self, db: Database, state: dict[str, Any], scope: ProcessingScope
     ) -> None:
-        if scope.since is None and scope.uids is None:
+        if scope.since is None and scope.item_ids is None:
             watermark = datetime.fromisoformat(state["watermark"])
             scope = dataclasses.replace(scope, since=watermark)
 
@@ -114,7 +114,11 @@ class TelegramRemixer(BaseRemixer):
                 continue
 
             uid = next(uid for queued, uid in state["queue"] if queued == source_id)
-            (item,) = db.get_items(ProcessingScope(source=source_id, uids=(uid,)))
+            (item,) = (
+                item
+                for item in db.get_items(ProcessingScope(source=source_id))
+                if item.uid == uid
+            )
             try:
                 message_id = self._post(db, item)
             except TelegramError as e:

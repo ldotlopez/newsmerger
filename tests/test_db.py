@@ -312,11 +312,11 @@ class GetItemsTests(DatabaseTestCase):
             self.uids(scope=ProcessingScope(limit=2), newest_first=True), ["d3", "d2"]
         )
 
-    def test_scope_filters_by_source_dates_and_uids(self):
+    def test_scope_filters_by_source_dates_and_ids(self):
         since = datetime(2026, 1, 2, tzinfo=UTC)
         self.assertEqual(self.uids(scope=ProcessingScope(since=since)), ["d2", "d3"])
         self.assertEqual(self.uids(scope=ProcessingScope(until=since)), ["d1"])
-        self.assertEqual(self.uids(scope=ProcessingScope(uids=("d3",))), ["d3"])
+        self.assertEqual(self.uids(scope=ProcessingScope(item_ids=(3,))), ["d3"])
         self.assertEqual(self.uids(scope=ProcessingScope(source="other")), [])
 
 
@@ -446,6 +446,54 @@ class AnnotationTests(DatabaseTestCase):
 
         self.assertEqual(values, {("example", "a1"): ["a"]})
 
+    def test_get_annotation_keys_lists_ids_processors_and_keys_by_item(self):
+        other = make_item(self.source, uid="a2", content=b"x")
+        self.db.upsert_source_items([other])
+        self.annotate(self.item, "tagger", tags=["a"], tags_text="a")
+        self.annotate(self.item, "markdownify", markdown="# T")
+
+        keys = self.db.get_annotation_keys([self.item, other])
+
+        self.assertEqual(
+            keys,
+            {
+                self.item.id: [
+                    (3, "markdownify", "markdown"),
+                    (1, "tagger", "tags"),
+                    (2, "tagger", "tags_text"),
+                ]
+            },
+        )
+
+    def test_find_annotations_combines_scope_processor_key_ids_and_limit(self):
+        other = make_item(self.source, uid="a2", content=b"x")
+        self.db.upsert_source_items([other])
+        self.annotate(self.item, "tagger", tags=["a"], tags_text="a")
+        self.annotate(other, "tagger", tags=["b"])
+        self.annotate(other, "markdownify", markdown="# T")
+
+        def found(scope=None, **filters) -> list[tuple[int, str, str]]:
+            return [
+                (a.item_id, f"{a.processor}.{a.key}", a.value)
+                for a in self.db.find_annotations(scope, **filters)
+            ]
+
+        self.assertEqual(
+            found(ProcessingScope(item_ids=(other.id,))),
+            [
+                (other.id, "markdownify.markdown", "# T"),
+                (other.id, "tagger.tags", ["b"]),
+            ],
+        )
+        self.assertEqual(
+            found(processor="tagger", key="tags"),
+            [(self.item.id, "tagger.tags", ["a"]), (other.id, "tagger.tags", ["b"])],
+        )
+        self.assertEqual(
+            found(annotation_ids=[2]), [(self.item.id, "tagger.tags_text", "a")]
+        )
+        self.assertEqual(len(found(ProcessingScope(limit=3))), 3)
+
     def test_delete_by_item_and_processor_makes_the_item_pending(self):
         self.annotate(self.item, "markdownify", markdown="# Title")
         self.annotate(self.item, "tagger", tags=["a"])
@@ -516,6 +564,18 @@ class ArtifactTests(DatabaseTestCase):
         )
         self.assertTrue(all(a.content is None for a in listed))
         self.assertEqual([a.name for a in only_rss], ["feed"])
+
+    def test_list_artifacts_by_names_and_limit(self):
+        for remixer, name in (("rssfeed", "feed"), ("digest", "a/2026-10-01")):
+            self.db.save_artifact(Artifact(remixer, name, f"{name}!", "text/plain"))
+
+        named = self.db.list_artifacts(names=[("digest", "a/2026-10-01")])
+        limited = self.db.list_artifacts(limit=1)
+
+        self.assertEqual(
+            [(a.remixer, a.name) for a in named], [("digest", "a/2026-10-01")]
+        )
+        self.assertEqual([a.remixer for a in limited], ["digest"])
 
 
 if __name__ == "__main__":

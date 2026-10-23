@@ -45,7 +45,14 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.types import TypeDecorator
 
-from .models import Artifact, ItemKey, ProcessingScope, SourceData, SourceItem
+from .models import (
+    Annotation,
+    Artifact,
+    ItemKey,
+    ProcessingScope,
+    SourceData,
+    SourceItem,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -544,8 +551,8 @@ class Database:
             query = query.filter(DBSourceItem.published_at >= scope.since)
         if scope.until:
             query = query.filter(DBSourceItem.published_at < scope.until)
-        if scope.uids:
-            query = query.filter(DBSourceItem.uid.in_(scope.uids))
+        if scope.item_ids:
+            query = query.filter(DBSourceItem.id.in_(scope.item_ids))
         return query
 
     @staticmethod
@@ -772,6 +779,85 @@ class Database:
             result.setdefault(row_processor, {})[row_key] = self._load_value(sha256)
         return result
 
+    def get_annotation_keys(
+        self, items: Iterable[SourceItem]
+    ) -> dict[int, list[tuple[int, str, str]]]:
+        """The `(id, processor, key)` of each item's annotations, by item id,
+        read in a single query. Items without annotations are absent."""
+        item_ids = [item.id for item in items]
+        if not item_ids:
+            return {}
+        with self.session_scope() as sess:
+            rows = (
+                sess.query(
+                    DBItemAnnotation.source_item_id,
+                    DBItemAnnotation.id,
+                    DBItemAnnotation.processor,
+                    DBItemAnnotation.key,
+                )
+                .filter(DBItemAnnotation.source_item_id.in_(item_ids))
+                .order_by(DBItemAnnotation.processor, DBItemAnnotation.key)
+                .all()
+            )
+        result: dict[int, list[tuple[int, str, str]]] = {}
+        for item_id, annotation_id, processor, key in rows:
+            result.setdefault(item_id, []).append((annotation_id, processor, key))
+        return result
+
+    def find_annotations(
+        self,
+        scope: ProcessingScope | None = None,
+        *,
+        processor: str | None = None,
+        key: str | None = None,
+        annotation_ids: Iterable[int] | None = None,
+    ) -> list[Annotation]:
+        """Annotations of the items in scope, with their values, by item
+        (oldest first), processor and key. Every filter combines; `limit`
+        counts annotations."""
+        scope = scope or ProcessingScope()
+        with self.session_scope() as sess:
+            query = sess.query(DBItemAnnotation).join(
+                DBSourceItem, DBItemAnnotation.source_item_id == DBSourceItem.id
+            )
+            query = self._apply_scope(query, scope)
+            if processor is not None:
+                query = query.filter(DBItemAnnotation.processor == processor)
+            if key is not None:
+                query = query.filter(DBItemAnnotation.key == key)
+            if annotation_ids is not None:
+                query = query.filter(DBItemAnnotation.id.in_(annotation_ids))
+            query = query.order_by(
+                DBSourceItem.published_at,
+                DBSourceItem.id,
+                DBItemAnnotation.processor,
+                DBItemAnnotation.key,
+            )
+            if scope.limit:
+                query = query.limit(scope.limit)
+            rows = [
+                (
+                    row.id,
+                    row.source_item_id,
+                    row.processor,
+                    row.key,
+                    row.updated_at,
+                    row.content_sha256,
+                )
+                for row in query
+            ]
+        return [
+            Annotation(
+                id=annotation_id,
+                item_id=item_id,
+                processor=row_processor,
+                key=row_key,
+                updated_at=updated_at,
+                value=self._load_value(sha256),
+            )
+            for annotation_id, item_id, row_processor, row_key, updated_at, sha256 in rows
+        ]
+
     def get_annotation_values(
         self, items: Iterable[SourceItem], *, processor: str, key: str
     ) -> dict[ItemKey, Any]:
@@ -875,10 +961,23 @@ class Database:
             artifact.content = self.contents.get(artifact.content_sha256).decode()
         return artifact
 
-    def list_artifacts(self, remixer: str | None = None) -> list[Artifact]:
-        """Artifacts by remixer and name, without their content."""
+    def list_artifacts(
+        self,
+        remixer: str | None = None,
+        *,
+        names: Iterable[tuple[str, str]] | None = None,
+        limit: int | None = None,
+    ) -> list[Artifact]:
+        """Artifacts by remixer and name, without their content. `names`
+        keeps only these `(remixer, name)` pairs; filters combine."""
         with self.session_scope() as sess:
             query = sess.query(DBArtifact).order_by(DBArtifact.remixer, DBArtifact.name)
             if remixer is not None:
                 query = query.filter(DBArtifact.remixer == remixer)
+            if names is not None:
+                query = query.filter(
+                    tuple_(DBArtifact.remixer, DBArtifact.name).in_(list(names))
+                )
+            if limit:
+                query = query.limit(limit)
             return [db_artifact.to_dto() for db_artifact in query]

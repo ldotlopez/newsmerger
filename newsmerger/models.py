@@ -125,5 +125,5 @@ class ProcessingScope:
     source: str | None = None  # source id
     since: datetime | None = None  # published_at >=
     until: datetime | None = None  # published_at <
-    uids: tuple[str, ...] | None = None  # uids within `source`
+    item_ids: tuple[int, ...] | None = None  # database ids
     limit: int | None = None
