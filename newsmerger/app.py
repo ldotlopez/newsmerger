@@ -21,7 +21,14 @@ from .consts import PACKAGE_NAME
 from .db import Database
 from .httpclient import HTTPClient
 from .llms import LLM
-from .models import Artifact, ItemKey, ProcessingScope, SourceData, SourceItem
+from .models import (
+    Annotation,
+    Artifact,
+    ItemKey,
+    ProcessingScope,
+    SourceData,
+    SourceItem,
+)
 from .plugins import Services
 from .processors import Processor, RunSummary
 from .providers import Provider, URLProvider
@@ -182,6 +189,26 @@ class Application:
         """An item's annotations as `{processor: {key: value}}`; `{}` if none."""
         return self._db.get_annotations(item, processor=processor, key=key)
 
+    def get_annotation_keys(
+        self, items: Iterable[SourceItem]
+    ) -> dict[int, list[tuple[int, str, str]]]:
+        """The `(id, processor, key)` of each item's annotations, by item id."""
+        return self._db.get_annotation_keys(items)
+
+    def find_annotations(
+        self,
+        scope: ProcessingScope | None = None,
+        *,
+        processor: str | None = None,
+        key: str | None = None,
+        annotation_ids: Iterable[int] | None = None,
+    ) -> list[Annotation]:
+        """Annotations of the items in scope, with their values; filters
+        combine and `limit` counts annotations."""
+        return self._db.find_annotations(
+            scope, processor=processor, key=key, annotation_ids=annotation_ids
+        )
+
     def get_annotation_values(
         self, items: Iterable[SourceItem], *, processor: str, key: str
     ) -> dict[ItemKey, Any]:
@@ -192,9 +219,16 @@ class Application:
         """The artifact with its content, or None if it does not exist."""
         return self._db.get_artifact(remixer, name)
 
-    def list_artifacts(self, remixer: str | None = None) -> list[Artifact]:
-        """Artifacts' metadata, by remixer and name; `content` is None."""
-        return self._db.list_artifacts(remixer)
+    def list_artifacts(
+        self,
+        remixer: str | None = None,
+        *,
+        names: Iterable[tuple[str, str]] | None = None,
+        limit: int | None = None,
+    ) -> list[Artifact]:
+        """Artifacts' metadata, by remixer and name; `content` is None.
+        `names` keeps only these `(remixer, name)` pairs."""
+        return self._db.list_artifacts(remixer, names=names, limit=limit)
 
     def delete_annotations(
         self, *, processor: str | None = None, item: SourceItem | None = None

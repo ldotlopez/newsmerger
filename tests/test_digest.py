@@ -28,23 +28,17 @@ class DigestRemixerTests(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def add_item(self, source: SourceData, day: int, markdown: str | None) -> None:
-        self.db.upsert_source_items(
-            [
-                SourceItem(
-                    source=source,
-                    uid=f"d{day}",
-                    title=f"Day {day}",
-                    uri=f"https://{source.id}.test/{day}",
-                    content=b"<p></p>",
-                    mimetype="text/html",
-                    published_at=datetime(2026, 10, day, tzinfo=UTC),
-                )
-            ]
+        item = SourceItem(
+            source=source,
+            uid=f"d{day}",
+            title=f"Day {day}",
+            uri=f"https://{source.id}.test/{day}",
+            content=b"<p></p>",
+            mimetype="text/html",
+            published_at=datetime(2026, 10, day, tzinfo=UTC),
         )
+        self.db.upsert_source_items([item])
         if markdown is not None:
-            (item,) = self.db.get_items(
-                ProcessingScope(source=source.id, uids=(f"d{day}",))
-            )
             self.db.record_result(
                 item,
                 "markdownify",

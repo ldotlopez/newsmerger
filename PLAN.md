@@ -5,23 +5,24 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
 ## Numeric ids and `inspect` (decision 0008)
 
-- [ ] **1. `AUTOINCREMENT` and `scripts/migrate_autoincrement.py`.**
+- [x] **1. `AUTOINCREMENT` and `scripts/migrate_autoincrement.py`.**
   `sqlite_autoincrement=True` on every table with an integer id; a
   one-shot script recreates the existing tables with it, keeping rows and
   ids, with a test on a copy of a populated database. Run it on
   `~/.local/share/newsmerger/data.db` only after asking, once everything is
   implemented.
-- [ ] **2. Ids in the DTOs.** `id: int | None` on `SourceItem` and
+- [x] **2. Ids in the DTOs.** `id: int | None` on `SourceItem` and
   `Artifact`; an `Annotation` DTO (`id`, item id, `processor`, `key`,
   `updated_at`, `value`).
-- [ ] **3. `--item` replaces `--uid`.** `ProcessingScope` takes item ids;
+- [x] **3. `--item` replaces `--uid`.** `ProcessingScope` takes item ids;
   `scope_options` drops `--uid` and adds a repeatable `--item`, in
   `enrich`, `remix` and `inspect`.
-- [ ] **4. Shared selection queries** in `Database` and `Application`:
-  `find_items(scope)`, `find_annotations(scope, processor, key, ids)`,
-  `find_artifacts(remixer, ids, limit)`, plus the annotation ids and keys
-  of many items in one query for the items listing.
-- [ ] **5. `inspect items|annotations|artifacts`** with `--format
+- [x] **4. Shared selection queries** in `Database` and `Application`:
+  `get_items(scope)` as it was, `find_annotations(scope, processor, key,
+  annotation_ids)`, `list_artifacts(remixer, names=, limit=)`, plus
+  `get_annotation_keys(items)`, the annotation ids and keys of many items
+  in one query for the items listing.
+- [x] **5. `inspect items|annotations|artifacts`** with `--format
   table|json`; remove `items`, `annotations`, `artifacts` and `artifact`.
   Tests for id parsing, JSON output and missing ids.
 - [ ] **Docs, when done:** propose the `README.md` (usage) and

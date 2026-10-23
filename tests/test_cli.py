@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import Mock, patch
@@ -6,7 +7,13 @@ from click.testing import CliRunner
 
 from newsmerger.cli import cli
 from newsmerger.config import ConfigError
-from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newsmerger.models import (
+    Annotation,
+    Artifact,
+    ProcessingScope,
+    SourceData,
+    SourceItem,
+)
 from newsmerger.processors import RunSummary
 
 SOURCE = SourceData(
@@ -48,12 +55,25 @@ class CommandTests(unittest.TestCase):
         app.run_processor.return_value = RunSummary(done=2)
 
         result = invoke(
-            app, "enrich", "markdownify", "--source", "plaza", "--limit", "5", "--force"
+            app,
+            "enrich",
+            "markdownify",
+            "--source",
+            "plaza",
+            "--item",
+            "3",
+            "--item",
+            "4",
+            "--limit",
+            "5",
+            "--force",
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
         app.run_processor.assert_called_once_with(
-            "markdownify", scope=ProcessingScope(source="plaza", limit=5), force=True
+            "markdownify",
+            scope=ProcessingScope(source="plaza", item_ids=(3, 4), limit=5),
+            force=True,
         )
 
     def test_enrich_without_processor_runs_every_configured_one(self) -> None:
@@ -92,60 +112,111 @@ class CommandTests(unittest.TestCase):
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 ITEM = SourceItem(
-    source=SOURCE, uid="1", title="Title", uri="https://plaza.test/1", published_at=NOW
+    source=SOURCE,
+    uid="abc",
+    title="Title",
+    uri="https://plaza.test/1",
+    published_at=NOW,
+    id=7,
 )
 
 
-class InspectionCommandTests(unittest.TestCase):
-    def test_items_lists_items_in_scope(self) -> None:
+def annotation(annotation_id: int, key: str, value: object) -> Annotation:
+    return Annotation(annotation_id, 7, "tagger", key, NOW, value)
+
+
+class InspectCommandTests(unittest.TestCase):
+    def test_items_lists_ids_and_annotation_keys(self) -> None:
         app = Mock()
         app.get_items.return_value = [ITEM]
+        app.get_annotation_keys.return_value = {7: [(12, "summarize", "summary")]}
 
-        result = invoke(app, "items", "--source", "plaza")
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        app.get_items.assert_called_once_with(ProcessingScope(source="plaza"))
-        self.assertIn("Title", result.output)
-
-    def test_annotations_previews_long_values(self) -> None:
-        app = Mock()
-        app.get_items.return_value = [ITEM]
-        app.get_annotations.return_value = {
-            "markdownify": {"markdown": "# Title\n\n" + "body " * 100},
-            "tagger": {"tags": ["a", "b"]},
-        }
-
-        result = invoke(app, "annotations", "--source", "plaza", "--uid", "1")
+        result = invoke(app, "inspect", "items", "--source", "plaza", "--item", "7")
 
         self.assertEqual(result.exit_code, 0, result.output)
         app.get_items.assert_called_once_with(
-            ProcessingScope(source="plaza", uids=("1",))
+            ProcessingScope(source="plaza", item_ids=(7,))
+        )
+        self.assertIn("Title", result.output)
+        self.assertIn("12 summarize.summary", result.output)
+
+    def test_items_as_json(self) -> None:
+        app = Mock()
+        app.get_items.return_value = [ITEM]
+        app.get_annotation_keys.return_value = {7: [(12, "summarize", "summary")]}
+
+        result = invoke(app, "inspect", "items", "--format", "json")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        (record,) = json.loads(result.output)
+        self.assertEqual(record["id"], 7)
+        self.assertEqual(record["uid"], "abc")
+        self.assertEqual(record["published_at"], "2026-10-18T12:00:00+00:00")
+        self.assertEqual(
+            record["annotations"],
+            [{"id": 12, "processor": "summarize", "key": "summary"}],
+        )
+
+    def test_missing_item_is_an_error(self) -> None:
+        app = Mock()
+        app.get_items.return_value = []
+
+        result = invoke(app, "inspect", "items", "--item", "99")
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("no item 99 in the selection", result.output)
+
+    def test_annotations_previews_long_values(self) -> None:
+        app = Mock()
+        app.find_annotations.return_value = [
+            annotation(1, "markdown", "# Title\n\n" + "body " * 100),
+            annotation(2, "tags", ["a", "b"]),
+        ]
+
+        result = invoke(
+            app, "inspect", "annotations", "--item", "7", "--processor", "tagger"
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.find_annotations.assert_called_once_with(
+            ProcessingScope(item_ids=(7,)),
+            processor="tagger",
+            key=None,
+            annotation_ids=None,
         )
         self.assertIn("# Title…", result.output)
         self.assertNotIn("body body", result.output)
         self.assertIn('["a", "b"]', result.output)
 
-    def test_annotations_with_key_prints_the_full_value(self) -> None:
+    def test_one_annotation_prints_its_full_value(self) -> None:
         app = Mock()
-        app.get_items.return_value = [ITEM]
-        app.get_annotations.return_value = {"tagger": {"tags": ["a", "b"]}}
+        app.find_annotations.return_value = [annotation(2, "tags", ["a", "b"])]
 
-        result = invoke(
-            app, "annotations", "--source", "plaza", "--uid", "1", "--key", "tags"
-        )
+        result = invoke(app, "inspect", "annotations", "--annotation", "2")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.get_annotations.assert_called_once_with(ITEM, processor=None, key="tags")
-        self.assertEqual(result.output.strip(), '[\n  "a",\n  "b"\n]')
+        self.assertEqual(result.stdout.strip(), '[\n  "a",\n  "b"\n]')
+        self.assertIn("2 · item 7 · tagger.tags", result.stderr)
 
-    def test_annotations_of_a_missing_item_is_an_error(self) -> None:
+    def test_annotations_as_json_carry_full_values(self) -> None:
         app = Mock()
-        app.get_items.return_value = []
+        app.find_annotations.return_value = [annotation(2, "tags", ["a", "b"])]
 
-        result = invoke(app, "annotations", "--source", "plaza", "--uid", "nope")
+        result = invoke(app, "inspect", "annotations", "--format", "json")
 
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("item 'plaza/nope' not found", result.output)
+        self.assertEqual(
+            json.loads(result.output),
+            [
+                {
+                    "id": 2,
+                    "item_id": 7,
+                    "processor": "tagger",
+                    "key": "tags",
+                    "updated_at": "2026-10-18T12:00:00+00:00",
+                    "value": ["a", "b"],
+                }
+            ],
+        )
 
     def test_artifacts_lists_metadata(self) -> None:
         app = Mock()
@@ -153,33 +224,49 @@ class InspectionCommandTests(unittest.TestCase):
             Artifact("rssfeed", "feed", None, "application/rss+xml", updated_at=NOW)
         ]
 
-        result = invoke(app, "artifacts", "--remixer", "rssfeed")
+        result = invoke(app, "inspect", "artifacts", "--remixer", "rssfeed")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.list_artifacts.assert_called_once_with("rssfeed")
+        app.list_artifacts.assert_called_once_with("rssfeed", names=None, limit=None)
+        self.assertIn("rssfeed/feed", result.output)
         self.assertIn("application/rss+xml", result.output)
+        app.get_artifact.assert_not_called()
 
-    def test_artifact_prints_content_to_stdout_and_metadata_to_stderr(self) -> None:
+    def test_one_artifact_prints_content_to_stdout_and_metadata_to_stderr(
+        self,
+    ) -> None:
         app = Mock()
+        listed = Artifact("digest", "a/2026-10-01_2026-10-08", None, "text/markdown")
+        app.list_artifacts.return_value = [listed]
         app.get_artifact.return_value = Artifact(
-            "rssfeed", "feed", "<rss/>", "application/rss+xml", updated_at=NOW
+            "digest", listed.name, "# Week", "text/markdown", updated_at=NOW
         )
 
-        with patch("newsmerger.cli.app_from_context", return_value=app):
-            result = CliRunner().invoke(cli, ["artifact", "rssfeed", "feed"])
+        result = invoke(
+            app, "inspect", "artifacts", "--artifact", "digest/a/2026-10-01_2026-10-08"
+        )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(result.stdout, "<rss/>")
-        self.assertIn("rssfeed/feed · application/rss+xml", result.stderr)
+        app.list_artifacts.assert_called_once_with(
+            None, names=(("digest", "a/2026-10-01_2026-10-08"),), limit=None
+        )
+        self.assertEqual(result.stdout, "# Week")
+        self.assertIn("digest/a/2026-10-01_2026-10-08 · text/markdown", result.stderr)
 
     def test_missing_artifact_is_an_error(self) -> None:
         app = Mock()
-        app.get_artifact.return_value = None
+        app.list_artifacts.return_value = []
 
-        result = invoke(app, "artifact", "rssfeed", "nope")
+        result = invoke(app, "inspect", "artifacts", "--artifact", "rssfeed/nope")
 
         self.assertEqual(result.exit_code, 1)
-        self.assertIn("artifact 'rssfeed/nope' does not exist", result.output)
+        self.assertIn("no artifact rssfeed/nope in the selection", result.output)
+
+    def test_malformed_artifact_id_is_a_usage_error(self) -> None:
+        result = invoke(Mock(), "inspect", "artifacts", "--artifact", "rssfeed")
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("'rssfeed' is not <remixer>/<name>", result.output)
 
 
 if __name__ == "__main__":
