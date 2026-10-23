@@ -69,7 +69,13 @@ class MigrateAutoincrementTests(unittest.TestCase):
 
         self.assertEqual(
             set(migrated),
-            {"source_items", "processing_state", "item_annotations", "artifacts"},
+            {
+                "source_items",
+                "processing_state",
+                "item_annotations",
+                "artifacts",
+                "deliveries",
+            },
         )
         for (sql,) in self.query(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name IN"

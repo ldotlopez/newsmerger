@@ -14,12 +14,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from newsmerger.db import (
     Database,
+    DBDelivery,
     DBProcessingState,
     DBSource,
     DBSourceItem,
+    DeliveryStatus,
     ProcessingStatus,
 )
 from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
@@ -576,6 +579,133 @@ class ArtifactTests(DatabaseTestCase):
             [(a.remixer, a.name) for a in named], [("digest", "a/2026-10-01")]
         )
         self.assertEqual([a.remixer for a in limited], ["digest"])
+
+
+class DeliveryTests(DatabaseTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.source = make_source()
+        self.items = [
+            make_item(
+                self.source,
+                uid=f"d{day}",
+                content=f"c{day}".encode(),
+                published_at=datetime(2026, 10, day, tzinfo=UTC),
+            )
+            for day in (3, 1, 2)
+        ]
+        self.db.upsert_source_items(self.items)
+
+    def summarize(self, item: SourceItem) -> None:
+        self.db.record_result(
+            item, "summarize", ProcessingStatus.DONE, annotations={"summary": "S"}
+        )
+
+    def test_queue_items_once_in_fifo_order_and_only_finished_upstream(self):
+        self.summarize(self.items[0])
+        self.summarize(self.items[2])
+
+        queued = self.db.queue_item_deliveries(
+            "telegram", ProcessingScope(), requires="summarize"
+        )
+        again = self.db.queue_item_deliveries(
+            "telegram", ProcessingScope(), requires="summarize"
+        )
+
+        self.assertEqual((queued, again), (2, 0))
+        rows = self.db.get_item_deliveries("telegram")
+        self.assertEqual([item.uid for _, item in rows], ["d2", "d3"])
+        self.assertTrue(all(row.status == DeliveryStatus.QUEUED for row, _ in rows))
+
+    def test_scope_and_statuses_filter_rows(self):
+        self.db.queue_item_deliveries("telegram", ProcessingScope())
+        (first, _), *_ = self.db.get_item_deliveries("telegram")
+        first.status = DeliveryStatus.DONE
+        self.db.save_delivery(first)
+
+        done = self.db.get_item_deliveries("telegram", statuses=[DeliveryStatus.DONE])
+        in_scope = self.db.get_item_deliveries(
+            "telegram", ProcessingScope(item_ids=(self.items[0].id,))
+        )
+
+        self.assertEqual([item.uid for _, item in done], ["d1"])
+        self.assertEqual([item.uid for _, item in in_scope], ["d3"])
+        self.assertEqual(self.db.get_item_deliveries("other"), [])
+
+    def test_last_delivery_by_source_counts_done_rows_only(self):
+        self.db.queue_item_deliveries("telegram", ProcessingScope())
+        rows = self.db.get_item_deliveries("telegram")
+        rows[0][0].status = DeliveryStatus.DONE
+        self.db.save_delivery(rows[0][0])
+        rows[1][0].status = DeliveryStatus.ERROR
+        self.db.save_delivery(rows[1][0])
+
+        last = self.db.last_delivery_by_source("telegram")
+
+        self.assertEqual(last, {"example": rows[0][0].updated_at})
+        self.assertIsNotNone(last["example"].tzinfo)
+
+    def test_queue_artifacts_of_the_listed_remixers(self):
+        for remixer, name in (
+            ("digest", "a/1"),
+            ("digest", "a/2"),
+            ("rssfeed", "feed"),
+        ):
+            self.db.save_artifact(Artifact(remixer, name, name, "text/markdown"))
+
+        named = self.db.queue_artifact_deliveries(
+            "telegram_artifacts", ["digest"], names=[("digest", "a/2")]
+        )
+        rest = self.db.queue_artifact_deliveries(
+            "telegram_artifacts", ["digest"], since=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+
+        self.assertEqual((named, rest), (1, 1))
+        rows = self.db.get_artifact_deliveries("telegram_artifacts")
+        self.assertEqual([artifact.name for _, artifact in rows], ["a/1", "a/2"])
+        self.assertEqual(rows[0][0].artifact_name, "digest/a/1")
+
+    def test_find_deliveries_filters_by_subject_sink_and_status(self):
+        self.db.queue_item_deliveries("telegram", ProcessingScope())
+        self.db.save_artifact(Artifact("digest", "a/1", "x", "text/markdown"))
+        self.db.queue_artifact_deliveries("telegram_artifacts", ["digest"])
+
+        def found(scope=None, **filters) -> list[tuple[str, int | None, str | None]]:
+            return [
+                (row.sink, row.item_id, row.artifact_name)
+                for row in self.db.find_deliveries(scope, **filters)
+            ]
+
+        self.assertEqual(len(found()), 4)
+        self.assertEqual(
+            found(ProcessingScope(item_ids=(self.items[1].id,))),
+            [("telegram", self.items[1].id, None)],
+        )
+        self.assertEqual(
+            found(artifact_names=[("digest", "a/1")]),
+            [("telegram_artifacts", None, "digest/a/1")],
+        )
+        self.assertEqual(len(found(sink="telegram", status=DeliveryStatus.QUEUED)), 3)
+        self.assertEqual(found(status=DeliveryStatus.DONE), [])
+
+    def test_a_row_has_exactly_one_subject(self):
+        with self.assertRaises(IntegrityError), self.db.session_scope() as sess:
+            sess.add(
+                DBDelivery(
+                    sink="telegram",
+                    status="queued",
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+
+    def test_rows_go_with_their_item(self):
+        self.db.queue_item_deliveries("telegram", ProcessingScope())
+
+        with self.db.session_scope() as sess:
+            sess.query(DBSourceItem).filter_by(uid="d1").delete()
+
+        self.assertEqual(self.count(DBDelivery), 2)
 
 
 if __name__ == "__main__":
