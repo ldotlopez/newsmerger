@@ -73,7 +73,13 @@ class DigestRemixerTests(unittest.TestCase):
 
         self.assertEqual(
             artifacts,
-            [("s", "# S: 2026-10-01 – 2026-10-08\n\nWeek.\n", "text/markdown")],
+            [
+                (
+                    "s/2026-10-01_2026-10-08",
+                    "# S: 2026-10-01 – 2026-10-08\n\nWeek.\n",
+                    "text/markdown",
+                )
+            ],
         )
         (prompt,), kwargs = llm.prompt.call_args
         self.assertEqual(kwargs, {"model": "writer", "context_length": 32768})
@@ -90,10 +96,13 @@ class DigestRemixerTests(unittest.TestCase):
         since = datetime(2026, 10, 1, tzinfo=UTC)
 
         _, artifacts = self.digest(ProcessingScope(since=since))
-        self.assertEqual(sorted(name for name, _, _ in artifacts), ["o", "s"])
+        self.assertEqual(
+            sorted(name.split("/")[0] for name, _, _ in artifacts), ["o", "s"]
+        )
 
         _, artifacts = self.digest(ProcessingScope(source="o", since=since))
-        self.assertEqual([name for name, _, _ in artifacts], ["o"])
+        ((name, _, _),) = artifacts
+        self.assertTrue(name.startswith("o/2026-10-01_"))
 
     def test_nothing_in_scope_produces_nothing(self) -> None:
         self.add_item(SOURCE, 1, "Body")

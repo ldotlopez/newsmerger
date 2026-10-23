@@ -8,15 +8,22 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import requests
+from pydantic import SecretStr
 
-from newsmerger.db import Database, ProcessingStatus
+from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
 from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newsmerger.plugins import Services, telegram
 from newsmerger.plugins.telegram import (
     MAX_CAPTION_LENGTH,
-    Options,
-    TelegramRemixer,
+    ArtifactSinkOptions,
+    ItemSinkOptions,
+    TelegramArtifactSink,
+    TelegramClient,
+    TelegramSink,
     build_caption,
 )
+from newsmerger.sinks import Sink
+from scripts.migrate_telegram_state import migrate
 
 SOURCE_A = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
 SOURCE_B = SourceData(id="b", name="B", url="https://b.test/", provider="plaza")
@@ -28,31 +35,34 @@ def ok_response(message_id: int = 42) -> Mock:
     return response
 
 
-@patch("newsmerger.plugins.telegram.requests.post")
-class TelegramRemixerTests(unittest.TestCase):
+class TelegramTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
+        self.client = TelegramClient(SecretStr("token"), "chat")
 
     def tearDown(self) -> None:
         self.db.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def add_summarized(self, source: SourceData, *days: int, **data: Any) -> None:
+    def add_summarized(
+        self, source: SourceData, *hours_ago: int, **data: Any
+    ) -> list[SourceItem]:
+        now = datetime.now(UTC)
         items = [
             SourceItem(
                 source=source,
-                uid=f"d{day}",
-                title=f"Day <{day}>",
-                uri=f"https://{source.id}.test/{day}?a=1&b=2",
-                content=b"<p></p>",
+                uid=f"h{hours}",
+                title=f"Hour <{hours}>",
+                uri=f"https://{source.id}.test/{hours}?a=1&b=2",
+                content=f"<p>{hours}</p>".encode(),
                 mimetype="text/html",
                 data=data,
-                published_at=datetime(2026, 10, day, tzinfo=UTC),
+                published_at=now - timedelta(hours=hours),
             )
-            for day in days
+            for hours in hours_ago
         ]
         self.db.upsert_source_items(items)
         for item in items:
@@ -62,110 +72,168 @@ class TelegramRemixerTests(unittest.TestCase):
                 ProcessingStatus.DONE,
                 annotations={"summary": f"Summary {item.uid}"},
             )
+        return items
 
-    def save_state(self, **state: Any) -> None:
-        state = {"watermark": "2026-10-02T00:00:00+00:00"} | state
-        state = {"queue": [], "posted": [], "last_post": {}} | state
-        self.db.save_artifact(
-            Artifact("telegram", "state", json.dumps(state), "application/json")
-        )
+    def delivered(self, sink: str = "telegram") -> dict[str, Any]:
+        return {
+            item.uid: row.external_ref
+            for row, item in self.db.get_item_deliveries(
+                sink, statuses=[DeliveryStatus.DONE]
+            )
+        }
 
-    def run_remixer(self, scope: ProcessingScope | None = None) -> dict[str, Any]:
-        cfg = Options(bot_token="token", chat_id="chat", interval=30)
-        TelegramRemixer(cfg).remix(self.db, scope=scope)
-        return json.loads(self.db.get_artifact("telegram", "state").content)
 
-    def test_first_run_ignores_existing_items(self, post: Mock) -> None:
-        self.add_summarized(SOURCE_A, 1, 2)
+@patch("newsmerger.plugins.telegram.requests.post")
+class TelegramSinkTests(TelegramTestCase):
+    def deliver(self, interval: int = 30) -> None:
+        TelegramSink(self.client, ItemSinkOptions(interval=interval)).deliver(self.db)
 
-        state = self.run_remixer()
-
-        post.assert_not_called()
-        self.assertEqual(state["queue"], [])
-
-    def test_posts_oldest_new_item_once_per_source(self, post: Mock) -> None:
+    def test_posts_the_oldest_item_of_each_source_once(self, post: Mock) -> None:
         post.return_value = ok_response()
-        self.add_summarized(SOURCE_A, 1, 3, 4)
-        self.add_summarized(SOURCE_B, 5)
-        self.save_state()
+        self.add_summarized(SOURCE_A, 3, 2, 30)
+        self.add_summarized(SOURCE_B, 1)
 
-        state = self.run_remixer()
+        self.deliver()
+        self.deliver()
 
-        self.assertEqual(state["posted"], [["a", "d3", 42], ["b", "d5", 42]])
-        self.assertEqual(state["queue"], [["a", "d4"]])
-        self.assertEqual(set(state["last_post"]), {"a", "b"})
+        self.assertEqual(
+            self.delivered(), {"h3": {"message_id": 42}, "h1": {"message_id": 42}}
+        )
+        self.assertEqual(post.call_count, 2)
 
-    def test_waits_for_the_interval(self, post: Mock) -> None:
+    def test_waits_for_the_interval_of_each_source(self, post: Mock) -> None:
         post.return_value = ok_response()
-        self.add_summarized(SOURCE_A, 3)
-        recent = datetime.now(UTC) - timedelta(minutes=10)
-        old = datetime.now(UTC) - timedelta(minutes=31)
-        self.save_state(last_post={"a": recent.isoformat()})
+        self.add_summarized(SOURCE_A, 3, 2)
 
-        self.assertEqual(self.run_remixer()["queue"], [["a", "d3"]])
-        post.assert_not_called()
+        self.deliver()
+        self.deliver()
+        self.assertEqual(list(self.delivered()), ["h3"])
 
-        self.save_state(queue=[["a", "d3"]], last_post={"a": old.isoformat()})
-        self.assertEqual(self.run_remixer()["posted"], [["a", "d3", 42]])
+        self.deliver(interval=0)
+        self.assertEqual(list(self.delivered()), ["h3", "h2"])
 
-    def test_explicit_scope_queues_old_items_but_never_posted_ones(
-        self, post: Mock
-    ) -> None:
-        self.add_summarized(SOURCE_A, 1, 2)
-        self.save_state(
-            posted=[["a", "d1", 7]], last_post={"a": "9999-01-01T00:00:00+00:00"}
-        )
-
-        since = self.run_remixer(
-            ProcessingScope(since=datetime(2026, 10, 1, tzinfo=UTC))
-        )
-        self.assertEqual(since["queue"], [["a", "d2"]])
-
-        self.save_state(
-            posted=[["a", "d1", 7]], last_post={"a": "9999-01-01T00:00:00+00:00"}
-        )
-        ids = self.run_remixer(ProcessingScope(item_ids=(1, 2)))
-        self.assertEqual(ids["queue"], [["a", "d2"]])
-        post.assert_not_called()
-
-    def test_failed_post_stays_queued_without_leaking_the_token(
+    def test_failed_post_stays_failed_without_leaking_the_token(
         self, post: Mock
     ) -> None:
         post.side_effect = requests.ConnectionError("url: /bottoken/sendMessage")
         self.add_summarized(SOURCE_A, 3)
-        self.save_state()
 
-        with self.assertLogs("newsmerger.plugins.telegram", "WARNING") as logs:
-            state = self.run_remixer()
+        with self.assertLogs("newsmerger.sinks", "ERROR") as logs:
+            self.deliver()
 
-        self.assertEqual(state["queue"], [["a", "d3"]])
-        self.assertEqual(state["posted"], [])
-        self.assertNotIn("token", logs.output[0])
+        ((row, _),) = self.db.get_item_deliveries("telegram")
+        self.assertEqual((row.status, row.attempts), (DeliveryStatus.ERROR, 1))
+        self.assertEqual(row.last_error, "ConnectionError")
+        self.assertNotIn("token", "\n".join(logs.output))
 
     def test_sends_photo_with_escaped_caption(self, post: Mock) -> None:
         post.return_value = ok_response()
         self.add_summarized(SOURCE_A, 3, image="https://a.test/image.jpg")
-        self.save_state()
 
-        self.run_remixer()
+        self.deliver()
 
         (request_url,) = post.call_args.args
         payload = post.call_args.kwargs["json"]
         self.assertTrue(request_url.endswith("/sendPhoto"))
         self.assertEqual(payload["photo"], "https://a.test/image.jpg")
-        self.assertIn("Day &lt;3&gt;", payload["caption"])
+        self.assertIn("Hour &lt;3&gt;", payload["caption"])
         self.assertIn('href="https://a.test/3?a=1&amp;b=2"', payload["caption"])
 
     def test_sends_text_without_image(self, post: Mock) -> None:
         post.return_value = ok_response()
         self.add_summarized(SOURCE_A, 3)
-        self.save_state()
 
-        self.run_remixer()
+        self.deliver()
 
         (request_url,) = post.call_args.args
         self.assertTrue(request_url.endswith("/sendMessage"))
-        self.assertIn("Summary d3", post.call_args.kwargs["json"]["text"])
+        self.assertIn("Summary h3", post.call_args.kwargs["json"]["text"])
+
+
+@patch("newsmerger.plugins.telegram.requests.post")
+class TelegramArtifactSinkTests(TelegramTestCase):
+    def test_sends_new_artifacts_of_the_listed_remixers_as_documents(
+        self, post: Mock
+    ) -> None:
+        post.return_value = ok_response(7)
+        self.db.save_artifact(
+            Artifact("digest", "a/2026-10-01_2026-10-08", "# Week", "text/markdown")
+        )
+        self.db.save_artifact(Artifact("rssfeed", "feed", "<rss/>", "text/xml"))
+        sink = TelegramArtifactSink(
+            self.client, ArtifactSinkOptions(artifacts=["digest"])
+        )
+
+        sink.deliver(self.db)
+        sink.deliver(self.db)
+
+        post.assert_called_once()
+        (request_url,) = post.call_args.args
+        self.assertTrue(request_url.endswith("/sendDocument"))
+        self.assertEqual(
+            post.call_args.kwargs["data"],
+            {"chat_id": "chat", "caption": "digest/a/2026-10-01_2026-10-08"},
+        )
+        self.assertEqual(
+            post.call_args.kwargs["files"]["document"],
+            ("digest-a_2026-10-01_2026-10-08.md", b"# Week", "text/markdown"),
+        )
+        ((row, _),) = self.db.get_artifact_deliveries("telegram_artifacts")
+        self.assertEqual(row.external_ref, {"message_id": 7})
+
+
+class PluginTests(unittest.TestCase):
+    def test_both_sinks_without_subsections_and_only_the_named_ones_with(
+        self,
+    ) -> None:
+        options = {"bot_token": "t", "chat_id": "c"}
+
+        every = telegram.__newsmerger_plugin__(Services(), **options)
+        only_items = telegram.__newsmerger_plugin__(
+            Services(), **options, telegram={"interval": 5}
+        )
+
+        self.assertEqual(
+            [(name, protocol) for name, protocol, _ in every],
+            [("telegram", Sink), ("telegram_artifacts", Sink)],
+        )
+        ((name, _, sink),) = only_items
+        self.assertEqual((name, sink.interval), ("telegram", timedelta(minutes=5)))
+
+
+class MigrateTelegramStateTests(TelegramTestCase):
+    def test_posted_items_become_done_and_queued_ones_queued(self) -> None:
+        a3, _, _ = self.add_summarized(SOURCE_A, 3, 2, 1)
+        state = {
+            "watermark": "2026-10-02T00:00:00+00:00",
+            "queue": [["a", "h2"]],
+            "posted": [["a", "h3", 11], ["a", "gone", 12]],
+            "last_post": {"a": "2026-10-02T00:00:00+00:00"},
+        }
+        self.db.save_artifact(
+            Artifact("telegram", "state", json.dumps(state), "application/json")
+        )
+
+        with self.assertLogs("newsmerger", "WARNING") as logs:
+            self.assertEqual(migrate(self.db), (1, 1))
+            self.assertEqual(migrate(self.db), (0, 1))
+
+        self.assertIn("a/gone is no longer stored", logs.output[0])
+        rows = {
+            item.uid: (row.status, row.external_ref)
+            for row, item in self.db.get_item_deliveries("telegram")
+        }
+        self.assertEqual(
+            rows,
+            {
+                "h3": (DeliveryStatus.DONE, {"message_id": 11}),
+                "h2": (DeliveryStatus.QUEUED, None),
+            },
+        )
+        ((row, _),) = self.db.get_item_deliveries(
+            "telegram", ProcessingScope(item_ids=(a3.id,))
+        )
+        self.assertEqual(row.content_sha256, a3.content_sha256)
 
 
 class BuildCaptionTests(unittest.TestCase):

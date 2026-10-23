@@ -58,11 +58,16 @@ plugins:
     inputs: [tags, markdown]         # first LLM, its embed_model
 
   # Remixers.
-  telegram:
-    bot_token: ${TELEGRAM_BOT_TOKEN}
-    chat_id: ${TELEGRAM_CHAT_ID}
-    interval: 30                     # minutes between posts of the same source
   rssfeed:
   grouping:                          # singlelink, avglink and embeddings
   digest:                            # sends a week of articles per source
     days: 7
+
+  # Sinks.
+  telegram:
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
+    telegram:                        # summarized items
+      interval: 30                   # minutes between posts of the same source
+    telegram_artifacts:              # artifacts, as documents
+      artifacts: [digest]
