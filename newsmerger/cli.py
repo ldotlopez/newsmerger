@@ -565,7 +565,7 @@ def inspect_items_cmd(
                 item.source.id,
                 f"{item.published_at:%Y-%m-%d %H:%M}",
                 item.title,
-                ", ".join(
+                "\n".join(
                     f"{annotation_id} {processor}.{key}"
                     for annotation_id, processor, key in annotations.get(item.id, [])
                 ),
