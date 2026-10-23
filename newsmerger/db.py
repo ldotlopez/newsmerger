@@ -106,6 +106,11 @@ class UTCDateTime(TypeDecorator):
         return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
+# Ids are handles the CLI selects rows by (decision 0008): never reuse a
+# deleted one.
+AUTOINCREMENT = {"sqlite_autoincrement": True}
+
+
 def _sha256_column() -> Mapped[str]:
     return mapped_column(String(64), index=True)
 
@@ -161,6 +166,7 @@ class DBSourceItem(Base):
         CheckConstraint(
             "length(content_sha256) = 64", name="ck_source_items_content_sha256"
         ),
+        AUTOINCREMENT,
     )
 
     @classmethod
@@ -247,6 +253,7 @@ class DBProcessingState(Base):
         CheckConstraint(
             "status IN ('done', 'error', 'ignored')", name="ck_processing_state_status"
         ),
+        AUTOINCREMENT,
     )
 
 
@@ -272,6 +279,7 @@ class DBItemAnnotation(Base):
     __table_args__ = (
         UniqueConstraint("source_item_id", "processor", "key"),
         Index("ix_item_annotations_processor", "processor"),
+        AUTOINCREMENT,
     )
 
 
@@ -286,7 +294,7 @@ class DBArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
-    __table_args__ = (UniqueConstraint("remixer", "name"),)
+    __table_args__ = (UniqueConstraint("remixer", "name"), AUTOINCREMENT)
 
     @classmethod
     def from_dto(cls, dto: Artifact) -> Self:
