@@ -153,6 +153,13 @@ shows; artifacts by `<remixer>/<name>`. `enrich`, `remix`, `deliver`,
 `--remixer`, `--artifact` and `--limit` for artifacts. Filters combine; an
 id that the selection does not return is an error.
 
+`inspect` and `delete` sort with `--sort` (default `updated`), always
+ascending, so dates go oldest first; the sort also decides which rows
+`--limit` keeps. The keys: `id`, `source`, `published`, `updated` and
+`title` for items; `id`, `item`, `processor` and `updated` for
+annotations; `id`, `type`, `created` and `updated` for artifacts; `id`,
+`sink`, `status` and `updated` for deliveries.
+
 `inspect items` lists each item's annotations as `<id> <processor>.<key>`.
 `inspect annotations` shows a one-line preview per key, and one
 `--annotation` prints its full value (text as is, the rest as JSON).
