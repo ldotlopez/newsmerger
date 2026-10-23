@@ -25,17 +25,26 @@ from rich.progress import track
 from rich.syntax import Syntax
 from rich.table import Table
 
-from .app import Application, UnsupportedProviderError
+from .app import Application, LockedError, UnsupportedProviderError
 from .config import ConfigError
 from .consts import PACKAGE_NAME
+from .db import DeliveryStatus
 from .models import ProcessingScope
+from .processors import RunSummary
+from .sinks import SelectionRequiredError
 
 click = plain_click if RICH_DISABLED else rich_click
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
 
 # Errors a user can fix (bad config, unknown plugin...): reported without a traceback.
-USER_ERRORS = (ConfigError, PluginError, UnsupportedProviderError)
+USER_ERRORS = (
+    ConfigError,
+    PluginError,
+    UnsupportedProviderError,
+    LockedError,
+    SelectionRequiredError,
+)
 
 
 def report_user_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
@@ -49,10 +58,13 @@ def report_user_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
-def app_from_context(ctx: click.Context) -> Application:
-    """Build the Application for this invocation and close it when the command ends."""
+def app_from_context(ctx: click.Context, *, write: bool = False) -> Application:
+    """Build the Application for this invocation and close it when the command
+    ends. Commands that `write` hold the write lock until then."""
     app = Application.from_config_file(ctx.obj["config_path"])
     ctx.call_on_close(app.close)
+    if write:
+        app.lock()
     return app
 
 
@@ -110,6 +122,28 @@ def scope_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
+def parse_artifact_ids(
+    ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
+) -> tuple[tuple[str, str], ...]:
+    """`<remixer>/<name>` values as pairs; the name may contain slashes."""
+    pairs = []
+    for value in values:
+        remixer, _, name = value.partition("/")
+        if not remixer or not name:
+            raise click.BadParameter(f"'{value}' is not <remixer>/<name>")
+        pairs.append((remixer, name))
+    return tuple(pairs)
+
+
+artifact_ids_option = click.option(
+    "--artifact",
+    "artifact_ids",
+    multiple=True,
+    callback=parse_artifact_ids,
+    help="Artifact as <remixer>/<name> (repeatable)",
+)
+
+
 @click.group()
 @click.option("-c", "--config", "config_path", type=Path, default=None)
 @click_logging_options
@@ -140,13 +174,9 @@ def cli(
     ctx.obj["config_path"] = config_path
 
 
-@cli.command("import")
-@click.pass_context
-@report_user_errors
-def import_cmd(ctx: click.Context) -> None:
-    """Import every configured source."""
-    app = app_from_context(ctx)
-
+def import_sources(app: Application) -> int:
+    """Import every configured source and print a summary; return how many
+    failed."""
     rows = []
     failed = 0
     for source in track(
@@ -166,7 +196,39 @@ def import_cmd(ctx: click.Context) -> None:
             rows.append([source.id, len(items), ""])
 
     print_table("Import", ["Source", "Items", "Error"], rows)
-    if failed:
+    return failed
+
+
+def print_enrich(summaries: dict[str, RunSummary]) -> None:
+    print_table(
+        "Enrich",
+        ["Processor", "Done", "Ignored", "Failed"],
+        [[name, s.done, s.ignored, s.failed] for name, s in summaries.items()],
+    )
+
+
+def print_remix(produced: dict[str, list[str]]) -> None:
+    print_table(
+        "Remix",
+        ["Remixer", "Artifacts"],
+        [[name, ", ".join(names) or "-"] for name, names in produced.items()],
+    )
+
+
+def print_deliver(summaries: dict[str, RunSummary]) -> None:
+    print_table(
+        "Deliver",
+        ["Sink", "Delivered", "Failed"],
+        [[name, s.done, s.failed] for name, s in summaries.items()],
+    )
+
+
+@cli.command("import")
+@click.pass_context
+@report_user_errors
+def import_cmd(ctx: click.Context) -> None:
+    """Import every configured source."""
+    if failed := import_sources(app_from_context(ctx, write=True)):
         raise click.ClickException(f"{failed} source(s) failed")
 
 
@@ -177,7 +239,7 @@ def import_cmd(ctx: click.Context) -> None:
 @report_user_errors
 def import_url_cmd(ctx: click.Context, source_id: str, url: str) -> None:
     """Import one article URL into a configured source."""
-    item = app_from_context(ctx).import_url(source_id, url)
+    item = app_from_context(ctx, write=True).import_url(source_id, url)
     click.echo(f"Imported '{item.title}' from {item.uri}")
 
 
@@ -195,17 +257,12 @@ def enrich_cmd(
     ctx: click.Context, processor: str | None, scope: ProcessingScope, force: bool
 ) -> None:
     """Run one processor, or every configured one in order."""
-    app = app_from_context(ctx)
+    app = app_from_context(ctx, write=True)
     if processor:
         summaries = {processor: app.run_processor(processor, scope=scope, force=force)}
     else:
         summaries = app.enrich(scope=scope, force=force)
-
-    print_table(
-        "Enrich",
-        ["Processor", "Done", "Ignored", "Failed"],
-        [[name, s.done, s.ignored, s.failed] for name, s in summaries.items()],
-    )
+    print_enrich(summaries)
 
 
 @cli.command("remix")
@@ -215,17 +272,133 @@ def enrich_cmd(
 @report_user_errors
 def remix_cmd(ctx: click.Context, remixer: str | None, scope: ProcessingScope) -> None:
     """Run one remixer, or every configured one in order."""
-    app = app_from_context(ctx)
+    app = app_from_context(ctx, write=True)
     if remixer:
         produced = {remixer: app.run_remixer(remixer, scope=scope)}
     else:
         produced = app.remix(scope=scope)
+    print_remix(produced)
 
-    print_table(
-        "Remix",
-        ["Remixer", "Artifacts"],
-        [[name, ", ".join(names) or "-"] for name, names in produced.items()],
+
+@cli.command("deliver")
+@click.argument("sink", required=False)
+@scope_options
+@artifact_ids_option
+@click.option(
+    "--requeue",
+    is_flag=True,
+    help="Requeue the failed deliveries in scope with fresh attempts",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Send the selected subjects now, whatever their state (needs SINK and"
+    " --item or --artifact)",
+)
+@click.pass_context
+@report_user_errors
+def deliver_cmd(
+    ctx: click.Context,
+    sink: str | None,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    requeue: bool,
+    force: bool,
+) -> None:
+    """Run one sink, or every configured one in order.
+
+    Without --since or --item, a sink queues what is new in its lookback
+    window, then delivers what is due.
+    """
+    if force and sink is None:
+        raise click.UsageError("--force needs a SINK")
+    app = app_from_context(ctx, write=True)
+    if sink:
+        summaries = {
+            sink: app.run_sink(
+                sink, scope=scope, artifacts=artifact_ids, requeue=requeue, force=force
+            )
+        }
+    else:
+        summaries = app.deliver(scope=scope, artifacts=artifact_ids, requeue=requeue)
+    print_deliver(summaries)
+
+
+@cli.command("run")
+@click.pass_context
+@report_user_errors
+def run_cmd(ctx: click.Context) -> None:
+    """Run import, enrich, remix and deliver in turn.
+
+    A failure is logged and the next phase still runs; the exit status is
+    non-zero if anything failed.
+    """
+    app = app_from_context(ctx, write=True)
+    failures = 0
+
+    def enrich() -> int:
+        summaries = app.enrich()
+        print_enrich(summaries)
+        return sum(s.failed for s in summaries.values())
+
+    def remix() -> int:
+        print_remix(app.remix())
+        return 0
+
+    def deliver() -> int:
+        summaries = app.deliver()
+        print_deliver(summaries)
+        return sum(s.failed for s in summaries.values())
+
+    phases: list[tuple[str, Callable[[], int]]] = [
+        ("import", lambda: import_sources(app)),
+        ("enrich", enrich),
+        ("remix", remix),
+        ("deliver", deliver),
+    ]
+    for phase, run_phase in phases:
+        try:
+            failures += run_phase()
+        except Exception:
+            LOGGER.exception(f"{phase} failed")
+            failures += 1
+    if failures:
+        raise click.ClickException(f"{failures} failure(s); see the log above")
+
+
+@cli.group("deliveries")
+def deliveries_group() -> None:
+    """Settle the delivery ledger (read it with `inspect deliveries`)."""
+
+
+@deliveries_group.command("resolve")
+@click.argument("sink")
+@click.option(
+    "--as",
+    "status",
+    type=click.Choice([DeliveryStatus.DONE.value, DeliveryStatus.QUEUED.value]),
+    required=True,
+    help="done: it was delivered; queued: deliver it again",
+)
+@scope_options
+@artifact_ids_option
+@click.pass_context
+@report_user_errors
+def resolve_cmd(
+    ctx: click.Context,
+    sink: str,
+    status: str,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+) -> None:
+    """Settle a sink's interrupted (`sending`) deliveries in the selection."""
+    resolved = app_from_context(ctx, write=True).resolve_deliveries(
+        sink,
+        DeliveryStatus(status),
+        scope=scope,
+        artifact_names=artifact_ids or None,
     )
+    click.echo(f"Resolved {resolved} interrupted delivery(ies) of '{sink}' as {status}")
 
 
 # --- Inspection -------------------------------------------------------------
@@ -274,19 +447,6 @@ def check_found(kind: str, requested: Iterable[Any], found: Iterable[Any]) -> No
         raise click.ClickException(f"no {kind} {listed} in the selection")
 
 
-def parse_artifact_ids(
-    ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
-) -> tuple[tuple[str, str], ...]:
-    """`<remixer>/<name>` values as pairs; the name may contain slashes."""
-    pairs = []
-    for value in values:
-        remixer, _, name = value.partition("/")
-        if not remixer or not name:
-            raise click.BadParameter(f"'{value}' is not <remixer>/<name>")
-        pairs.append((remixer, name))
-    return tuple(pairs)
-
-
 def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     """Add --processor/--key/--annotation, which narrow an item selection."""
     command = click.option(
@@ -307,13 +467,7 @@ def artifact_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     command = click.option(
         "--limit", type=int, default=None, help="At most this many artifacts"
     )(command)
-    command = click.option(
-        "--artifact",
-        "artifact_ids",
-        multiple=True,
-        callback=parse_artifact_ids,
-        help="Artifact as <remixer>/<name> (repeatable)",
-    )(command)
+    command = artifact_ids_option(command)
     return click.option(
         "--remixer", default=None, help="Only this remixer's artifacts"
     )(command)
@@ -519,3 +673,56 @@ def inspect_artifacts_cmd(
                 for a in artifacts
             ],
         )
+
+
+@inspect_group.command("deliveries")
+@scope_options
+@artifact_ids_option
+@click.option("--sink", default=None, help="Only this sink's deliveries")
+@click.option(
+    "--status",
+    type=click.Choice([status.value for status in DeliveryStatus]),
+    default=None,
+    help="Only deliveries in this state",
+)
+@format_option
+@click.pass_context
+@report_user_errors
+def inspect_deliveries_cmd(
+    ctx: click.Context,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    sink: str | None,
+    status: str | None,
+    output_format: str,
+) -> None:
+    """The delivery ledger, oldest row first; --limit counts rows.
+
+    Item filters keep item deliveries, --artifact artifact deliveries.
+    """
+    deliveries = app_from_context(ctx).find_deliveries(
+        scope,
+        sink=sink,
+        status=DeliveryStatus(status) if status else None,
+        artifact_names=artifact_ids or None,
+    )
+
+    if output_format == "json":
+        print_json([dataclasses.asdict(delivery) for delivery in deliveries])
+        return
+
+    print_table(
+        "Deliveries",
+        ["Sink", "Subject", "Status", "Attempts", "Updated", "Error"],
+        [
+            [
+                d.sink,
+                f"item {d.item_id}" if d.item_id is not None else d.artifact_name,
+                d.status,
+                d.attempts,
+                f"{d.updated_at:%Y-%m-%d %H:%M}",
+                preview(d.last_error or ""),
+            ]
+            for d in deliveries
+        ],
+    )

@@ -38,6 +38,7 @@ def main(
     setup_logger(PACKAGE_NAME, log_level="info")
 
     with Application.from_config_file(config_path) as app:
+        app.lock()
         item = app.import_url(source_id, url)
         scope = ProcessingScope(item_ids=(item.id,))
         for processor in processors:

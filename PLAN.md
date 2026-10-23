@@ -30,7 +30,7 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
 ## Sinks and the delivery ledger (decision 0007)
 
-- [ ] **1. `deliveries` table and its `db.py` API**, with tests. DTOs, as
+- [x] **1. `deliveries` table and its `db.py` API**, with tests. DTOs, as
   in the rest of the module:
   - `get_pending_items(sink, scope, requires, max_retries)`: items without
     a row, or `queued` / `error` with the backoff elapsed; reuses the
@@ -45,7 +45,7 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
     deliveries` and `delete`.
   - `last_delivery_by_source(sink)`: time of the last `done` delivery per
     source (replaces `last_post`).
-- [ ] **2. `sinks.py`, `Application` and CLI.** `Sink`, `BaseItemSink`,
+- [x] **2. `sinks.py`, `Application` and CLI.** `Sink`, `BaseItemSink`,
   `BaseArtifactSink`, `UnavailableSink`; `Application.run_sink` and
   `Application.deliver`, in configuration order; `deliver [SINK]` with
   `--requeue`, `--force` (requires `--item` or `--artifact`) and the scope

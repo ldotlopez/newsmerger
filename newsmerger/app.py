@@ -1,29 +1,32 @@
 """Application: the single entry point for front ends (CLI, scripts) and
 external tools. It owns the wiring (config, HTTP cache, database, plugins),
-runs the three phases (import, enrich, remix) and answers queries.
+runs the four phases (import, enrich, remix, deliver) and answers queries.
 """
 
 from __future__ import annotations
 
+import fcntl
 import os
 import pickle
 from collections.abc import Iterable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import IO, Any, Self
 
 import pydantic
 from foundation.cache import UserCache
 from foundation.plugin import EntryPointError, ProtocolConformanceError, Register
+from sqlalchemy import make_url
 
 from .config import Config, ConfigError, plugin_options_error
 from .consts import PACKAGE_NAME
-from .db import Database
+from .db import Database, DeliveryStatus
 from .httpclient import HTTPClient
 from .llms import LLM
 from .models import (
     Annotation,
     Artifact,
+    Delivery,
     ItemKey,
     ProcessingScope,
     SourceData,
@@ -33,6 +36,7 @@ from .plugins import Services
 from .processors import Processor, RunSummary
 from .providers import Provider, URLProvider
 from .remixers import Remixer
+from .sinks import ArtifactNames, Sink
 
 PLUGINS_NAMESPACE = "newsmerger.plugins"
 PLUGIN_ENTRY_POINT = "__newsmerger_plugin__"
@@ -50,6 +54,10 @@ class UnsupportedProviderError(ValueError):
     """The provider cannot perform the requested operation."""
 
 
+class LockedError(RuntimeError):
+    """Another newsmerger command holds the write lock."""
+
+
 class Application:
     def __init__(self, config: Config, *, create_schema: bool = True) -> None:
         self.config = config
@@ -57,6 +65,7 @@ class Application:
         self._providers: dict[str, Provider] = objects_by_name(plugins, Provider)
         self._processors: dict[str, Processor] = objects_by_name(plugins, Processor)
         self._remixers: dict[str, Remixer] = objects_by_name(plugins, Remixer)
+        self._sinks: dict[str, Sink] = objects_by_name(plugins, Sink)
         for source in config.sources:
             if source.provider not in self._providers:
                 raise ConfigError(
@@ -72,6 +81,7 @@ class Application:
             base_dir=config.cache.base_dir,
         )
         self._fetcher = HTTPClient(cache=self._cache)
+        self._lock_file: IO[str] | None = None
 
     @classmethod
     def from_config_file(
@@ -93,11 +103,37 @@ class Application:
         self.close()
 
     def close(self) -> None:
-        """Drop expired cache entries, then release the cache and database."""
+        """Drop expired cache entries, then release the cache, the database
+        and the write lock."""
         # UserCache never prunes on its own; once per run keeps it bounded.
         self._cache.prune()
         self._cache.close()
         self._db.close()
+        if self._lock_file is not None:
+            self._lock_file.close()
+            self._lock_file = None
+
+    def lock(self) -> None:
+        """Take the exclusive write lock, a file next to the database, until
+        `close()`. Raise `LockedError` at once if another process holds it.
+        In-memory databases are private to their process and need none.
+
+        Every command that writes takes it, so writers never overlap.
+        """
+        url = make_url(self.config.db.uri)
+        if url.get_backend_name() != "sqlite" or url.database in (None, "", ":memory:"):
+            return
+        lock_path = Path(f"{url.database}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("a")
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_file.close()
+            raise LockedError(
+                f"another newsmerger command is using the database ({lock_path})"
+            ) from None
+        self._lock_file = lock_file
 
     @property
     def sources(self) -> list[SourceData]:
@@ -170,6 +206,62 @@ class Application:
         """Run every loaded remixer, in configuration order."""
         return {name: self.run_remixer(name, scope=scope) for name in self._remixers}
 
+    # --- Deliver -----------------------------------------------------------
+
+    def run_sink(
+        self,
+        name: str,
+        *,
+        scope: ProcessingScope | None = None,
+        artifacts: ArtifactNames = (),
+        requeue: bool = False,
+        force: bool = False,
+    ) -> RunSummary:
+        """Run one loaded sink. `force` sends the selected subjects now and
+        needs an explicit selection."""
+        sink = lookup(self._sinks, name, "sink")
+        return sink.deliver(
+            self._db, scope=scope, artifacts=artifacts, requeue=requeue, force=force
+        )
+
+    def deliver(
+        self,
+        *,
+        scope: ProcessingScope | None = None,
+        artifacts: ArtifactNames = (),
+        requeue: bool = False,
+    ) -> dict[str, RunSummary]:
+        """Run every loaded sink, in configuration order."""
+        return {
+            name: self.run_sink(name, scope=scope, artifacts=artifacts, requeue=requeue)
+            for name in self._sinks
+        }
+
+    def resolve_deliveries(
+        self,
+        sink: str,
+        status: DeliveryStatus,
+        *,
+        scope: ProcessingScope | None = None,
+        artifact_names: ArtifactNames | None = None,
+    ) -> int:
+        """Settle the sink's interrupted (`sending`) rows in the selection as
+        `done` (it was delivered) or `queued` (deliver it again); return how
+        many. The sink does not need to be loaded."""
+        if status not in (DeliveryStatus.DONE, DeliveryStatus.QUEUED):
+            raise ValueError(f"cannot resolve a delivery as '{status}'")
+        rows = self._db.find_deliveries(
+            scope,
+            sink=sink,
+            status=DeliveryStatus.SENDING,
+            artifact_names=artifact_names,
+        )
+        for delivery in rows:
+            delivery.status = status
+            delivery.attempts = 0
+            self._db.save_delivery(delivery)
+        return len(rows)
+
     # --- Queries -----------------------------------------------------------
 
     def get_items(self, scope: ProcessingScope | None = None) -> list[SourceItem]:
@@ -229,6 +321,20 @@ class Application:
         """Artifacts' metadata, by remixer and name; `content` is None.
         `names` keeps only these `(remixer, name)` pairs."""
         return self._db.list_artifacts(remixer, names=names, limit=limit)
+
+    def find_deliveries(
+        self,
+        scope: ProcessingScope | None = None,
+        *,
+        sink: str | None = None,
+        status: DeliveryStatus | None = None,
+        artifact_names: ArtifactNames | None = None,
+    ) -> list[Delivery]:
+        """Ledger rows in creation order; item filters keep item rows,
+        `artifact_names` artifact rows, and `limit` counts rows."""
+        return self._db.find_deliveries(
+            scope, sink=sink, status=status, artifact_names=artifact_names
+        )
 
     def delete_annotations(
         self, *, processor: str | None = None, item: SourceItem | None = None
