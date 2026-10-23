@@ -215,7 +215,7 @@ class InspectCommandTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         app.get_items.assert_called_once_with(
-            ProcessingScope(source="plaza", item_ids=(7,))
+            ProcessingScope(source="plaza", item_ids=(7,)), sort="updated"
         )
         self.assertEqual(list(app.get_annotation_keys.call_args.args[0]), [7])
         self.assertIn("Title", result.output)
@@ -237,6 +237,19 @@ class InspectCommandTests(unittest.TestCase):
             record["annotations"],
             [{"id": 12, "processor": "summarize", "key": "summary"}],
         )
+
+    def test_sort_takes_a_key_of_the_entity(self) -> None:
+        app = Mock()
+        app.get_items.return_value = []
+        app.get_annotation_keys.return_value = {}
+
+        result = invoke(app, "inspect", "items", "--sort", "source", "--limit", "5")
+        wrong = invoke(app, "inspect", "items", "--sort", "processor")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.get_items.assert_called_once_with(ProcessingScope(limit=5), sort="source")
+        self.assertEqual(wrong.exit_code, 2)
+        self.assertIn("'processor' is not one of", wrong.output)
 
     def test_missing_item_is_an_error(self) -> None:
         app = Mock()
@@ -264,6 +277,7 @@ class InspectCommandTests(unittest.TestCase):
             processor="tagger",
             key=None,
             annotation_ids=None,
+            sort="updated",
         )
         self.assertIn("# Title…", result.output)
         self.assertNotIn("body body", result.output)
@@ -308,7 +322,9 @@ class InspectCommandTests(unittest.TestCase):
         result = invoke(app, "inspect", "artifacts", "--remixer", "rssfeed")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.list_artifacts.assert_called_once_with("rssfeed", names=None, limit=None)
+        app.list_artifacts.assert_called_once_with(
+            "rssfeed", names=None, limit=None, sort="updated"
+        )
         self.assertIn("rssfeed/feed", result.output)
         self.assertIn("application/rss+xml", result.output)
         app.get_artifact.assert_not_called()
@@ -329,7 +345,10 @@ class InspectCommandTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         app.list_artifacts.assert_called_once_with(
-            None, names=(("digest", "a/2026-10-01_2026-10-08"),), limit=None
+            None,
+            names=(("digest", "a/2026-10-01_2026-10-08"),),
+            limit=None,
+            sort="updated",
         )
         self.assertEqual(result.stdout, "# Week")
         self.assertIn("digest/a/2026-10-01_2026-10-08 · text/markdown", result.stderr)
@@ -373,6 +392,7 @@ class InspectCommandTests(unittest.TestCase):
             sink="telegram",
             status=DeliveryStatus.ERROR,
             artifact_names=None,
+            sort="updated",
         )
         self.assertIn("item 7", result.output)
         self.assertIn("digest/a/1", result.output)

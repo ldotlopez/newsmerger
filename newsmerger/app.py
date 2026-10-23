@@ -247,9 +247,12 @@ class Application:
 
     # --- Queries -----------------------------------------------------------
 
-    def get_items(self, scope: ProcessingScope | None = None) -> list[SourceItem]:
-        """Items in scope, oldest first, without their content."""
-        return self._db.get_items(scope)
+    def get_items(
+        self, scope: ProcessingScope | None = None, *, sort: str = "published"
+    ) -> list[SourceItem]:
+        """Items in scope by a `db.ITEM_SORTS` key, ascending, without their
+        content."""
+        return self._db.get_items(scope, sort=sort)
 
     def get_content(self, item: SourceItem) -> bytes:
         return self._db.get_content(item)
@@ -277,11 +280,17 @@ class Application:
         processor: str | None = None,
         key: str | None = None,
         annotation_ids: Iterable[int] | None = None,
+        sort: str = "item",
     ) -> list[Annotation]:
-        """Annotations of the items in scope, with their values; filters
-        combine and `limit` counts annotations."""
+        """Annotations of the items in scope, with their values, by a
+        `db.ANNOTATION_SORTS` key; filters combine and `limit` counts
+        annotations."""
         return self._db.find_annotations(
-            scope, processor=processor, key=key, annotation_ids=annotation_ids
+            scope,
+            processor=processor,
+            key=key,
+            annotation_ids=annotation_ids,
+            sort=sort,
         )
 
     def get_annotation_values(
@@ -300,10 +309,11 @@ class Application:
         *,
         names: Iterable[tuple[str, str]] | None = None,
         limit: int | None = None,
+        sort: str = "id",
     ) -> list[Artifact]:
-        """Artifacts' metadata, by remixer and name; `content` is None.
-        `names` keeps only these `(remixer, name)` pairs."""
-        return self._db.list_artifacts(remixer, names=names, limit=limit)
+        """Artifacts' metadata by a `db.ARTIFACT_SORTS` key; `content` is
+        None. `names` keeps only these `(remixer, name)` pairs."""
+        return self._db.list_artifacts(remixer, names=names, limit=limit, sort=sort)
 
     def find_deliveries(
         self,
@@ -312,11 +322,16 @@ class Application:
         sink: str | None = None,
         status: DeliveryStatus | None = None,
         artifact_names: ArtifactNames | None = None,
+        sort: str = "id",
     ) -> list[Delivery]:
-        """Ledger rows in creation order; item filters keep item rows,
-        `artifact_names` artifact rows, and `limit` counts rows."""
+        """Ledger rows by a `db.DELIVERY_SORTS` key; item filters keep item
+        rows, `artifact_names` artifact rows, and `limit` counts rows."""
         return self._db.find_deliveries(
-            scope, sink=sink, status=status, artifact_names=artifact_names
+            scope,
+            sink=sink,
+            status=status,
+            artifact_names=artifact_names,
+            sort=sort,
         )
 
     def delete_annotations(
