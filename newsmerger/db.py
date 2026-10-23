@@ -526,7 +526,14 @@ class Database:
         """
         if item.content_sha256 is None:
             raise ValueError(f"item {item.key} has no content reference")
-        return self.contents.get(item.content_sha256)
+        return self.get_stored_content(item.content_sha256)
+
+    def get_stored_content(self, sha256: str) -> bytes:
+        """Return the stored content with this sha256, whatever references it.
+
+        Raise foundation.storage.EntryNotFoundError if there is none.
+        """
+        return self.contents.get(sha256)
 
     def _release_contents(self, sha256s: set[str]) -> None:
         """Delete the contents no row references any more.

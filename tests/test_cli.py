@@ -1,9 +1,11 @@
 import json
+import re
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 from click.testing import CliRunner
+from foundation.storage import EntryNotFoundError
 
 from newsmerger.cli import cli
 from newsmerger.config import ConfigError
@@ -211,15 +213,63 @@ class InspectCommandTests(unittest.TestCase):
         app.get_items.return_value = [ITEM]
         app.get_annotation_keys.return_value = {7: [(12, "summarize", "summary")]}
 
-        result = invoke(app, "inspect", "items", "--source", "plaza", "--item", "7")
+        result = invoke(app, "inspect", "items", "--source", "plaza")
 
         self.assertEqual(result.exit_code, 0, result.output)
         app.get_items.assert_called_once_with(
-            ProcessingScope(source="plaza", item_ids=(7,)), sort="updated"
+            ProcessingScope(source="plaza"), sort="updated"
         )
         self.assertEqual(list(app.get_annotation_keys.call_args.args[0]), [7])
         self.assertIn("Title", result.output)
         self.assertIn("12 summarize.summary", result.output)
+
+    def test_one_item_shows_its_fields_and_a_row_per_annotation(self) -> None:
+        app = Mock()
+        app.get_items.return_value = [
+            SourceItem(
+                source=SOURCE,
+                uid="abc",
+                title="Title",
+                uri="https://plaza.test/1",
+                content=b"<p>hi</p>",
+                data={"author": "Ana"},
+                id=7,
+            )
+        ]
+        app.get_annotation_keys.return_value = {
+            7: [(12, "summarize", "summary"), (13, "tagger", "tags")]
+        }
+
+        result = invoke(app, "inspect", "items", "--item", "7")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Annotation #12", result.output)
+        self.assertIn("summarize.summary", result.output)
+        self.assertIn("Annotation #13", result.output)
+        self.assertIn("Ana", result.output)
+        sha256 = app.get_items.return_value[0].content_sha256
+        self.assertIn("inspect content --sha256", result.output)
+        # the hash folds across lines in a narrow terminal
+        self.assertIn(sha256, re.sub(r"[\s│]", "", result.output))
+
+    def test_content_prints_the_stored_bytes(self) -> None:
+        app = Mock()
+        app.get_stored_content.return_value = b"<p>hi</p>"
+
+        result = invoke(app, "inspect", "content", "--sha256", "ab12")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.get_stored_content.assert_called_once_with("ab12")
+        self.assertEqual(result.output, "<p>hi</p>")
+
+    def test_missing_content_is_an_error(self) -> None:
+        app = Mock()
+        app.get_stored_content.side_effect = EntryNotFoundError("ab12")
+
+        result = invoke(app, "inspect", "content", "--sha256", "ab12")
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("no content ab12", result.output)
 
     def test_items_as_json(self) -> None:
         app = Mock()
