@@ -133,6 +133,8 @@ uv run newsmerger -c config.yaml run
 
 # Inspect what is stored (read-only), as a table or --format json
 uv run newsmerger -c config.yaml inspect items --source castellonplaza --limit 20
+uv run newsmerger -c config.yaml inspect items --item 4127
+uv run newsmerger -c config.yaml inspect content --sha256 <sha256> > item.html
 uv run newsmerger -c config.yaml inspect annotations --item 4127
 uv run newsmerger -c config.yaml inspect annotations --annotation 512
 uv run newsmerger -c config.yaml inspect artifacts
@@ -160,7 +162,10 @@ ascending, so dates go oldest first; the sort also decides which rows
 annotations; `id`, `type`, `created` and `updated` for artifacts; `id`,
 `sink`, `status` and `updated` for deliveries.
 
-`inspect items` lists each item's annotations as `<id> <processor>.<key>`.
+`inspect items` lists each item's annotations as `<id> <processor>.<key>`;
+one `--item` shows all its fields, a row per annotation, and the
+`inspect content --sha256 <sha256>` command that writes its stored content
+to stdout as is.
 `inspect annotations` shows a one-line preview per key, and one
 `--annotation` prints its full value (text as is, the rest as JSON).
 `inspect artifacts` loads contents only for `--artifact`, and one
