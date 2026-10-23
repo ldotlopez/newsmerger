@@ -430,6 +430,39 @@ class DBDelivery(Base):
         self.updated_at = dto.updated_at
 
 
+# Sort keys of the selection queries, by entity: the columns to sort by,
+# ascending (oldest first for dates). The row id breaks ties.
+ITEM_SORTS = {
+    "id": [DBSourceItem.id],
+    "source": [DBSourceItem.source_id],
+    "published": [DBSourceItem.published_at],
+    "updated": [DBSourceItem.modified_at],
+    "title": [DBSourceItem.title],
+}
+ANNOTATION_SORTS = {
+    "id": [DBItemAnnotation.id],
+    "item": [
+        DBItemAnnotation.source_item_id,
+        DBItemAnnotation.processor,
+        DBItemAnnotation.key,
+    ],
+    "processor": [DBItemAnnotation.processor, DBItemAnnotation.key],
+    "updated": [DBItemAnnotation.updated_at],
+}
+ARTIFACT_SORTS = {
+    "id": [DBArtifact.remixer, DBArtifact.name],
+    "type": [DBArtifact.content_type],
+    "created": [DBArtifact.created_at],
+    "updated": [DBArtifact.updated_at],
+}
+DELIVERY_SORTS = {
+    "id": [DBDelivery.id],
+    "sink": [DBDelivery.sink],
+    "status": [DBDelivery.status],
+    "updated": [DBDelivery.updated_at],
+}
+
+
 def _encode_value(value: Any) -> tuple[str, bytes]:
     """An annotation value as stored: its JSON bytes and their sha256."""
     encoded = dump_json_compatible(value).encode()
@@ -623,16 +656,20 @@ class Database:
     # --- Items -------------------------------------------------------------
 
     def get_items(
-        self, scope: ProcessingScope | None = None, *, newest_first: bool = False
+        self,
+        scope: ProcessingScope | None = None,
+        *,
+        newest_first: bool = False,
+        sort: str = "published",
     ) -> list[SourceItem]:
-        """Items in scope, oldest first unless `newest_first`; `limit` keeps
-        the first ones in that order."""
+        """Items in scope, by an `ITEM_SORTS` key, ascending unless
+        `newest_first`; `limit` keeps the first ones in that order."""
         scope = scope or ProcessingScope()
-        published_at = DBSourceItem.published_at
+        columns = [*ITEM_SORTS[sort], DBSourceItem.id]
         with self.session_scope() as sess:
             query = self._apply_scope(sess.query(DBSourceItem), scope)
             query = query.order_by(
-                published_at.desc() if newest_first else published_at
+                *(column.desc() if newest_first else column for column in columns)
             )
             if scope.limit:
                 query = query.limit(scope.limit)
@@ -911,10 +948,11 @@ class Database:
         processor: str | None = None,
         key: str | None = None,
         annotation_ids: Iterable[int] | None = None,
+        sort: str = "item",
     ) -> list[Annotation]:
-        """Annotations of the items in scope, with their values, by item
-        (oldest first), processor and key. Every filter combines; `limit`
-        counts annotations."""
+        """Annotations of the items in scope, with their values, by an
+        `ANNOTATION_SORTS` key. Every filter combines; `limit` counts
+        annotations."""
         scope = scope or ProcessingScope()
         with self.session_scope() as sess:
             query = sess.query(DBItemAnnotation).join(
@@ -927,12 +965,7 @@ class Database:
                 query = query.filter(DBItemAnnotation.key == key)
             if annotation_ids is not None:
                 query = query.filter(DBItemAnnotation.id.in_(annotation_ids))
-            query = query.order_by(
-                DBSourceItem.published_at,
-                DBSourceItem.id,
-                DBItemAnnotation.processor,
-                DBItemAnnotation.key,
-            )
+            query = query.order_by(*ANNOTATION_SORTS[sort], DBItemAnnotation.id)
             if scope.limit:
                 query = query.limit(scope.limit)
             rows = [
@@ -1110,11 +1143,14 @@ class Database:
         *,
         names: Iterable[tuple[str, str]] | None = None,
         limit: int | None = None,
+        sort: str = "id",
     ) -> list[Artifact]:
-        """Artifacts by remixer and name, without their content. `names`
-        keeps only these `(remixer, name)` pairs; filters combine."""
+        """Artifacts by an `ARTIFACT_SORTS` key, without their content.
+        `names` keeps only these `(remixer, name)` pairs; filters combine."""
         with self.session_scope() as sess:
-            query = sess.query(DBArtifact).order_by(DBArtifact.remixer, DBArtifact.name)
+            query = sess.query(DBArtifact).order_by(
+                *ARTIFACT_SORTS[sort], DBArtifact.id
+            )
             if remixer is not None:
                 query = query.filter(DBArtifact.remixer == remixer)
             if names is not None:
@@ -1281,10 +1317,11 @@ class Database:
         sink: str | None = None,
         status: DeliveryStatus | None = None,
         artifact_names: Iterable[tuple[str, str]] | None = None,
+        sort: str = "id",
     ) -> list[Delivery]:
-        """Ledger rows in creation order. Item filters in `scope` keep item
-        rows only and `artifact_names` artifact rows only; filters combine
-        and `limit` counts rows."""
+        """Ledger rows by a `DELIVERY_SORTS` key (`id` is creation order).
+        Item filters in `scope` keep item rows only and `artifact_names`
+        artifact rows only; filters combine and `limit` counts rows."""
         scope = scope or ProcessingScope()
         with self.session_scope() as sess:
             query = (
@@ -1303,7 +1340,7 @@ class Database:
                         list(artifact_names)
                     )
                 )
-            query = query.order_by(DBDelivery.id)
+            query = query.order_by(*DELIVERY_SORTS[sort], DBDelivery.id)
             if scope.limit:
                 query = query.limit(scope.limit)
             return [row.to_dto() for row in query]

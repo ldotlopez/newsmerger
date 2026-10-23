@@ -310,6 +310,26 @@ class GetItemsTests(DatabaseTestCase):
         self.assertEqual(self.uids(), ["d1", "d2", "d3"])
         self.assertEqual(self.uids(scope=ProcessingScope(limit=2)), ["d1", "d2"])
 
+    def test_sort_keys_order_ascending_and_decide_what_limit_keeps(self):
+        # d1 is the oldest published and the most recently updated.
+        self.db.upsert_source_items(
+            [
+                make_item(
+                    make_source(),
+                    uid="d1",
+                    content=b"changed",
+                    published_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            ]
+        )
+
+        self.assertEqual(self.uids(sort="updated"), ["d2", "d3", "d1"])
+        self.assertEqual(self.uids(sort="published"), ["d1", "d2", "d3"])
+        self.assertEqual(
+            self.uids(scope=ProcessingScope(limit=1), sort="updated"), ["d2"]
+        )
+        self.assertEqual(self.uids(sort="id"), ["d1", "d2", "d3"])
+
     def test_newest_first_with_limit_keeps_the_newest(self):
         self.assertEqual(
             self.uids(scope=ProcessingScope(limit=2), newest_first=True), ["d3", "d2"]

@@ -28,7 +28,13 @@ from rich.table import Table
 from .app import Application, LockedError, UnsupportedProviderError
 from .config import ConfigError
 from .consts import PACKAGE_NAME
-from .db import DeliveryStatus
+from .db import (
+    ANNOTATION_SORTS,
+    ARTIFACT_SORTS,
+    DELIVERY_SORTS,
+    ITEM_SORTS,
+    DeliveryStatus,
+)
 from .models import ProcessingScope
 from .processors import RunSummary
 from .sinks import SelectionRequiredError
@@ -473,6 +479,18 @@ def artifact_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     )(command)
 
 
+def sort_option(keys: Iterable[str]) -> Callable[[Callable], Callable]:
+    """--sort among `keys`, oldest (or smallest) first; `updated` by default.
+    It also decides which rows --limit keeps."""
+    return click.option(
+        "--sort",
+        type=click.Choice(sorted(keys)),
+        default="updated",
+        show_default=True,
+        help="Sort key, ascending (oldest first for dates)",
+    )
+
+
 format_option = click.option(
     "--format",
     "output_format",
@@ -498,15 +516,16 @@ def inspect_group() -> None:
 
 @inspect_group.command("items")
 @scope_options
+@sort_option(ITEM_SORTS)
 @format_option
 @click.pass_context
 @report_user_errors
 def inspect_items_cmd(
-    ctx: click.Context, scope: ProcessingScope, output_format: str
+    ctx: click.Context, scope: ProcessingScope, sort: str, output_format: str
 ) -> None:
-    """Items in scope, oldest first, with the ids and keys of their annotations."""
+    """Items in scope, with the ids and keys of their annotations."""
     app = app_from_context(ctx)
-    items = app.get_items(scope)
+    items = app.get_items(scope, sort=sort)
     if scope.limit is None:  # with a limit, a requested item may just be cut off
         check_found("item", scope.item_ids or (), (item.id for item in items))
     annotations = app.get_annotation_keys(item.id for item in items)
@@ -559,6 +578,7 @@ def inspect_items_cmd(
 @inspect_group.command("annotations")
 @scope_options
 @annotation_options
+@sort_option(ANNOTATION_SORTS)
 @format_option
 @click.pass_context
 @report_user_errors
@@ -568,6 +588,7 @@ def inspect_annotations_cmd(
     processor: str | None,
     key: str | None,
     annotation_ids: tuple[int, ...],
+    sort: str,
     output_format: str,
 ) -> None:
     """Annotations of the items in scope; --limit counts annotations.
@@ -576,7 +597,11 @@ def inspect_annotations_cmd(
     rest as JSON) to stdout and its metadata to stderr.
     """
     annotations = app_from_context(ctx).find_annotations(
-        scope, processor=processor, key=key, annotation_ids=annotation_ids or None
+        scope,
+        processor=processor,
+        key=key,
+        annotation_ids=annotation_ids or None,
+        sort=sort,
     )
     if scope.limit is None:
         check_found("annotation", annotation_ids, (a.id for a in annotations))
@@ -611,6 +636,7 @@ def inspect_annotations_cmd(
 
 @inspect_group.command("artifacts")
 @artifact_options
+@sort_option(ARTIFACT_SORTS)
 @format_option
 @click.pass_context
 @report_user_errors
@@ -619,15 +645,18 @@ def inspect_artifacts_cmd(
     remixer: str | None,
     artifact_ids: tuple[tuple[str, str], ...],
     limit: int | None,
+    sort: str,
     output_format: str,
 ) -> None:
-    """Artifacts by remixer and name. Contents are loaded only for --artifact.
+    """Stored artifacts. Contents are loaded only for --artifact.
 
     One --artifact in table format prints its content to stdout and its
     metadata to stderr, so it can be redirected.
     """
     app = app_from_context(ctx)
-    artifacts = app.list_artifacts(remixer, names=artifact_ids or None, limit=limit)
+    artifacts = app.list_artifacts(
+        remixer, names=artifact_ids or None, limit=limit, sort=sort
+    )
     if limit is None:
         check_found(
             "artifact",
@@ -685,6 +714,7 @@ def inspect_artifacts_cmd(
     default=None,
     help="Only deliveries in this state",
 )
+@sort_option(DELIVERY_SORTS)
 @format_option
 @click.pass_context
 @report_user_errors
@@ -694,9 +724,10 @@ def inspect_deliveries_cmd(
     artifact_ids: tuple[tuple[str, str], ...],
     sink: str | None,
     status: str | None,
+    sort: str,
     output_format: str,
 ) -> None:
-    """The delivery ledger, oldest row first; --limit counts rows.
+    """The delivery ledger; --limit counts rows.
 
     Item filters keep item deliveries, --artifact artifact deliveries.
     """
@@ -705,6 +736,7 @@ def inspect_deliveries_cmd(
         sink=sink,
         status=DeliveryStatus(status) if status else None,
         artifact_names=artifact_ids or None,
+        sort=sort,
     )
 
     if output_format == "json":
@@ -752,10 +784,13 @@ def delete_group() -> None:
 
 @delete_group.command("items")
 @scope_options
+@sort_option(ITEM_SORTS)
 @force_delete_option
 @click.pass_context
 @report_user_errors
-def delete_items_cmd(ctx: click.Context, scope: ProcessingScope, force: bool) -> None:
+def delete_items_cmd(
+    ctx: click.Context, scope: ProcessingScope, sort: str, force: bool
+) -> None:
     """Delete items with their processing state, annotations and deliveries.
 
     Items with deliveries are skipped unless --force. An item still in its
@@ -763,7 +798,7 @@ def delete_items_cmd(ctx: click.Context, scope: ProcessingScope, force: bool) ->
     """
     require_selection(scope.source, scope.since, scope.until, scope.item_ids)
     app = app_from_context(ctx, write=True)
-    items = app.get_items(scope)
+    items = app.get_items(scope, sort=sort)
     if scope.limit is None:
         check_found("item", scope.item_ids or (), (item.id for item in items))
 
@@ -781,6 +816,7 @@ def delete_items_cmd(ctx: click.Context, scope: ProcessingScope, force: bool) ->
 @delete_group.command("annotations")
 @scope_options
 @annotation_options
+@sort_option(ANNOTATION_SORTS)
 @click.pass_context
 @report_user_errors
 def delete_annotations_cmd(
@@ -789,6 +825,7 @@ def delete_annotations_cmd(
     processor: str | None,
     key: str | None,
     annotation_ids: tuple[int, ...],
+    sort: str,
 ) -> None:
     """Delete annotations per processor: every key of that processor on the
     item, with its processing state, so the item becomes pending again.
@@ -807,7 +844,11 @@ def delete_annotations_cmd(
     )
     app = app_from_context(ctx, write=True)
     annotations = app.find_annotations(
-        scope, processor=processor, key=key, annotation_ids=annotation_ids or None
+        scope,
+        processor=processor,
+        key=key,
+        annotation_ids=annotation_ids or None,
+        sort=sort,
     )
     if scope.limit is None:
         check_found("annotation", annotation_ids, (a.id for a in annotations))
@@ -839,6 +880,7 @@ def delete_annotations_cmd(
 
 @delete_group.command("artifacts")
 @artifact_options
+@sort_option(ARTIFACT_SORTS)
 @force_delete_option
 @click.pass_context
 @report_user_errors
@@ -847,6 +889,7 @@ def delete_artifacts_cmd(
     remixer: str | None,
     artifact_ids: tuple[tuple[str, str], ...],
     limit: int | None,
+    sort: str,
     force: bool,
 ) -> None:
     """Delete artifacts with their deliveries; the next run of their
@@ -856,7 +899,9 @@ def delete_artifacts_cmd(
     """
     require_selection(remixer, artifact_ids)
     app = app_from_context(ctx, write=True)
-    artifacts = app.list_artifacts(remixer, names=artifact_ids or None, limit=limit)
+    artifacts = app.list_artifacts(
+        remixer, names=artifact_ids or None, limit=limit, sort=sort
+    )
     if limit is None:
         check_found(
             "artifact",
