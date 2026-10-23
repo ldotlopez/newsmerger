@@ -3,7 +3,74 @@
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
-Nothing scheduled.
+## Numeric ids and `inspect` (decision 0008)
+
+- [ ] **1. `AUTOINCREMENT` and `scripts/migrate_autoincrement.py`.**
+  `sqlite_autoincrement=True` on every table with an integer id; a
+  one-shot script recreates the existing tables with it, keeping rows and
+  ids, with a test on a copy of a populated database. Run it on
+  `~/.local/share/newsmerger/data.db` only after asking, once everything is
+  implemented.
+- [ ] **2. Ids in the DTOs.** `id: int | None` on `SourceItem` and
+  `Artifact`; an `Annotation` DTO (`id`, item id, `processor`, `key`,
+  `updated_at`, `value`).
+- [ ] **3. `--item` replaces `--uid`.** `ProcessingScope` takes item ids;
+  `scope_options` drops `--uid` and adds a repeatable `--item`, in
+  `enrich`, `remix` and `inspect`.
+- [ ] **4. Shared selection queries** in `Database` and `Application`:
+  `find_items(scope)`, `find_annotations(scope, processor, key, ids)`,
+  `find_artifacts(remixer, ids, limit)`, plus the annotation ids and keys
+  of many items in one query for the items listing.
+- [ ] **5. `inspect items|annotations|artifacts`** with `--format
+  table|json`; remove `items`, `annotations`, `artifacts` and `artifact`.
+  Tests for id parsing, JSON output and missing ids.
+- [ ] **Docs, when done:** propose the `README.md` (usage) and
+  `ARCHITECTURE.md` (`cli.py`, `models.py`) updates.
+
+## Sinks and the delivery ledger (decision 0007)
+
+- [ ] **1. `deliveries` table and its `db.py` API**, with tests. DTOs, as
+  in the rest of the module:
+  - `get_pending_items(sink, scope, requires, max_retries)`: items without
+    a row, or `queued` / `error` with the backoff elapsed; reuses the
+    `requires` join of `get_unprocessed_items`.
+  - `get_pending_artifacts(sink, remixers, scope, max_retries)`: the same
+    over `artifacts`.
+  - `queue_deliveries(sink, subjects)`, `begin_delivery(...)`,
+    `finish_delivery(..., external_ref)`, `fail_delivery(..., error)`.
+  - `requeue_deliveries(sink, scope)` (`error` → `queued`, attempts reset)
+    and `resolve_delivery(..., status)` (`sending` → `done` | `queued`).
+  - `find_deliveries(scope, sink, status, artifact_ids)`, for `inspect
+    deliveries` and `delete`.
+  - `last_delivery_by_source(sink)`: time of the last `done` delivery per
+    source (replaces `last_post`).
+- [ ] **2. `sinks.py`, `Application` and CLI.** `Sink`, `BaseItemSink`,
+  `BaseArtifactSink`, `UnavailableSink`; `Application.run_sink` and
+  `Application.deliver`, in configuration order; `deliver [SINK]` with
+  `--requeue`, `--force` (requires `--item` or `--artifact`) and the scope
+  options; `inspect deliveries` and `deliveries resolve`; `run` (all four phases, non-zero
+  exit on failures); the exclusive lock file for writing commands.
+- [ ] **3. `telegram` item sink and `scripts/migrate_telegram_state.py`**
+  (`posted` → `done` rows with `message_id`, `queue` → `queued` rows;
+  `watermark` and `last_post` dropped). Run it before the first
+  `deliver telegram`.
+- [ ] **4. Dated `digest` names** (`<source>/<since>_<until>`) **and the
+  `telegram_artifacts` sink** (`sendDocument`, option `artifacts`).
+- [ ] **Docs, when done:** propose the `ARCHITECTURE.md`, `README.md` and
+  `SPECIFICATION.md` updates.
+
+- [ ] **5. `delete items|annotations|artifacts`** (decision 0008), with the
+  `inspect` selection: non-interactive, cascading, items and artifacts with
+  deliveries skipped with a warning unless `--force`, annotations per
+  processor; takes the write lock.
+
+Risks:
+
+- If the migration fails, the chat gets the last `lookback` hours again.
+- `migrate_autoincrement.py` rewrites every table of the real database:
+  back it up first, with the SQLite backup API (README, *Data and backups*).
+- The impact of the dated `digest` names on its tests and on
+  `scripts/pipeline_url.py` is unverified.
 
 ---
 
@@ -126,4 +193,4 @@ Nothing scheduled.
 
 ---
 
-*Last updated: 2026-10-18*
+*Last updated: 2026-10-23*

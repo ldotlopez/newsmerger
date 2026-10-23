@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-18
+- **Revised:** 2026-10-23, by 0008 (see *Revisions*)
 
 ## Context
 
@@ -19,6 +20,10 @@ date-based change rule.
   space; how the provider derives the uid is up to the provider, as long as
   it is deterministic and stable across runs.
 - `uri` is item data, not an identifier: it is not unique.
+- Each item also has a numeric `id`, its database key (`AUTOINCREMENT`,
+  never reused). It is a local handle the CLI uses to select items
+  (`--item`), not an identity: a database rebuild renumbers items, and a
+  deleted item that is imported again gets a new one.
 - An item has changed when any of `title`, `uri`, `mimetype`,
   `content_sha256` or `data` differs from the stored row. Dates play no part.
   - `published_at` is set once: from the provider, or the current time.
@@ -37,3 +42,10 @@ date-based change rule.
   no longer reimported on every run.
 - A content change makes every processing state of the item eligible again.
   A title-only change does not.
+
+## Revisions
+
+- **2026-10-23 (0008).** Discarded: selecting items in the CLI by
+  `--source` and `--uid`, too long to type with sha256 uids. Remains:
+  `(source id, uid)` as the item's identity; the numeric `id` is added as
+  a local handle.

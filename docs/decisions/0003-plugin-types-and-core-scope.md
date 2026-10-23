@@ -3,7 +3,8 @@
 - **Status:** accepted
 - **Date:** 2026-10-18
 - **Revised:** 2026-10-20 (plugin bundles loaded with `Register`)
-- **Amended by:** 0006 (LLM plugins and the `services` argument)
+- **Amended by:** 0006 (LLM plugins and the `services` argument), 0007
+  (sinks and the `deliver` phase)
 
 ## Context
 
