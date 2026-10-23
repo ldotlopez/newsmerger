@@ -265,10 +265,10 @@ class Application:
         return self._db.get_annotations(item, processor=processor, key=key)
 
     def get_annotation_keys(
-        self, items: Iterable[SourceItem]
+        self, item_ids: Iterable[int]
     ) -> dict[int, list[tuple[int, str, str]]]:
         """The `(id, processor, key)` of each item's annotations, by item id."""
-        return self._db.get_annotation_keys(items)
+        return self._db.get_annotation_keys(item_ids)
 
     def find_annotations(
         self,
@@ -320,14 +320,25 @@ class Application:
         )
 
     def delete_annotations(
-        self, *, processor: str | None = None, item: SourceItem | None = None
+        self, *, processor: str | None = None, item_id: int | None = None
     ) -> int:
         """Delete annotations by processor, by item, or both, with their
         processing state: the items become pending again with fresh attempts.
 
         Returns the number of annotations deleted.
         """
-        return self._db.delete_annotations(processor=processor, item=item)
+        return self._db.delete_annotations(processor=processor, item_id=item_id)
+
+    def delete_items(self, item_ids: Iterable[int]) -> int:
+        """Delete items with their state, annotations and deliveries; return
+        how many. One still in its source's index comes back on the next
+        import, with a new id."""
+        return self._db.delete_items(item_ids)
+
+    def delete_artifacts(self, names: Iterable[tuple[str, str]]) -> int:
+        """Delete the `(remixer, name)` artifacts with their deliveries;
+        return how many. A remixer that runs again rebuilds them."""
+        return self._db.delete_artifacts(names)
 
 
 def write_lock(database_url: str) -> IO[str] | None:

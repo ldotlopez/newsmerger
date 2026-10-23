@@ -98,7 +98,7 @@ cache:
         self.app.enrich()
 
         self.assertEqual(
-            self.app.delete_annotations(processor="markdownify", item=item), 1
+            self.app.delete_annotations(processor="markdownify", item_id=item.id), 1
         )
 
         self.assertEqual(self.app.get_annotations(item), {})

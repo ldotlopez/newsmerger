@@ -32,17 +32,16 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 
 - [x] **1. `deliveries` table and its `db.py` API**, with tests. DTOs, as
   in the rest of the module:
-  - `get_pending_items(sink, scope, requires, max_retries)`: items without
-    a row, or `queued` / `error` with the backoff elapsed; reuses the
-    `requires` join of `get_unprocessed_items`.
-  - `get_pending_artifacts(sink, remixers, scope, max_retries)`: the same
-    over `artifacts`.
-  - `queue_deliveries(sink, subjects)`, `begin_delivery(...)`,
-    `finish_delivery(..., external_ref)`, `fail_delivery(..., error)`.
-  - `requeue_deliveries(sink, scope)` (`error` → `queued`, attempts reset)
-    and `resolve_delivery(..., status)` (`sending` → `done` | `queued`).
-  - `find_deliveries(scope, sink, status, artifact_ids)`, for `inspect
-    deliveries` and `delete`.
+  - `queue_item_deliveries(sink, scope, requires)` (reuses the `requires`
+    join of `get_unprocessed_items`) and `queue_artifact_deliveries(sink,
+    remixers, since, names)`: rows for the candidates without one.
+  - `get_item_deliveries(sink, scope, statuses)` and
+    `get_artifact_deliveries(sink, statuses, names)`: rows with their
+    subjects, in FIFO order. Eligibility, backoff and every state change
+    (`sending`, `done`, `error`, requeue, resolve) live in the sinks and
+    `Application`, saved with `save_delivery(delivery)`.
+  - `find_deliveries(scope, sink, status, artifact_names)`, for `inspect
+    deliveries`, `deliveries resolve` and `delete`.
   - `last_delivery_by_source(sink)`: time of the last `done` delivery per
     source (replaces `last_post`).
 - [x] **2. `sinks.py`, `Application` and CLI.** `Sink`, `BaseItemSink`,
@@ -60,7 +59,7 @@ Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 - [ ] **Docs, when done:** propose the `ARCHITECTURE.md`, `README.md` and
   `SPECIFICATION.md` updates.
 
-- [ ] **5. `delete items|annotations|artifacts`** (decision 0008), with the
+- [x] **5. `delete items|annotations|artifacts`** (decision 0008), with the
   `inspect` selection: non-interactive, cascading, items and artifacts with
   deliveries skipped with a warning unless `--force`, annotations per
   processor; takes the write lock.
@@ -70,8 +69,8 @@ Risks:
 - If the migration fails, the chat gets the last `lookback` hours again.
 - `migrate_autoincrement.py` rewrites every table of the real database:
   back it up first, with the SQLite backup API (README, *Data and backups*).
-- The impact of the dated `digest` names on its tests and on
-  `scripts/pipeline_url.py` is unverified.
+- An existing `telegram:` section with `interval` at the top level is now
+  rejected: it moves to the `telegram:` subsection (`config.example.yaml`).
 
 ---
 
