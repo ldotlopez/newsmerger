@@ -1,6 +1,6 @@
 # 0005: Remixers with external side effects
 
-- **Status:** accepted
+- **Status:** superseded by 0007
 - **Date:** 2026-10-18
 
 ## Context
