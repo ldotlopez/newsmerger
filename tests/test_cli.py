@@ -7,9 +7,11 @@ from click.testing import CliRunner
 
 from newsmerger.cli import cli
 from newsmerger.config import ConfigError
+from newsmerger.db import DeliveryStatus
 from newsmerger.models import (
     Annotation,
     Artifact,
+    Delivery,
     ProcessingScope,
     SourceData,
     SourceItem,
@@ -96,6 +98,84 @@ class CommandTests(unittest.TestCase):
 
         app.run_remixer.assert_called_once_with("rssfeed", scope=ProcessingScope())
         app.remix.assert_called_once_with(scope=ProcessingScope())
+
+    def test_writing_commands_take_the_write_lock(self) -> None:
+        app = Mock()
+        app.remix.return_value = {}
+
+        with patch("newsmerger.cli.Application.from_config_file", return_value=app):
+            result = CliRunner().invoke(cli, ["remix"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.lock.assert_called_once_with()
+
+    def test_deliver_runs_one_sink_with_selection_requeue_and_force(self) -> None:
+        app = Mock()
+        app.run_sink.return_value = RunSummary(done=1)
+
+        result = invoke(
+            app,
+            "deliver",
+            "telegram_artifacts",
+            "--artifact",
+            "digest/a/2026-10-01_2026-10-08",
+            "--force",
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.run_sink.assert_called_once_with(
+            "telegram_artifacts",
+            scope=ProcessingScope(),
+            artifacts=(("digest", "a/2026-10-01_2026-10-08"),),
+            requeue=False,
+            force=True,
+        )
+
+    def test_deliver_without_sink_runs_every_one_but_cannot_force(self) -> None:
+        app = Mock()
+        app.deliver.return_value = {"telegram": RunSummary(done=2, failed=1)}
+
+        result = invoke(app, "deliver", "--requeue")
+        forced = invoke(app, "deliver", "--force", "--item", "1")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.deliver.assert_called_once_with(
+            scope=ProcessingScope(), artifacts=(), requeue=True
+        )
+        self.assertEqual(forced.exit_code, 2)
+        self.assertIn("--force needs a SINK", forced.output)
+
+    def test_run_goes_on_after_a_failed_phase_and_exits_with_error(self) -> None:
+        app = Mock()
+        app.sources = []
+        app.enrich.side_effect = RuntimeError("llm down")
+        app.remix.return_value = {"rssfeed": ["feed"]}
+        app.deliver.return_value = {"telegram": RunSummary(done=1)}
+
+        with self.assertLogs("newsmerger", "ERROR"):
+            result = invoke(app, "run")
+
+        self.assertEqual(result.exit_code, 1)
+        app.remix.assert_called_once_with()
+        app.deliver.assert_called_once_with()
+        self.assertIn("1 failure(s)", result.output)
+
+    def test_resolve_settles_interrupted_deliveries(self) -> None:
+        app = Mock()
+        app.resolve_deliveries.return_value = 2
+
+        result = invoke(
+            app, "deliveries", "resolve", "telegram", "--as", "queued", "--item", "4"
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.resolve_deliveries.assert_called_once_with(
+            "telegram",
+            DeliveryStatus.QUEUED,
+            scope=ProcessingScope(item_ids=(4,)),
+            artifact_names=None,
+        )
+        self.assertIn("Resolved 2 interrupted delivery(ies)", result.output)
 
     def test_user_errors_are_reported_without_traceback(self) -> None:
         app = Mock()
@@ -261,6 +341,41 @@ class InspectCommandTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 1)
         self.assertIn("no artifact rssfeed/nope in the selection", result.output)
+
+    def test_deliveries_show_their_subject_and_state(self) -> None:
+        app = Mock()
+        app.find_deliveries.return_value = [
+            Delivery(
+                "telegram",
+                "error",
+                item_id=7,
+                attempts=2,
+                updated_at=NOW,
+                last_error="chat not found",
+            ),
+            Delivery(
+                "telegram_artifacts",
+                "done",
+                artifact_id=1,
+                updated_at=NOW,
+                artifact_name="digest/a/1",
+            ),
+        ]
+
+        result = invoke(
+            app, "inspect", "deliveries", "--sink", "telegram", "--status", "error"
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.find_deliveries.assert_called_once_with(
+            ProcessingScope(),
+            sink="telegram",
+            status=DeliveryStatus.ERROR,
+            artifact_names=None,
+        )
+        self.assertIn("item 7", result.output)
+        self.assertIn("digest/a/1", result.output)
+        self.assertIn("chat not", result.output)
 
     def test_malformed_artifact_id_is_a_usage_error(self) -> None:
         result = invoke(Mock(), "inspect", "artifacts", "--artifact", "rssfeed")

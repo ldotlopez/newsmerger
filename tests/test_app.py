@@ -11,8 +11,9 @@ from unittest.mock import patch
 
 from foundation.plugin import PluginNotFoundError
 
-from newsmerger.app import Application, UnsupportedProviderError
+from newsmerger.app import Application, LockedError, UnsupportedProviderError
 from newsmerger.config import Config, ConfigError
+from newsmerger.db import DeliveryStatus
 from newsmerger.models import ProcessingScope
 from newsmerger.plugins.ollama import OllamaLLM
 from newsmerger.processors import RunSummary
@@ -68,6 +69,7 @@ cache:
         self.assertEqual(stored.key, ("mediterraneo", SAMPLE_UID))
         self.assertEqual(self.app.get_content(stored), item.content)
         self.assertEqual(item.key, stored.key)
+        self.assertEqual(item.id, stored.id)
 
     def test_import_url_needs_a_url_provider(self) -> None:
         with self.assertRaises(UnsupportedProviderError):
@@ -103,11 +105,40 @@ cache:
         scope = ProcessingScope(source="mediterraneo")
         self.assertEqual(self.app.run_processor("markdownify", scope=scope).done, 1)
 
+    def test_write_lock_is_exclusive_until_close(self) -> None:
+        self.app.lock()
+        other = self.make_app()
+
+        with self.assertRaisesRegex(LockedError, "another newsmerger command"):
+            other.lock()
+        self.app.close()
+        other.lock()
+        self.app = other
+
+    def test_resolve_settles_interrupted_deliveries(self) -> None:
+        self.import_sample()
+        self.app._db.queue_item_deliveries("telegram", ProcessingScope())
+        ((row, _),) = self.app._db.get_item_deliveries("telegram")
+        row.status = DeliveryStatus.SENDING
+        row.attempts = 1
+        self.app._db.save_delivery(row)
+
+        resolved = self.app.resolve_deliveries("telegram", DeliveryStatus.DONE)
+
+        self.assertEqual(resolved, 1)
+        (row,) = self.app.find_deliveries(sink="telegram")
+        self.assertEqual((row.status, row.attempts), (DeliveryStatus.DONE, 0))
+        self.assertEqual(
+            self.app.resolve_deliveries("telegram", DeliveryStatus.DONE), 0
+        )
+
     def test_only_loaded_plugins_run(self) -> None:
         with self.assertRaisesRegex(ConfigError, "processor 'summarize' is not loaded"):
             self.app.run_processor("summarize")
         with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is not loaded"):
             self.app.run_remixer("avglink")
+        with self.assertRaisesRegex(ConfigError, "sink 'telegram' is not loaded"):
+            self.app.run_sink("telegram")
 
     def test_phases_run_every_loaded_object_in_configuration_order(self) -> None:
         self.app.close()

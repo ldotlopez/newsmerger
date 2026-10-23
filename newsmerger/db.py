@@ -221,7 +221,7 @@ class ProcessingStatus(enum.StrEnum):
     IGNORED = "ignored"
 
 
-def _backoff_seconds(
+def backoff_seconds(
     attempts: int,
     base: float = 60.0,
     factor: float = 2.0,
@@ -498,9 +498,9 @@ class Database:
     def _release_contents(self, sha256s: set[str]) -> None:
         """Delete the contents no row references any more.
 
-        shortcut: an upsert in another process that starts referencing one of
-        these between the check and the delete loses its content; add a lock
-        if writers ever run concurrently.
+        An upsert in another process that started referencing one of these
+        between the check and the delete would lose its content: writers take
+        `Application.lock()` (decision 0007) so that they never overlap.
         """
         if not sha256s:
             return
@@ -731,7 +731,7 @@ class Database:
         if state.attempts >= max_retries:
             return False
         elapsed = (now - state.updated_at).total_seconds()
-        return elapsed >= _backoff_seconds(state.attempts)
+        return elapsed >= backoff_seconds(state.attempts)
 
     def record_result(
         self,
