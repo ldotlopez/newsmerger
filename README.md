@@ -199,7 +199,8 @@ or progress bars, one line per log record.
 
 ### Providers
 
-Each provider is a plugin of the same name, without options.
+Each provider is a plugin of the same name, without options except
+`telegram_channel`.
 
 | Provider | Site | Content |
 | :--- | :--- | :--- |
@@ -208,6 +209,13 @@ Each provider is a plugin of the same name, without options.
 | `plaza` | Castellón Plaza | HTML |
 | `theguardian` | The Guardian | HTML |
 | `csjuntasgobierno` | Index page of *juntas de gobierno* minutes | PDF |
+| `telegram_channel` | Articles linked from a public Telegram channel (`url: https://t.me/<channel>`) | HTML |
+
+`telegram_channel` reads the channel's web preview, which only public
+channels have, and imports one item per linked article, keyed by its
+canonical URL; the post id and text go into the item's `data`. Its `pages`
+option (default 1, 20 posts each) reads further back. The preview is always
+fetched fresh, never from the HTTP cache.
 
 To support a new site, see
 [Writing a plugin](docs/ARCHITECTURE.md#writing-a-plugin).
