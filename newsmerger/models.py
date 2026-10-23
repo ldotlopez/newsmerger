@@ -65,6 +65,8 @@ class SourceItem:
     data: JsonCompatible = dataclasses.field(default_factory=dict)
     published_at: datetime | None = None
     modified_at: datetime | None = None
+    # The database id: None until saved. A local handle, not the identity.
+    id: int | None = None
 
     def __post_init__(self) -> None:
         if self.content is not None:
@@ -96,10 +98,23 @@ class Artifact:
     content_sha256: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    id: int | None = None
 
     def __post_init__(self) -> None:
         if self.content is not None:
             self.content_sha256 = hashlib.sha256(self.content.encode()).hexdigest()
+
+
+@dataclasses.dataclass(slots=True)
+class Annotation:
+    """One key a processor stored for an item, with its value."""
+
+    id: int
+    item_id: int
+    processor: str
+    key: str
+    updated_at: datetime
+    value: JsonCompatible
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

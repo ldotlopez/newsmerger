@@ -232,6 +232,17 @@ class IdentityTests(DatabaseTestCase):
 
         self.assertEqual(self.count(DBSourceItem), 2)
 
+    def test_upsert_sets_ids_that_reimports_keep(self):
+        source = make_source()
+        first = [make_item(source, uid="a1"), make_item(source, uid="a2")]
+        self.db.upsert_source_items(first)
+        again = make_item(source, uid="a2", title="Changed")
+        self.db.upsert_source_items([again])
+
+        self.assertEqual([item.id for item in first], [1, 2])
+        self.assertEqual(again.id, 2)
+        self.assertEqual([item.id for item in self.db.get_items()], [1, 2])
+
     def test_reimport_updates_the_source_row(self):
         self.db.upsert_source_items([make_item(make_source(name="Old"))])
         self.db.upsert_source_items([make_item(make_source(name="New"))])
@@ -485,6 +496,7 @@ class ArtifactTests(DatabaseTestCase):
 
         self.assertEqual(artifact.content, "<rss>2</rss>")
         self.assertEqual(artifact.created_at, first.created_at)
+        self.assertEqual(artifact.id, first.id)
         self.assertGreaterEqual(artifact.updated_at, first.updated_at)
         self.assertEqual(self.stored_contents(), {artifact.content_sha256})
 
