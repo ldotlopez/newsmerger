@@ -68,11 +68,11 @@ What matters is not item versus collection but derived versus recorded:
   `max_retries`; then it stays `error`, visible, and the queue moves on.
   `deliver --requeue` requeues the `error` rows in scope with fresh
   attempts; nothing requeues `done` or `sending` rows.
-- **Forced send.** `deliver --force` sends every subject in scope now,
+- **Forced send.** `deliver SINK --force` sends every subject in scope now,
   whatever its state (`done`, `error`, `sending`), with no backoff and no
-  rate limit. It requires an explicit selection, `--item <id>` for item
-  sinks or `--artifact <remixer>/<name>` for artifact sinks, and is an error
-  without one. A forced send updates its row (`done` with the new
+  rate limit. It names one sink, and requires an explicit selection,
+  `--item <id>` for item sinks or `--artifact <remixer>/<name>` for artifact
+  sinks; it is an error without either. A forced send updates its row (`done` with the new
   `external_ref`, or `error`), and for `telegram` it counts as that
   source's last delivery.
 - **CLI.** `deliver [SINK]` runs the loaded sinks in configuration order,
@@ -165,3 +165,7 @@ What matters is not item versus collection but derived versus recorded:
   `--item <id>`, the item's numeric id) and the `deliveries list` command
   (now `inspect deliveries`). Remains: everything else, including
   `--artifact <remixer>/<name>` and `deliveries resolve`.
+- **2026-10-23 (implementation).** Discarded: `deliver --force` across
+  every sink (it now names one SINK, so a forced resend reaches one place).
+  Not implemented yet: `redeliver_on_change`, which no sink uses. Remains:
+  everything else.

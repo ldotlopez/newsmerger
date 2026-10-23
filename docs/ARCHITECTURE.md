@@ -22,30 +22,35 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
                      remix
                      Remixer ◄── items, annotations, other artifacts
                         └─► artifacts
+                     deliver
+                     Sink ◄── items, artifacts, the ledger
+                        └─► outside world + deliveries (the ledger)
 ```
 
 ## Modules
 
 | Module | Responsibility |
 | :--- | :--- |
-| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the three phases and answers queries. The database is private to it. |
-| `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`) and read-only inspection (`items`, `annotations`, `artifacts`, `artifact`); builds an `Application` per invocation. Global logging and output options come from `foundation.clilib` and `foundation.loglib`. |
+| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the four phases, answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
+| `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Global logging and output options come from `foundation.clilib` and `foundation.loglib`. |
 | `config.py` | Pydantic models for `config.yaml` (sources, plugins, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
-| `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), `SourceItem` (the item DTO), `Artifact` and `ProcessingScope`. |
+| `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
 | `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
 | `remixers.py` | The `Remixer` protocol, `BaseRemixer` and `UnavailableRemixer`. |
+| `sinks.py` | The `Sink` protocol, `BaseItemSink`, `BaseArtifactSink`, `UnavailableSink` and `SelectionRequiredError`. |
 | `llms.py` | The `LLM` protocol, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
-| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram`. `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
-| `scripts/` | Standalone tools built on `Application`: the URL pipeline. |
+| `plugins/` | The plugin bundles: one module per site provider, `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram` (the `telegram` and `telegram_artifacts` sinks). `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
+| `scripts/` | Standalone tools: the URL pipeline, built on `Application`, and the one-shot migrations `migrate_autoincrement.py` and `migrate_telegram_state.py`. |
 
 ## Plugins
 
 Plugins are loaded with `foundation.plugin.Register` (decision 0003). The
 core knows only the protocols in `providers.py`, `processors.py`,
-`remixers.py` and `llms.py`, never a plugin's code or option models:
+`remixers.py`, `sinks.py` and `llms.py`, never a plugin's code or option
+models:
 
 1. `Application.__init__` calls `register(name, services, **section)` for
    every entry of `plugins:`, in order, on the `newsmerger.plugins`
@@ -55,7 +60,7 @@ core knows only the protocols in `providers.py`, `processors.py`,
    with its own pydantic model (a `PluginOptions` subclass, so unknown keys
    are errors), builds its objects with the validated model and returns
    `[(name, Protocol, object), ...]`: one triple per object, declared under
-   `Provider`, `URLProvider`, `Processor`, `Remixer` or `LLM`.
+   `Provider`, `URLProvider`, `Processor`, `Remixer`, `Sink` or `LLM`.
 3. `Application` indexes the objects by name per protocol, with
    `get_by_protocol` (hierarchy-aware: a `URLProvider` is also a
    `Provider`), and checks that names are unique per protocol and that every
@@ -69,12 +74,13 @@ are `PluginError`s. Both are user errors in the CLI. `name` and `self`
 cannot be options, because they are `register()`'s own parameters.
 
 The objects are built once and receive what each task needs as method
-arguments: providers get the source and the `HTTPClient`, processors and
-remixers the `Database` and the scope. Each protocol has its own method
-(`retrieve_items`, `enrich`, `remix`) and none declares `name` (decision
-0003 explains why). Processors and remixers own their name, a class
-attribute that keys their annotations, state or artifacts; entry points
-register each one under `obj.name`. Providers' names exist only in their
+arguments: providers get the source and the `HTTPClient`, processors,
+remixers and sinks the `Database` and the scope. Each protocol has its own
+method (`retrieve_items`, `enrich`, `remix`, `deliver`) and none declares
+`name` (decision 0003 explains why). Processors, remixers and sinks own
+their name, a class attribute that keys their annotations, state,
+artifacts or deliveries; entry points register each one under
+`obj.name`. Providers' names exist only in their
 triples.
 
 `services` is what the core shares with entry points (decision 0006): the
@@ -85,7 +91,8 @@ and returns an `UnavailableProcessor` (or `UnavailableRemixer`) under its
 name, whose `enrich` (or `remix`) logs the reason as an error and does
 nothing.
 
-Bundles (`grouping`) give each object a subsection of their options.
+Bundles (`grouping`, `telegram`) give each object a subsection of their
+options.
 With none, the entry point enables every object with its defaults; with
 some, only those, in their order. This is the plugins' convention, not the
 core's: an entry point is free to decide what its options enable.
@@ -215,12 +222,22 @@ SQLite tables:
   the value (e.g. `markdownify.markdown`, `summarize.summary`).
 - `artifacts`: remixer outputs, unique per `(remixer, name)`, with the
   `content_sha256` of their content.
+- `deliveries`: the ledger, one row per `(sink, subject)`, the subject an
+  item or an artifact (two nullable foreign keys, a `CHECK` that exactly
+  one is set), with status, attempts, last error, the subject's
+  `content_sha256` when delivered and an `external_ref` (JSON).
+
+Every table with an integer id uses `AUTOINCREMENT`, so a deleted id is
+never reused: the CLI selects items and annotations by id (decision 0008).
+The DTOs carry it; `upsert_source_items` sets it on the items it saves.
 
 SQLAlchemy models never leave `db.py`: `Database` takes and returns DTOs.
 Every SQLite connection gets `SQLITE_PRAGMAS` from a SQLAlchemy `connect`
 listener: foreign keys on, WAL, `busy_timeout`, `synchronous=NORMAL`,
 in-memory temp store. newsmerger does not use `foundation.dblib`, which is a
-shortcut for code that uses `sqlite3` directly. Item foreign keys are `ON DELETE CASCADE`.
+shortcut for code that uses `sqlite3` directly. Item and artifact foreign
+keys are `ON DELETE CASCADE`, so `delete_items` and `delete_artifacts`
+only delete the subjects, then release their contents.
 `Base.metadata.create_all` creates missing tables only; it never alters an
 existing schema.
 
@@ -239,9 +256,10 @@ record of which row uses which content.
 - After the commit, replaced hashes that no row (item, annotation or
   artifact) references any more are deleted. Identical contents are stored
   once and shared.
-- Known limit: two writers running at the same time can delete a content
-  the other one has just started to reference. Runs are expected to happen
-  one at a time.
+- Two writers running at the same time could delete a content the other
+  one has just started to reference. `write_lock` prevents it: every
+  command that writes takes an exclusive `flock` on `<database>.lock` and
+  fails at once if another process holds it (POSIX only).
 
 ### Change detection
 
@@ -255,7 +273,7 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
 
 - `BaseProcessor.process_item(db, item)` returns annotations for one item.
   `Database.get_unprocessed_items` selects the eligible items (backoff in
-  `_backoff_seconds`, `max_retries` from the plugin's options, version in
+  `backoff_seconds`, `max_retries` from the plugin's options, version in
   `version`). Raising `SkipItem` marks the item `ignored`;
   `PartialFailure` saves partial results and marks it `error`; any other
   exception marks it `error`. `enrich()` returns a `RunSummary` (done,
@@ -267,8 +285,9 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
 - Dependencies: `summarize` and `tagger` read `markdownify.markdown`;
   `embed` requires `tagger` and reads `tagger.tags` and, through `tagger`'s
   own dependency, `markdownify.markdown`.
-- `Database.delete_annotations` removes annotations by processor, item or
-  both, together with their processing state, so the items become pending.
+- `Database.delete_annotations` removes annotations by processor, item id
+  or both, together with their processing state, so the items become
+  pending. `delete annotations` calls it per (item, processor).
 
 ## Remixers
 
@@ -283,25 +302,54 @@ similarity of the `embed` vectors (`embeddings`, which reads
 `embed.tags_embedding` or `embed.markdown_embedding` and leaves out items
 without one).
 
-`digest` writes one markdown artifact per source in scope, named by the
-source id. It reads `markdownify.markdown` of the newest `max_items` items
+`digest` writes one markdown artifact per source in scope, named
+`<source id>/<since>_<until>` (YYYY-MM-DD), so each period is delivered
+once. It reads `markdownify.markdown` of the newest `max_items` items
 per source published since `since` (default: the last `days`), cuts each to
 `max_article_chars`, sends them oldest first in one prompt with a
 `context_length` window and prepends a `# <source name>: <since> – <until>`
 title to the model's answer.
 
-`telegram` is the remixer with an external side effect (decision 0005). It
-reads `summarize.summary` and keeps its state in its own `state` artifact,
-read back on every run: the first run's time (`watermark`), a FIFO queue of
-item keys, the posted items with their `message_id`, and each source's last
-post time. Without `since` or `uids` in the scope it queues only items
-published since `watermark`. It posts at most one item per source per
-`interval`; posting errors keep the item queued and are logged without the
-request URL, which embeds the bot token.
+Remixers have no external side effects; that is the sinks' job.
+
+## Sinks
+
+Decision 0007. `BaseSink.deliver(db, scope, artifacts, requeue, force)`
+runs one cycle over the ledger:
+
+1. queue the candidates: `queue_item_deliveries` or
+   `queue_artifact_deliveries` insert `queued` rows for the subjects in
+   scope without one (by default, those of the last `lookback` hours; item
+   sinks only take items their `requires` processor finished);
+2. read the sink's `queued`, `error` and `sending` rows with their subjects
+   (`get_item_deliveries`, `get_artifact_deliveries`), in FIFO order; warn
+   about `sending` ones, and pass `queued` ones and `error` ones with
+   attempts left to `select(db, pending, now)`, which picks what goes now;
+3. for each selected row: save it `sending`, call `send(db, subject)`, then
+   save it `done` with the returned `external_ref` and the subject's
+   `content_sha256`, or `error` with one more attempt. Errors are logged
+   with their traceback, so `send` raises without chaining secrets.
+
+Every state change is a `Database.save_delivery(delivery)` in its own
+transaction; eligibility and backoff (`backoff_seconds`, as processors) live
+in the sinks. `BaseItemSink.select` keeps strict FIFO per source: a row
+that is not due holds back the rest of its source. `--requeue` turns the
+`error` rows in scope back into `queued`; `force` needs an explicit
+selection (`SelectionRequiredError`), gives the selected subjects a row and
+sends them whatever their state. `Application.resolve_deliveries` settles
+`sending` rows as `done` or `queued`.
+
+`telegram` bundles two sinks sharing a `TelegramClient` (bot token and
+chat). `TelegramSink` reads `summarize.summary` and its `select` takes the
+head of each source's queue once that source's last `done` delivery
+(`last_delivery_by_source`) is `interval` old. `TelegramArtifactSink`
+sends the artifacts of its `artifacts` remixers with `sendDocument`.
+Request errors are re-raised `from None` with their class only, since the
+URL embeds the bot token.
 
 ## Pipelines
 
 Pipelines stay outside the core (decision 0003). `scripts/pipeline_url.py`
-imports one URL into a configured source and runs a linear list of
-processors on it, stopping at the first one without output. There is no
+takes the write lock, imports one URL into a configured source and runs a
+linear list of processors on it, stopping at the first one without output. There is no
 dependency graph and no idempotency guarantee for external side effects.
