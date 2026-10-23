@@ -194,6 +194,7 @@ class DBSourceItem(Base):
             data=self.data,
             published_at=self.published_at,
             modified_at=self.modified_at,
+            id=self.id,
         )
 
     def update(self, dto: SourceItem) -> None:
@@ -316,6 +317,7 @@ class DBArtifact(Base):
             content_sha256=self.content_sha256,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            id=self.id,
         )
 
     def update(self, dto: Artifact) -> None:
@@ -417,7 +419,8 @@ class Database:
     # --- Import ----------------------------------------------------------
 
     def upsert_source_items(self, items: list[SourceItem]) -> None:
-        """Create or update items, and the sources they belong to.
+        """Create or update items, and the sources they belong to, and set
+        each item's `id`.
 
         Contents are written before the rows that reference them, so a crash
         leaves an unused file, never a row pointing at nothing. Contents the
@@ -458,6 +461,7 @@ class Database:
 
         now = datetime.now(UTC)
         replaced: set[str] = set()
+        rows: list[tuple[SourceItem, DBSourceItem]] = []
         created = updated = 0
 
         for uid, item in items_by_uid.items():
@@ -467,17 +471,19 @@ class Database:
             db_item = existing_by_uid.get(uid)
             if db_item is None:
                 self.contents.set(item.content_sha256, item.content)
-                session.add(
-                    DBSourceItem.from_dto(
-                        dataclasses.replace(
-                            item,
-                            published_at=item.published_at or now,
-                            modified_at=item.modified_at or now,
-                        )
+                db_item = DBSourceItem.from_dto(
+                    dataclasses.replace(
+                        item,
+                        published_at=item.published_at or now,
+                        modified_at=item.modified_at or now,
                     )
                 )
+                session.add(db_item)
+                rows.append((item, db_item))
                 created += 1
                 continue
+
+            rows.append((item, db_item))
 
             if db_item.content_sha256 != item.content_sha256:
                 self.contents.set(item.content_sha256, item.content)
@@ -486,6 +492,9 @@ class Database:
             if self._apply_source_item_changes(session, db_item, item, now=now):
                 updated += 1
 
+        session.flush()
+        for item, db_item in rows:
+            item.id = db_item.id
         LOGGER.info(f"{source.id}: {created} new, {updated} updated item(s)")
         return replaced
 
