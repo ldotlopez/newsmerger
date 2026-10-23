@@ -123,7 +123,7 @@ class TelegramChannelProvider:
             if page_url is None:
                 return
             # New posts must show up on every run, not after the cache expires.
-            content = fetcher.get(page_url, cache=False)
+            content = fetcher.get(page_url, use_cache=False)
             posts, page_url = parse_preview(content, page_url)
             if not posts:
                 raise ValueError(f"no posts in '{source.url}': not a public channel?")
