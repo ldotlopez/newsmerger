@@ -16,34 +16,36 @@ looks up when `log_level is None`.
 
 foundation (`../foundation`, separate commits; its push is manual):
 
-- [ ] **1. `click_logging_options`:** `--log-level` defaults to `None`; the
+- [x] **1. `click_logging_options`:** `--log-level` defaults to `None`; the
   help names the `warning` default and the `<APP>_LOG_LEVEL` variable.
-- [ ] **2. `setup_logger` / `setup_logger_from_click`:** a
+- [x] **2. `setup_logger` / `setup_logger_from_click`:** a
   `default_log_level` parameter (defaults to `DEFAULT_LOG_LEVEL`) for the
   app's config value; `-v`/`-q` without `--log-level` ignore the env var.
   Fix the stale `configure_handler` docstrings.
-- [ ] **3. `tests/test_loglib.py`:** nothing gives warning; the env var
+- [x] **3. `tests/test_loglib.py`:** nothing gives warning; the env var
   applies; `--log-level` and `-v` beat it; the app default applies when
   neither CLI nor env set a level.
 
 newsmerger:
 
-- [ ] **4.** `uv lock --upgrade-package foundation`.
-- [ ] **5. `log_level: str | None = None` in `Config`.** Low value (the level
+- [~] **4.** `uv lock --upgrade-package foundation`: pinned to foundation's
+  `fix-log-level-env` branch; switch `pyproject.toml` back to `main` and
+  relock once it merges.
+- [x] **5. `log_level: str = "warning"` in `Config`.** Low value (the level
   is a per-run concern; cron can pass `-v`); droppable without affecting the
   rest.
-- [ ] **6. Logger setup moves to `app_from_context`**, after the config is
+- [x] **6. Logger setup moves to `app_from_context`**, after the config is
   loaded: one `setup_logger_from_click(..., default_log_level=cfg.log_level)`
   call, with the logging options in `ctx.obj` like `config_path`. Without
   step 5, only pass the CLI values through.
-- [ ] **7. INFO logs per phase**, as `"{name}: …"`:
+- [x] **7. INFO logs per phase**, as `"{name}: …"`:
   - import: `"{source.id}: {uri}"` per item in `app.import_source`, for every
     provider, no source header (`db.py`'s `N new, M updated` closes it);
   - remix: start and end (duration, artifact count) in `BaseRemixer.remix`,
     like `BaseProcessor.enrich`;
   - deliver: `N to deliver` and `done/failed` with duration in `_send_all`;
   - enrich: already complete.
-- [ ] **8. Precedence tests** in `test_cli.py`: env var applies, `-v` beats
+- [x] **8. Precedence tests** in `test_cli.py`: env var applies, `-v` beats
   it, config applies (with step 5).
 - [ ] **Docs, when done:** propose the `README.md` update (env var, config
   key, precedence).

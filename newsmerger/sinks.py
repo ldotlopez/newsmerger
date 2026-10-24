@@ -3,6 +3,7 @@ every delivery in the ledger, which is never regenerated (decision 0007)."""
 
 import dataclasses
 import logging
+import time
 from abc import abstractmethod
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
@@ -145,6 +146,8 @@ class BaseSink[S: (SourceItem, Artifact)]:
         ]
 
     def _send_all(self, db: Database, rows: list[tuple[Delivery, S]]) -> RunSummary:
+        LOGGER.info(f"{self.name}: {len(rows)} to deliver")
+        started = time.monotonic()
         summary = RunSummary()
         for delivery, subject in rows:
             delivery.status = DeliveryStatus.SENDING
@@ -168,6 +171,10 @@ class BaseSink[S: (SourceItem, Artifact)]:
                 delivery.content_sha256 = subject.content_sha256
                 summary.done += 1
             db.save_delivery(delivery)
+        LOGGER.info(
+            f"{self.name}: finished in {time.monotonic() - started:.1f}s:"
+            f" {summary.done} delivered, {summary.failed} failed"
+        )
         return summary
 
     @abstractmethod

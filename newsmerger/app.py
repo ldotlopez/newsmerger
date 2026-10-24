@@ -6,6 +6,7 @@ runs the four phases (import, enrich, remix, deliver) and answers queries.
 from __future__ import annotations
 
 import fcntl
+import logging
 import os
 import pickle
 from collections.abc import Iterable
@@ -42,6 +43,8 @@ PLUGINS_NAMESPACE = "newsmerger.plugins"
 PLUGIN_ENTRY_POINT = "__newsmerger_plugin__"
 # register()'s own parameters: options with these names would collide with them.
 RESERVED_OPTIONS = ("self", "name")
+
+LOGGER = logging.getLogger(__name__)
 
 _USE_PICKLE_DATA = os.environ.get("NEWSMERGER_PICKLE_CACHE", "0").lower() not in (
     "0",
@@ -134,10 +137,11 @@ class Application:
                 items = pickle.load(fh)
         else:
             provider = self._providers[source.provider]
-            items = [
-                SourceItem.from_data(source, item_data)
-                for item_data in provider.retrieve_items(source, self._fetcher)
-            ]
+            items = []
+            for item_data in provider.retrieve_items(source, self._fetcher):
+                item = SourceItem.from_data(source, item_data)
+                LOGGER.info(f"{source.id}: {item.uri}")
+                items.append(item)
             if _USE_PICKLE_DATA:
                 with pickle_path.open("wb") as fh:
                     pickle.dump(items, fh)

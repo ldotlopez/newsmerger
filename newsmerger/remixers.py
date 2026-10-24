@@ -1,4 +1,5 @@
 import logging
+import time
 from abc import abstractmethod
 from collections.abc import Iterator
 from typing import Protocol, runtime_checkable
@@ -43,11 +44,17 @@ class BaseRemixer:
 
     def remix(self, db: Database, *, scope: ProcessingScope | None = None) -> list[str]:
         """Produce and save this remixer's artifacts; return their names."""
+        LOGGER.info(f"{self.name}: remixing")
+        started = time.monotonic()
         names = []
         for name, content, content_type in self.produce(db, scope or ProcessingScope()):
             db.save_artifact(Artifact(self.name, name, content, content_type))
             LOGGER.info(f"{self.name}: saved artifact '{name}' ({len(content)} chars)")
             names.append(name)
+        LOGGER.info(
+            f"{self.name}: finished in {time.monotonic() - started:.1f}s:"
+            f" {len(names)} artifact(s)"
+        )
         return names
 
     @abstractmethod
