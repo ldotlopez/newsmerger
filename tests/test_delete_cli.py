@@ -80,19 +80,28 @@ class DeleteCommandTests(unittest.TestCase):
                 self.assertIn("name a filter or an id", result.output)
         self.assertEqual(len(self.db.get_items()), 2)
 
-    def test_annotations_are_deleted_per_processor_with_a_warning(self) -> None:
-        listed = self.run_cli("inspect", "annotations", "--key", "tags", "--item", "1")
-        self.assertIn("tagger.tags", listed.output)
-        self.assertNotIn("tags_text", listed.output)
+    def test_annotations_are_deleted_per_processor(self) -> None:
+        args = ("annotations", "--processor", "tagger", "--item", "1")
+        listed = self.run_cli("inspect", *args)
+        self.assertIn("tagger.tags_text", listed.output)
 
-        result = self.run_cli("delete", "annotations", "--key", "tags", "--item", "1")
+        result = self.run_cli("delete", *args)
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("Also deleting 2 tagger.tags_text of item 1", result.stderr)
         self.assertIn("Deleted 2 annotation(s)", result.stdout)
         self.assertEqual([a.item_id for a in self.db.find_annotations()], [2, 2])
         pending = self.db.get_unprocessed_items("tagger", version=None, max_retries=3)
         self.assertEqual([item.uid for item in pending], ["i1"])
+
+    def test_single_annotation_keys_cannot_be_deleted(self) -> None:
+        for option, value in (("--key", "tags"), ("--annotation", "1")):
+            with self.subTest(option=option):
+                result = self.run_cli("delete", "annotations", option, value)
+
+                self.assertEqual(result.exit_code, 2)
+                self.assertIn("No such option", result.output)
+                self.assertIn(option, result.output)
+        self.assertEqual(len(self.db.find_annotations()), 4)
 
     def test_artifacts_with_deliveries_are_skipped_unless_forced(self) -> None:
         for name in ("a/1", "a/2"):
