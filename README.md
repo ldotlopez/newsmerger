@@ -187,9 +187,17 @@ Global options: `--log-level LEVEL` (also accepts specs such as
 `info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one step
 each from `warning` (`-v` shows progress messages, `-vv` debug). Without
 them, the level comes from `NEWSMERGER_LOG_LEVEL`, then from `log_level` in
-the config, then `warning`. Set `DISABLE_RICH=1`
-(or `RICH_DISABLED=1`, or `NO_COLOR=1`) for plain output: no colors, tables
-or progress bars, one line per log record.
+the config, then `warning`.
+
+Results (tables, `inspect` output, contents, `--help`, and the summaries of
+`run`, `import`, `enrich`, `remix` and `deliver`) go to stdout; progress and
+logs go to stderr. Each stream is rich only when it is a terminal, so
+`newsmerger run > summary.txt` keeps the progress rows on screen and writes
+tab-separated tables, and with stderr redirected (cron) there is no progress
+and logs are one plain line per record. The progress shows a row per phase
+in `run` and a row per source, processor, remixer or sink while it runs.
+Set `DISABLE_RICH=1` (or `RICH_DISABLED=1`), or `TERM=dumb`, for plain
+output on both streams; `NO_COLOR=1` only drops the colors.
 
 ### How `enrich` behaves
 
@@ -375,7 +383,7 @@ it (the publish-news flow). Code that writes takes `app.lock()` first.
 ## Development
 
 ```sh
-uv run python -m unittest discover -s tests
+DISABLE_RICH=1 uv run python -m unittest discover -s tests
 uv run ruff check --fix .
 uv run ruff format .
 ```
