@@ -5,7 +5,8 @@ import functools
 import json
 import logging
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,9 @@ from typing import Any
 import click as plain_click
 import rich_click
 from foundation.clilib import (
-    RICH_DISABLED,
-    RICH_ENABLED,
+    RICH_STDERR_DISABLED,
+    RICH_STDOUT_DISABLED,
+    RICH_STDOUT_ENABLED,
     click_logging_options,
     get_stderr_console,
     get_stdout_console,
@@ -22,7 +24,7 @@ from foundation.clilib import (
 from foundation.loglib import setup_logger_from_click
 from foundation.plugin import PluginError
 from foundation.storage import EntryNotFoundError
-from rich.progress import track
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.syntax import Syntax
 from rich.table import Table
 
@@ -40,7 +42,8 @@ from .models import ProcessingScope, SourceItem
 from .processors import RunSummary
 from .sinks import SelectionRequiredError
 
-click = plain_click if RICH_DISABLED else rich_click
+# Help goes to stdout: rich only when stdout is a terminal.
+click = plain_click if RICH_STDOUT_DISABLED else rich_click
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
 
@@ -69,19 +72,11 @@ def setup_logging(log_options: dict[str, Any], default_log_level: str) -> None:
     """Configure the package logger from the global options, falling back to
     NEWSMERGER_LOG_LEVEL, then to `default_log_level`."""
     # Logs go through foundation's shared stderr console, the same one the
-    # progress bars use, so live progress redraws around log records.
-    logger = setup_logger_from_click(
-        PACKAGE_NAME,
-        **log_options,
-        default_log_level=default_log_level,
-        infect=RICH_ENABLED,
+    # progress bars use, so live progress redraws around log records; plain
+    # lines when stderr is not a terminal.
+    setup_logger_from_click(
+        PACKAGE_NAME, **log_options, default_log_level=default_log_level
     )
-    if RICH_DISABLED:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        )
-        logger.addHandler(handler)
 
 
 def app_from_context(ctx: click.Context, *, write: bool = False) -> Application:
@@ -100,8 +95,41 @@ def app_from_context(ctx: click.Context, *, write: bool = False) -> Application:
     return app
 
 
+@contextmanager
+def progress_rows() -> Iterator[Progress]:
+    """Phase and unit rows on stderr, off when stderr is not a terminal.
+
+    stdout is not redirected through the live display, so tables still reach
+    a redirected stdout; print them after the rows end, or they would break
+    the redraw on a shared terminal."""
+    progress = Progress(
+        SpinnerColumn(finished_text="✔"),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=get_stderr_console(),
+        disable=RICH_STDERR_DISABLED,
+        redirect_stdout=False,
+    )
+    with progress:
+        yield progress
+
+
+def run_each[T](
+    progress: Progress, names: Iterable[str], run: Callable[[str], T]
+) -> dict[str, T]:
+    """Run each unit by name with its own row, removed when it ends."""
+    results = {}
+    for name in names:
+        row = progress.add_task(name, total=None)
+        try:
+            results[name] = run(name)
+        finally:
+            progress.remove_task(row)
+    return results
+
+
 def print_table(title: str, headers: list[str], rows: list[list[Any]]) -> None:
-    if RICH_DISABLED:
+    if RICH_STDOUT_DISABLED:
         print(title)
         for row in rows:
             print("\t".join(str(cell) for cell in row))
@@ -196,53 +224,57 @@ def cli(
     }
 
 
-def import_sources(app: Application) -> int:
-    """Import every configured source and print a summary; return how many
-    failed."""
-    rows = []
-    failed = 0
-    for source in track(
-        app.sources,
-        description="Importing",
-        console=get_stderr_console(),
-        disable=RICH_DISABLED,
-    ):
+def import_sources(app: Application, progress: Progress) -> list[list[Any]]:
+    """Import every configured source, a row each; return the summary rows
+    (source, items, error)."""
+
+    def import_one(source_id: str) -> list[Any]:
         try:
-            items = app.import_source(source.id)
+            items = app.import_source(source_id)
         except Exception as e:
             # One broken site must not stop the others; the summary reports it.
-            LOGGER.exception(f"importing '{source.id}' failed")
-            rows.append([source.id, "-", f"{type(e).__name__}: {e}"])
-            failed += 1
-        else:
-            rows.append([source.id, len(items), ""])
+            LOGGER.exception(f"importing '{source_id}' failed")
+            return [source_id, "-", f"{type(e).__name__}: {e}"]
+        return [source_id, len(items), ""]
 
+    sources = [source.id for source in app.sources]
+    return list(run_each(progress, sources, import_one).values())
+
+
+def print_import(rows: list[list[Any]]) -> int:
+    """Print the import summary; return how many sources failed."""
     print_table("Import", ["Source", "Items", "Error"], rows)
-    return failed
+    return sum(1 for _, _, error in rows if error)
 
 
-def print_enrich(summaries: dict[str, RunSummary]) -> None:
+def print_enrich(summaries: dict[str, RunSummary]) -> int:
+    """Print the enrich summary; return how many items failed."""
     print_table(
         "Enrich",
         ["Processor", "Done", "Ignored", "Failed"],
         [[name, s.done, s.ignored, s.failed] for name, s in summaries.items()],
     )
+    return sum(s.failed for s in summaries.values())
 
 
-def print_remix(produced: dict[str, list[str]]) -> None:
+def print_remix(produced: dict[str, list[str]]) -> int:
+    """Print the remix summary; remixers report no failures."""
     print_table(
         "Remix",
         ["Remixer", "Artifacts"],
         [[name, ", ".join(names) or "-"] for name, names in produced.items()],
     )
+    return 0
 
 
-def print_deliver(summaries: dict[str, RunSummary]) -> None:
+def print_deliver(summaries: dict[str, RunSummary]) -> int:
+    """Print the deliver summary; return how many deliveries failed."""
     print_table(
         "Deliver",
         ["Sink", "Delivered", "Failed"],
         [[name, s.done, s.failed] for name, s in summaries.items()],
     )
+    return sum(s.failed for s in summaries.values())
 
 
 @cli.command("import")
@@ -250,7 +282,10 @@ def print_deliver(summaries: dict[str, RunSummary]) -> None:
 @report_user_errors
 def import_cmd(ctx: click.Context) -> None:
     """Import every configured source."""
-    if failed := import_sources(app_from_context(ctx, write=True)):
+    app = app_from_context(ctx, write=True)
+    with progress_rows() as progress:
+        rows = import_sources(app, progress)
+    if failed := print_import(rows):
         raise click.ClickException(f"{failed} source(s) failed")
 
 
@@ -280,10 +315,12 @@ def enrich_cmd(
 ) -> None:
     """Run one processor, or every configured one in order."""
     app = app_from_context(ctx, write=True)
-    if processor:
-        summaries = {processor: app.run_processor(processor, scope=scope, force=force)}
-    else:
-        summaries = app.enrich(scope=scope, force=force)
+    with progress_rows() as progress:
+        summaries = run_each(
+            progress,
+            [processor] if processor else app.processors,
+            lambda name: app.run_processor(name, scope=scope, force=force),
+        )
     print_enrich(summaries)
 
 
@@ -295,10 +332,12 @@ def enrich_cmd(
 def remix_cmd(ctx: click.Context, remixer: str | None, scope: ProcessingScope) -> None:
     """Run one remixer, or every configured one in order."""
     app = app_from_context(ctx, write=True)
-    if remixer:
-        produced = {remixer: app.run_remixer(remixer, scope=scope)}
-    else:
-        produced = app.remix(scope=scope)
+    with progress_rows() as progress:
+        produced = run_each(
+            progress,
+            [remixer] if remixer else app.remixers,
+            lambda name: app.run_remixer(name, scope=scope),
+        )
     print_remix(produced)
 
 
@@ -335,14 +374,14 @@ def deliver_cmd(
     if force and sink is None:
         raise click.UsageError("--force needs a SINK")
     app = app_from_context(ctx, write=True)
-    if sink:
-        summaries = {
-            sink: app.run_sink(
-                sink, scope=scope, artifacts=artifact_ids, requeue=requeue, force=force
-            )
-        }
-    else:
-        summaries = app.deliver(scope=scope, artifacts=artifact_ids, requeue=requeue)
+    with progress_rows() as progress:
+        summaries = run_each(
+            progress,
+            [sink] if sink else app.sinks,
+            lambda name: app.run_sink(
+                name, scope=scope, artifacts=artifact_ids, requeue=requeue, force=force
+            ),
+        )
     print_deliver(summaries)
 
 
@@ -358,32 +397,40 @@ def run_cmd(ctx: click.Context) -> None:
     app = app_from_context(ctx, write=True)
     failures = 0
 
-    def enrich() -> int:
-        summaries = app.enrich()
-        print_enrich(summaries)
-        return sum(s.failed for s in summaries.values())
-
-    def remix() -> int:
-        print_remix(app.remix())
-        return 0
-
-    def deliver() -> int:
-        summaries = app.deliver()
-        print_deliver(summaries)
-        return sum(s.failed for s in summaries.values())
-
-    phases: list[tuple[str, Callable[[], int]]] = [
-        ("import", lambda: import_sources(app)),
-        ("enrich", enrich),
-        ("remix", remix),
-        ("deliver", deliver),
+    # (phase, run under the progress rows, print its summary and count failures)
+    phases: list[tuple[str, Callable[[Progress], Any], Callable[[Any], int]]] = [
+        ("import", lambda progress: import_sources(app, progress), print_import),
+        (
+            "enrich",
+            lambda progress: run_each(progress, app.processors, app.run_processor),
+            print_enrich,
+        ),
+        (
+            "remix",
+            lambda progress: run_each(progress, app.remixers, app.run_remixer),
+            print_remix,
+        ),
+        (
+            "deliver",
+            lambda progress: run_each(progress, app.sinks, app.run_sink),
+            print_deliver,
+        ),
     ]
-    for phase, run_phase in phases:
-        try:
-            failures += run_phase()
-        except Exception:
-            LOGGER.exception(f"{phase} failed")
-            failures += 1
+    results = []
+    with progress_rows() as progress:
+        for number, (phase, run_phase, print_summary) in enumerate(phases, start=1):
+            description = f"{phase} ({number}/{len(phases)})"
+            row = progress.add_task(description, total=1)
+            try:
+                results.append((print_summary, run_phase(progress)))
+            except Exception:
+                LOGGER.exception(f"{phase} failed")
+                failures += 1
+                progress.update(row, description=f"{description} failed")
+            progress.update(row, completed=1)
+
+    for print_summary, result in results:
+        failures += print_summary(result)
     if failures:
         raise click.ClickException(f"{failures} failure(s); see the log above")
 
@@ -522,7 +569,7 @@ format_option = click.option(
 def print_content(content: str, content_type: str) -> None:
     """Content to stdout as is, highlighted on a terminal."""
     lexer = lexer_for(content_type)
-    if RICH_ENABLED and lexer and sys.stdout.isatty():
+    if RICH_STDOUT_ENABLED and lexer:
         get_stdout_console().print(Syntax(content, lexer))
     else:
         sys.stdout.write(content)

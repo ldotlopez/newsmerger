@@ -325,7 +325,7 @@ wheels = [
 [[package]]
 name = "foundation"
 version = "0.1.0"
-source = { git = "https://github.com/ldotlopez/foundation.git?branch=main#96d6929ed39758c2d33cb66638bb574c56eb8f58" }
+source = { git = "https://github.com/ldotlopez/foundation.git?branch=p2-rich-per-stream#efc073c2fb7cc235341d46d5f45960da9dafd8bb" }
 dependencies = [
     { name = "click" },
     { name = "platformdirs" },
@@ -687,7 +687,7 @@ requires-dist = [
     { name = "bs4", specifier = ">=0.0.2" },
     { name = "click", specifier = ">=8.3.3" },
     { name = "feedparser", specifier = ">=6.0.14" },
-    { name = "foundation", extras = ["scraping"], git = "https://github.com/ldotlopez/foundation.git?branch=main" },
+    { name = "foundation", extras = ["scraping"], git = "https://github.com/ldotlopez/foundation.git?branch=p2-rich-per-stream" },
     { name = "html5lib", specifier = ">=1.1" },
     { name = "ollama", specifier = ">=0.6.2" },
     { name = "pydantic", specifier = ">=2.13.3" },

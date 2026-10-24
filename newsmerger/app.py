@@ -125,6 +125,21 @@ class Application:
     def sources(self) -> list[SourceData]:
         return self.config.sources
 
+    @property
+    def processors(self) -> list[str]:
+        """Loaded processor names, in configuration order."""
+        return list(self._processors)
+
+    @property
+    def remixers(self) -> list[str]:
+        """Loaded remixer names, in configuration order."""
+        return list(self._remixers)
+
+    @property
+    def sinks(self) -> list[str]:
+        """Loaded sink names, in configuration order."""
+        return list(self._sinks)
+
     # --- Import ------------------------------------------------------------
 
     def import_source(self, source_id: str) -> list[SourceItem]:
@@ -171,15 +186,6 @@ class Application:
         processor = lookup(self._processors, name, "processor")
         return processor.enrich(self._db, scope=scope, force=force)
 
-    def enrich(
-        self, *, scope: ProcessingScope | None = None, force: bool = False
-    ) -> dict[str, RunSummary]:
-        """Run every loaded processor, in configuration order."""
-        return {
-            name: self.run_processor(name, scope=scope, force=force)
-            for name in self._processors
-        }
-
     # --- Remix -------------------------------------------------------------
 
     def run_remixer(
@@ -188,10 +194,6 @@ class Application:
         """Run one loaded remixer; return the names of the artifacts saved."""
         remixer = lookup(self._remixers, name, "remixer")
         return remixer.remix(self._db, scope=scope)
-
-    def remix(self, *, scope: ProcessingScope | None = None) -> dict[str, list[str]]:
-        """Run every loaded remixer, in configuration order."""
-        return {name: self.run_remixer(name, scope=scope) for name in self._remixers}
 
     # --- Deliver -----------------------------------------------------------
 
@@ -210,19 +212,6 @@ class Application:
         return sink.deliver(
             self._db, scope=scope, artifacts=artifacts, requeue=requeue, force=force
         )
-
-    def deliver(
-        self,
-        *,
-        scope: ProcessingScope | None = None,
-        artifacts: ArtifactNames = (),
-        requeue: bool = False,
-    ) -> dict[str, RunSummary]:
-        """Run every loaded sink, in configuration order."""
-        return {
-            name: self.run_sink(name, scope=scope, artifacts=artifacts, requeue=requeue)
-            for name in self._sinks
-        }
 
     def resolve_deliveries(
         self,

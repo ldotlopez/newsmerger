@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from click.testing import CliRunner
 from foundation.storage import EntryNotFoundError
@@ -85,28 +85,37 @@ class CommandTests(unittest.TestCase):
 
     def test_enrich_without_processor_runs_every_configured_one(self) -> None:
         app = Mock()
-        app.enrich.return_value = {"markdownify": RunSummary(done=1)}
+        app.processors = ["markdownify"]
+        app.run_processor.return_value = RunSummary(done=1)
 
         result = invoke(app, "enrich")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.enrich.assert_called_once_with(scope=ProcessingScope(), force=False)
+        app.run_processor.assert_called_once_with(
+            "markdownify", scope=ProcessingScope(), force=False
+        )
         self.assertIn("markdownify", result.output)
 
     def test_remix_runs_one_or_every_remixer(self) -> None:
         app = Mock()
+        app.remixers = ["rssfeed", "digest"]
         app.run_remixer.return_value = ["feed"]
-        app.remix.return_value = {"rssfeed": ["feed"]}
 
         self.assertEqual(invoke(app, "remix", "rssfeed").exit_code, 0)
         self.assertEqual(invoke(app, "remix").exit_code, 0)
 
-        app.run_remixer.assert_called_once_with("rssfeed", scope=ProcessingScope())
-        app.remix.assert_called_once_with(scope=ProcessingScope())
+        self.assertEqual(
+            app.run_remixer.call_args_list,
+            [
+                call("rssfeed", scope=ProcessingScope()),
+                call("rssfeed", scope=ProcessingScope()),
+                call("digest", scope=ProcessingScope()),
+            ],
+        )
 
     def test_writing_commands_take_the_write_lock(self) -> None:
         app = Mock()
-        app.remix.return_value = {}
+        app.remixers = []
 
         with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(cli, ["remix"])
@@ -138,14 +147,15 @@ class CommandTests(unittest.TestCase):
 
     def test_deliver_without_sink_runs_every_one_but_cannot_force(self) -> None:
         app = Mock()
-        app.deliver.return_value = {"telegram": RunSummary(done=2, failed=1)}
+        app.sinks = ["telegram"]
+        app.run_sink.return_value = RunSummary(done=2, failed=1)
 
         result = invoke(app, "deliver", "--requeue")
         forced = invoke(app, "deliver", "--force", "--item", "1")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.deliver.assert_called_once_with(
-            scope=ProcessingScope(), artifacts=(), requeue=True
+        app.run_sink.assert_called_once_with(
+            "telegram", scope=ProcessingScope(), artifacts=(), requeue=True, force=False
         )
         self.assertEqual(forced.exit_code, 2)
         self.assertIn("--force needs a SINK", forced.output)
@@ -153,17 +163,24 @@ class CommandTests(unittest.TestCase):
     def test_run_goes_on_after_a_failed_phase_and_exits_with_error(self) -> None:
         app = Mock()
         app.sources = []
-        app.enrich.side_effect = RuntimeError("llm down")
-        app.remix.return_value = {"rssfeed": ["feed"]}
-        app.deliver.return_value = {"telegram": RunSummary(done=1)}
+        app.processors = ["summarize"]
+        app.run_processor.side_effect = RuntimeError("llm down")
+        app.remixers = ["rssfeed"]
+        app.run_remixer.return_value = ["feed"]
+        app.sinks = ["telegram"]
+        app.run_sink.return_value = RunSummary(done=1)
 
         with self.assertLogs("newsmerger", "ERROR"):
             result = invoke(app, "run")
 
         self.assertEqual(result.exit_code, 1)
-        app.remix.assert_called_once_with()
-        app.deliver.assert_called_once_with()
+        app.run_remixer.assert_called_once_with("rssfeed")
+        app.run_sink.assert_called_once_with("telegram")
         self.assertIn("1 failure(s)", result.output)
+        # Summaries are results: stdout only, after the progress rows.
+        self.assertIn("Remix", result.stdout)
+        self.assertIn("Deliver", result.stdout)
+        self.assertNotIn("Remix", result.stderr)
 
     def test_resolve_settles_interrupted_deliveries(self) -> None:
         app = Mock()
@@ -222,7 +239,7 @@ class LogLevelTests(unittest.TestCase):
         config_path = self.config_dir / "config.yaml"
         config_path.write_text(config)
         app = Mock()
-        app.remix.return_value = {}
+        app.remixers = []
         with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(
                 cli,

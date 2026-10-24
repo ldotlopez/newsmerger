@@ -41,4 +41,4 @@ feeds = [
 ]
 
 [tool.uv.sources]
-foundation = { git = "https://github.com/ldotlopez/foundation.git", branch = "main" }
+foundation = { git = "https://github.com/ldotlopez/foundation.git", branch = "p2-rich-per-stream" }
