@@ -248,6 +248,30 @@ class TestTelegramChannel(unittest.TestCase):
         self.assertEqual(fetcher.get.call_args_list[0].kwargs, {"use_cache": False})
         self.assertEqual(fetcher.get.call_args_list[1].kwargs, {})
 
+    def test_retrieve_items_skips_the_front_page(self) -> None:
+        front_page = ARTICLE.replace(
+            b"https://example.test/news/a.html",
+            b"https://example.test/?utm_source=telegram&amp;mrfcid=1",
+        )
+        pages = {
+            self.PAGE_URL: read_sample("telegram-channel-mediterraneoelperiodico.html"),
+            "https://mrf.lu/2vjWp": ARTICLE,
+            "https://mrf.lu/2NbpV": front_page,
+        }
+        fetcher = Mock()
+        fetcher.get.side_effect = lambda url, use_cache=True: pages.get(
+            url, b"not html"
+        )
+
+        with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
+            items = list(
+                TelegramChannelProvider(pages=1).retrieve_items(self.source(), fetcher)
+            )
+
+        self.assertEqual(
+            [item.uri for item in items], ["https://example.test/news/a.html"]
+        )
+
     def test_retrieve_items_rejects_non_public_channels(self) -> None:
         fetcher = Mock()
         fetcher.get.return_value = b"<html><head></head><body></body></html>"

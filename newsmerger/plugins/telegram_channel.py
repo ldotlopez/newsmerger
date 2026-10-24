@@ -94,6 +94,12 @@ def page_title(soup: bs4.BeautifulSoup) -> str:
     raise ValueError("no title")
 
 
+def is_home_page(url: str) -> bool:
+    """Whether the URL is a site's front page. Only the path counts, so tracking
+    query parameters (utm_*, mrfcid) don't hide it."""
+    return urlparse(url).path in ("", "/")
+
+
 def parse_article(content: bytes, post: Post | None = None) -> SourceItemData:
     """Build one item from a linked page. Raises ValueError for pages that
     aren't HTML articles (binary files, error pages)."""
@@ -138,9 +144,13 @@ class TelegramChannelProvider:
         for post in self.iter_posts(source, fetcher):
             for url in post.links:
                 try:
-                    yield parse_article(fetcher.get(url), post)
+                    item = parse_article(fetcher.get(url), post)
                 except ValueError as e:
                     LOGGER.error(f"error '{e}' while parsing '{url}' ({post.id})")
+                    continue
+                # Links are shortened, so the front page shows only once resolved.
+                if not is_home_page(item.uri):
+                    yield item
 
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
