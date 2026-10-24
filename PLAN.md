@@ -66,43 +66,52 @@ contracts stay untouched (per-item progress is in the backlog).
 
 foundation:
 
-- [ ] **1. Per-stream rich in `clilib`.** `RICH_STDOUT_ENABLED` /
+- [x] **1. Per-stream rich in `clilib`.** `RICH_STDOUT_ENABLED` /
   `RICH_STDOUT_DISABLED` and `RICH_STDERR_ENABLED` / `RICH_STDERR_DISABLED`,
   computed at import from each stream's TTY; `DISABLE_RICH`,
   `RICH_DISABLED` and `TERM=dumb` disable both. `RICH_ENABLED` /
   `RICH_DISABLED` are removed, to avoid two ways of asking. `NO_COLOR` no
   longer disables rich: it only drops colors, which rich already honors.
-- [ ] **2. `setup_logger` picks the handler.** With `infect=True`, a
+- [x] **2. `setup_logger` picks the handler.** With `infect=True`, a
   `RichHandler` when stderr is rich, otherwise a plain `StreamHandler`
   (`%(asctime)s %(levelname)s %(name)s: %(message)s`), on the root logger,
   once. `infect=False` still attaches nothing.
-- [ ] **3. Tests**, reloading `clilib` with a patched environment and
-  streams (computed at import), and both handler choices.
+- [x] **3. Tests**, reloading `clilib` with a patched environment and
+  streams (computed at import), and both handler choices. Branch
+  `p2-rich-per-stream` (`efc073c`), not merged yet.
 
 newsmerger:
 
-- [ ] **4.** `uv lock --upgrade-package foundation`; the README test command
+- [~] **4.** `uv lock --upgrade-package foundation`; the README test command
   becomes `DISABLE_RICH=1 uv run python -m unittest discover -s tests`, so
   the mode is fixed whoever runs it (unittest keeps the caller's stderr).
-- [ ] **5. Per-stream switches in `cli.py`.** `rich_click` vs `click` and
+  Pinned to the foundation branch for now: repin to `main` once merged.
+  The README line waits for the docs approval.
+- [x] **5. Per-stream switches in `cli.py`.** `rich_click` vs `click` and
   `print_table` follow stdout; `print_content` uses `RICH_STDOUT_ENABLED`
   instead of its own `isatty`. `setup_logging` drops its plain-handler
   branch and the `infect` argument (it was on the package logger, so
   third-party logs fell to `logging.lastResort` in plain mode).
-- [ ] **6. `Application` exposes processor, remixer and sink names**, like
+- [x] **6. `Application` exposes processor, remixer and sink names**, like
   `sources`; `app.enrich`/`remix`/`deliver` are deleted and `test_app.py`
   moves to `run_*` and the name lists (configuration order).
-- [ ] **7. One `Progress` in `cli.py`** on `get_stderr_console()`, with
+- [x] **7. One `Progress` in `cli.py`** on `get_stderr_console()`, with
   `disable=RICH_STDERR_DISABLED`, replacing `track`; the CLI calls `run_*`
   one unit at a time. `run` keeps a phase row (`n/4`); unit rows (spinner,
-  elapsed) are removed when done (`remove_task`).
+  elapsed) are removed when done (`remove_task`). `redirect_stdout=False`,
+  so a redirected stdout keeps the tables, printed after the rows end.
 - [ ] **Docs, when done:** propose `ARCHITECTURE.md` (names on
   `Application`, no `enrich`/`remix`/`deliver`; output per stream) and
   `README.md` (terminal detection per stream, `NO_COLOR`, test command).
 
-Other foundation consumers (karasync, intelligence, gvavivenda,
-photolib-tools) use `RICH_ENABLED`/`RICH_DISABLED` and draw progress on
-stdout: they must migrate when they upgrade foundation. Plan pending.
+- [x] **Other foundation consumers** (karasync, intelligence, gvavivenda,
+  photolib-tools' `immichtool`), workspace members on the editable
+  foundation: migrated in their working copies, left uncommitted for the
+  owner. Progress moves to the stderr console with `RICH_STDERR_*`;
+  intelligence's plain `echo` lines become `LOGGER.info`/`LOGGER.error`.
+  Checked against the branch: same test failures as before. gvavivenda
+  already fails to import on foundation `main` (`StatValidator` is gone from
+  `foundation.cache`), unrelated to P2.
 
 Out of scope: `inspect`, `delete` and `scripts/` (fast, tables already rich).
 

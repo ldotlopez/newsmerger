@@ -82,20 +82,19 @@ cache:
     def test_enrich_then_remix(self) -> None:
         item = self.import_sample()
 
-        summaries = self.app.enrich()
-        self.assertEqual(summaries["markdownify"].done, 1)
-        self.assertEqual(self.app.enrich()["markdownify"].done, 0)
+        self.assertEqual(self.app.run_processor("markdownify").done, 1)
+        self.assertEqual(self.app.run_processor("markdownify").done, 0)
         markdown = self.app.get_annotations(item)["markdownify"]["markdown"]
         self.assertIn("asedio carlista", markdown)
 
-        self.assertEqual(self.app.remix(), {"rssfeed": ["feed"]})
+        self.assertEqual(self.app.run_remixer("rssfeed"), ["feed"])
         feed = self.app.get_artifact("rssfeed", "feed")
         self.assertIn("<title>Test feed</title>", feed.content)
         self.assertIn(f"mediterraneo/{SAMPLE_UID}", feed.content)
 
     def test_delete_annotations_makes_the_item_pending_again(self) -> None:
         item = self.import_sample()
-        self.app.enrich()
+        self.app.run_processor("markdownify")
 
         self.assertEqual(
             self.app.delete_annotations(processor="markdownify", item_id=item.id), 1
@@ -140,14 +139,14 @@ cache:
         with self.assertRaisesRegex(ConfigError, "sink 'telegram' is not loaded"):
             self.app.run_sink("telegram")
 
-    def test_phases_run_every_loaded_object_in_configuration_order(self) -> None:
+    def test_loaded_names_follow_configuration_order(self) -> None:
         self.app.close()
         self.app = self.make_app(
             "  rssfeed:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n"
         )
 
-        self.assertEqual(list(self.app.enrich()), ["markdownify"])
-        self.assertEqual(list(self.app.remix()), ["rssfeed", "avglink", "singlelink"])
+        self.assertEqual(self.app.processors, ["markdownify"])
+        self.assertEqual(self.app.remixers, ["rssfeed", "avglink", "singlelink"])
 
     def test_invalid_plugin_options_report_their_config_path(self) -> None:
         with self.assertRaisesRegex(
@@ -181,7 +180,9 @@ cache:
         self.import_sample()
 
         with self.assertLogs("newsmerger.processors", "ERROR") as logs:
-            summaries = self.app.enrich()
+            summaries = {
+                name: self.app.run_processor(name) for name in ("markdownify", "tagger")
+            }
 
         self.assertEqual(summaries["markdownify"].done, 1)
         self.assertEqual(summaries["tagger"], RunSummary())
