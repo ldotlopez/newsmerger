@@ -46,8 +46,8 @@ newsmerger:
   - enrich: already complete.
 - [x] **8. Precedence tests** in `test_cli.py`: env var applies, `-v` beats
   it, config applies (with step 5).
-- [ ] **Docs, when done:** propose the `README.md` update (env var, config
-  key, precedence).
+- [x] **Docs, when done:** `README.md` (env var, config key, precedence),
+  `ARCHITECTURE.md` (`config.py`) and `config.example.yaml`.
 
 ## P2 — Rich progress across the app
 
