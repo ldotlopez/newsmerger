@@ -2,6 +2,91 @@
 
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
+Ideas and plans not scheduled yet go to the backlog at the end.
+
+## P1 — Plain logging and the `<APP>_LOG_LEVEL` fix
+
+Precedence: CLI (`--log-level`, `-v`/`-q`) > `NEWSMERGER_LOG_LEVEL` >
+config `log_level` > `warning`. With `-v`/`-q` and no `--log-level`, they
+step from `warning`, ignoring the env var: `-v` is always info, `-vv` debug.
+
+Bug (confirmed 2026-10-24): `click_logging_options` gives `--log-level` a
+`"warning"` default, so `setup_logger` never reads the env var, which it only
+looks up when `log_level is None`.
+
+foundation (`../foundation`, separate commits; its push is manual):
+
+- [ ] **1. `click_logging_options`:** `--log-level` defaults to `None`; the
+  help names the `warning` default and the `<APP>_LOG_LEVEL` variable.
+- [ ] **2. `setup_logger` / `setup_logger_from_click`:** a
+  `default_log_level` parameter (defaults to `DEFAULT_LOG_LEVEL`) for the
+  app's config value; `-v`/`-q` without `--log-level` ignore the env var.
+  Fix the stale `configure_handler` docstrings.
+- [ ] **3. `tests/test_loglib.py`:** nothing gives warning; the env var
+  applies; `--log-level` and `-v` beat it; the app default applies when
+  neither CLI nor env set a level.
+
+newsmerger:
+
+- [ ] **4.** `uv lock --upgrade-package foundation`.
+- [ ] **5. `log_level: str | None = None` in `Config`.** Low value (the level
+  is a per-run concern; cron can pass `-v`); droppable without affecting the
+  rest.
+- [ ] **6. Logger setup moves to `app_from_context`**, after the config is
+  loaded: one `setup_logger_from_click(..., default_log_level=cfg.log_level)`
+  call, with the logging options in `ctx.obj` like `config_path`. Without
+  step 5, only pass the CLI values through.
+- [ ] **7. INFO logs per phase**, as `"{name}: …"`:
+  - import: `"{source.id}: {uri}"` per item in `app.import_source`, for every
+    provider, no source header (`db.py`'s `N new, M updated` closes it);
+  - remix: start and end (duration, artifact count) in `BaseRemixer.remix`,
+    like `BaseProcessor.enrich`;
+  - deliver: `N to deliver` and `done/failed` with duration in `_send_all`;
+  - enrich: already complete.
+- [ ] **8. Precedence tests** in `test_cli.py`: env var applies, `-v` beats
+  it, config applies (with step 5).
+- [ ] **Docs, when done:** propose the `README.md` update (env var, config
+  key, precedence).
+
+## P2 — Rich progress across the app
+
+Progress bars complement the logs, never replace them: rich when stderr is a
+terminal, plain output otherwise (cron).
+
+foundation:
+
+- [ ] **1. More `RICH_DISABLED` criteria**, besides `NO_COLOR`,
+  `RICH_DISABLED` and `DISABLE_RICH`: `TERM=dumb` and stderr not a TTY (the
+  progress and the logs go there). `infect=RICH_ENABLED` then gives plain
+  logs under cron with no change in `cli.py`.
+- [ ] **2. Tests**, reloading `clilib` with a patched environment, since
+  `RICH_DISABLED` is computed at import.
+
+newsmerger:
+
+- [ ] **3.** `uv lock --upgrade-package foundation` and the whole suite:
+  under pytest stderr is not a TTY, so tests switch to plain output; check
+  the table assertions in `test_cli.py` and `test_delete_cli.py`.
+- [ ] **4. `type ProgressCallback = Callable[[int, int | None], None]`** in
+  `models.py`: (done, total), `None` when the total is unknown.
+- [ ] **5. Optional `progress: ProgressCallback | None = None`** on
+  `Processor.enrich` (protocol, `BaseProcessor`, `UnavailableProcessor`),
+  `Sink.deliver` (protocol, `_send_all`, `UnavailableSink`) and
+  `app.import_source` (no total; `Provider.retrieve_items` and the plugins
+  are untouched). Remixers keep their signature: a spinner row each.
+- [ ] **6. `Application` exposes processor, remixer and sink names**, like
+  `sources`, so the CLI runs each through `run_*` with its own row.
+  `app.enrich`/`remix`/`deliver` stay.
+- [ ] **7. One `Progress` in `cli.py`** on `get_stderr_console()`, with
+  `disable=RICH_DISABLED`, replacing `track`: `run` shows phase (`n/4`),
+  current unit and item rows; each phase command, unit and item rows.
+- [ ] **8. Test** that `BaseProcessor.enrich` and `_send_all` call
+  `progress` with `(i, total)`.
+- [ ] **Docs, when done:** propose `ARCHITECTURE.md` (`progress` on the
+  protocols, names on `Application`), `README.md` (terminal detection), and
+  ask whether the protocol change needs a decision record or a note on 0003.
+
+Out of scope: `inspect`, `delete` and `scripts/` (fast, tables already rich).
 
 ## Numeric ids and `inspect` (decision 0008)
 
@@ -177,8 +262,13 @@ Risks:
 
 ---
 
-## Bigger, not really necessary yet (flagged, not scheduled)
+## Backlog: ideas and pending plans (flagged, not scheduled)
 
+- **Force rich without a terminal** (e.g. `RICH_ENABLED=1` for `watch` or
+  `ssh` without a pty), in foundation. Only if P2's TTY detection gets in
+  the way.
+- **`NO_COLOR` semantics in foundation.** It disables rich entirely; the
+  no-color.org convention only drops colors.
 - **Concurrent imports.** Releasing replaced contents can race with another
   process starting to reference the same content. Add a lock if imports ever
   run in parallel.
@@ -193,4 +283,4 @@ Risks:
 
 ---
 
-*Last updated: 2026-10-23*
+*Last updated: 2026-10-24*
