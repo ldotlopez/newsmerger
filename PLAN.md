@@ -82,11 +82,9 @@ foundation:
 
 newsmerger:
 
-- [~] **4.** `uv lock --upgrade-package foundation`; the README test command
+- [x] **4.** `uv lock --upgrade-package foundation`; the README test command
   becomes `DISABLE_RICH=1 uv run python -m unittest discover -s tests`, so
   the mode is fixed whoever runs it (unittest keeps the caller's stderr).
-  Pinned to the foundation branch for now: repin to `main` once merged.
-  The README line waits for the docs approval.
 - [x] **5. Per-stream switches in `cli.py`.** `rich_click` vs `click` and
   `print_table` follow stdout; `print_content` uses `RICH_STDOUT_ENABLED`
   instead of its own `isatty`. `setup_logging` drops its plain-handler
@@ -100,7 +98,7 @@ newsmerger:
   one unit at a time. `run` keeps a phase row (`n/4`); unit rows (spinner,
   elapsed) are removed when done (`remove_task`). `redirect_stdout=False`,
   so a redirected stdout keeps the tables, printed after the rows end.
-- [ ] **Docs, when done:** propose `ARCHITECTURE.md` (names on
+- [x] **Docs, when done:** propose `ARCHITECTURE.md` (names on
   `Application`, no `enrich`/`remix`/`deliver`; output per stream) and
   `README.md` (terminal detection per stream, `NO_COLOR`, test command).
 
