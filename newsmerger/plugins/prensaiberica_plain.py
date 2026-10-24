@@ -7,6 +7,7 @@ from typing import Any, ClassVar, cast
 import bs4
 from foundation.scrapelib import (
     drop_selectors,
+    find_canonical_url,
     head_meta_get_value,
     prune_to_spine,
     soupify,
@@ -47,7 +48,8 @@ class PrensaIbericaPlainProvider(IndexSiteProvider):
         title = head_meta_get_value(soup, {"property": "og:title"})
         image = head_meta_get_value(soup, {"property": "og:image"})
         author = head_meta_get_value(soup, {"name": "author"})
-        url = head_meta_get_value(soup, {"property": "og:url"})
+        if (url := find_canonical_url(soup)) is None:
+            raise ValueError("no canonical URL")
         tags = head_meta_get_value(soup, {"property": "article:tag"}).split(",")
         section = head_meta_get_value(soup, {"property": "article:section"})
         pub_time = datetime.fromisoformat(

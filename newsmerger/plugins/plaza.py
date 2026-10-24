@@ -10,6 +10,7 @@ import bs4
 from foundation.dtlib import get_local_tz
 from foundation.scrapelib import (
     drop_selectors,
+    find_canonical_url,
     head_meta_get_value,
     prune_to_spine,
     soupify,
@@ -65,7 +66,8 @@ class PlazaProvider(IndexSiteProvider):
 
         title = head_meta_get_value(soup, {"property": "og:title"})
         image = head_meta_get_value(soup, {"property": "og:image"})
-        url = head_meta_get_value(soup, {"property": "og:url"})
+        if (url := find_canonical_url(soup)) is None:
+            raise ValueError("no canonical URL")
         author = soup.select_one(".redactor a").get_text().strip()
         content = soup.select_one(".wrap-FULL")
         drop_selectors(content, [".container-mega", ".COLUMNA-DER"])
