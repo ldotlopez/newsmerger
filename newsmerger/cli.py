@@ -875,8 +875,13 @@ def delete_annotations_cmd(
     item, with its processing state, so the item becomes pending again.
 
     There is no --key or --annotation: a single key would leave its processor
-    done with that key missing, never regenerated.
+    done with that key missing, never regenerated. --limit is refused for the
+    same reason: it counts annotations, not processors.
     """
+    if scope.limit is not None:
+        raise click.UsageError(
+            "--limit counts annotations, but they are deleted per processor"
+        )
     require_selection(scope.source, scope.since, scope.until, scope.item_ids, processor)
     app = app_from_context(ctx, write=True)
     annotations = app.find_annotations(scope, processor=processor, sort=sort)
