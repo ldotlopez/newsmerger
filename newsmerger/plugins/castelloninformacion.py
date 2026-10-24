@@ -8,6 +8,7 @@ import bs4
 import feedparser
 from foundation.scrapelib import (
     drop_selectors,
+    find_canonical_url,
     head_meta_get_value_by_name,
     head_meta_get_value_by_property,
     prune_to_spine,
@@ -40,7 +41,8 @@ class CastellonInformacionProvider(IndexSiteProvider):
         title = head_meta_get_value_by_property(soup, "og:title")
         image = head_meta_get_value_by_property(soup, "og:image")
         author = head_meta_get_value_by_name(soup, "author")
-        url = head_meta_get_value_by_property(soup, "og:url")
+        if (url := find_canonical_url(soup)) is None:
+            raise ValueError("no canonical URL")
         pub_time = datetime.fromisoformat(
             head_meta_get_value_by_property(soup, "article:published_time")
         )

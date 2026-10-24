@@ -325,7 +325,7 @@ wheels = [
 [[package]]
 name = "foundation"
 version = "0.1.0"
-source = { git = "https://github.com/ldotlopez/foundation.git?branch=main#a983d8fcacd484fa8248cfb21171179616312c1c" }
+source = { git = "https://github.com/ldotlopez/foundation.git?branch=main#d5492aa682de13cb4f641b5d9f26e29629b7ea20" }
 dependencies = [
     { name = "click" },
     { name = "platformdirs" },

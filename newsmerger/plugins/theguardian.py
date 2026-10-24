@@ -7,7 +7,12 @@ from typing import Any
 from urllib.parse import urljoin
 
 import feedparser
-from foundation.scrapelib import drop_selectors, head_meta_get_value, soupify
+from foundation.scrapelib import (
+    drop_selectors,
+    find_canonical_url,
+    head_meta_get_value,
+    soupify,
+)
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
@@ -39,7 +44,8 @@ class TheGuardianProvider(IndexSiteProvider):
     def parse_item(self, content: bytes) -> SourceItemData:
         soup = soupify(content.decode("utf-8"))
 
-        url = head_meta_get_value(soup, {"property": "og:url"})
+        if (url := find_canonical_url(soup)) is None:
+            raise ValueError("no canonical URL")
         title = head_meta_get_value(soup, {"property": "og:title"})
         image = head_meta_get_value(soup, {"property": "og:image"})
         section = head_meta_get_value(soup, {"property": "article:section"})

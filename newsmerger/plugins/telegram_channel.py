@@ -10,7 +10,11 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import bs4
-from foundation.scrapelib import head_meta_get_value_by_property, soupify
+from foundation.scrapelib import (
+    find_canonical_url,
+    head_meta_get_value_by_property,
+    soupify,
+)
 from pydantic import PositiveInt
 
 from ..httpclient import HTTPClient
@@ -74,16 +78,6 @@ def parse_preview(content: bytes, page_url: str) -> tuple[list[Post], str | None
     return posts, urljoin(page_url, str(older["href"])) if older else None
 
 
-def canonical_url(soup: bs4.BeautifulSoup) -> str:
-    try:
-        return head_meta_get_value_by_property(soup, "og:url")
-    except ValueError:
-        pass
-    if (link := soup.select_one('link[rel="canonical"][href]')) is not None:
-        return str(link["href"]).strip()
-    raise ValueError("no canonical URL: not an article page")
-
-
 def page_title(soup: bs4.BeautifulSoup) -> str:
     try:
         return head_meta_get_value_by_property(soup, "og:title")
@@ -107,7 +101,9 @@ def parse_article(content: bytes, post: Post | None = None) -> SourceItemData:
     if b"<html" not in content[:4096].lower():
         raise ValueError("not an HTML page")
     soup = soupify(content.decode("utf-8"))
-    url = canonical_url(soup)
+    # The fetched URL can't be the fallback: it's the short link, not the article.
+    if (url := find_canonical_url(soup)) is None:
+        raise ValueError("no canonical URL: not an article page")
     return SourceItemData(
         uid=hashlib.sha256(url.encode()).hexdigest(),
         title=page_title(soup),
