@@ -1,7 +1,10 @@
 import json
+import logging
 import re
+import tempfile
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from click.testing import CliRunner
@@ -105,7 +108,7 @@ class CommandTests(unittest.TestCase):
         app = Mock()
         app.remix.return_value = {}
 
-        with patch("newsmerger.cli.Application.from_config_file", return_value=app):
+        with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(cli, ["remix"])
 
         self.assertEqual(result.exit_code, 0, result.output)
@@ -205,6 +208,45 @@ ITEM = SourceItem(
 
 def annotation(annotation_id: int, key: str, value: object) -> Annotation:
     return Annotation(annotation_id, 7, "tagger", key, NOW, value)
+
+
+class LogLevelTests(unittest.TestCase):
+    """Precedence: --log-level and -v/-q, then NEWSMERGER_LOG_LEVEL, then the
+    config's log_level, then warning."""
+
+    def setUp(self) -> None:
+        logging.getLogger("newsmerger").setLevel(logging.NOTSET)
+        self.config_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+
+    def level(self, *args: str, env: str | None = None, config: str = "") -> int:
+        config_path = self.config_dir / "config.yaml"
+        config_path.write_text(config)
+        app = Mock()
+        app.remix.return_value = {}
+        with patch("newsmerger.cli.Application", return_value=app):
+            result = CliRunner().invoke(
+                cli,
+                ["-c", str(config_path), *args, "remix"],
+                env={"NEWSMERGER_LOG_LEVEL": env},
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        return logging.getLogger("newsmerger").level
+
+    def test_defaults_to_warning(self) -> None:
+        self.assertEqual(self.level(), logging.WARNING)
+
+    def test_config_applies(self) -> None:
+        self.assertEqual(self.level(config="log_level: info\n"), logging.INFO)
+
+    def test_env_var_beats_config(self) -> None:
+        level = self.level(env="error", config="log_level: info\n")
+        self.assertEqual(level, logging.ERROR)
+
+    def test_verbose_beats_env_var(self) -> None:
+        self.assertEqual(self.level("-v", env="debug"), logging.INFO)
+
+    def test_log_level_option_beats_env_var(self) -> None:
+        self.assertEqual(self.level("--log-level", "error", env="info"), logging.ERROR)
 
 
 class InspectCommandTests(unittest.TestCase):

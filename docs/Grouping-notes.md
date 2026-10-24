@@ -87,12 +87,12 @@ similitud_final = 0.8 * similitud_embeddings + 0.2 * similitud_keywords (Jaccard
 ## Parámetros Configurables Clave
 
 ```python
-similarity_threshold   # umbral de similitud (Jaccard o coseno según versión)
-top_groups             # cuántos grupos consolidar en resumen final
-clustering_method      # "hierarchical" | "dbscan" | "hybrid"
-use_keywords           # activar/desactivar boost de keywords
-max_concurrent         # límite de requests paralelos
-embedding_model        # ej. "text-embedding-3-large"
+similarity_threshold  # umbral de similitud (Jaccard o coseno según versión)
+top_groups  # cuántos grupos consolidar en resumen final
+clustering_method  # "hierarchical" | "dbscan" | "hybrid"
+use_keywords  # activar/desactivar boost de keywords
+max_concurrent  # límite de requests paralelos
+embedding_model  # ej. "text-embedding-3-large"
 ```
 
 ---
@@ -101,16 +101,16 @@ embedding_model        # ej. "text-embedding-3-large"
 
 **Noticias generales / volumen moderado:**
 ```python
-clustering_method="hybrid"
-similarity_threshold=0.75
-use_keywords=True
+clustering_method = "hybrid"
+similarity_threshold = 0.75
+use_keywords = True
 ```
 
 **Datasets muy grandes (>1000 noticias) / prioridad en velocidad y costo:**
 ```python
-clustering_method="dbscan"
-similarity_threshold=0.70
-use_keywords=False  # solo embeddings, sin llamadas extra a keywords
+clustering_method = "dbscan"
+similarity_threshold = 0.70
+use_keywords = False  # solo embeddings, sin llamadas extra a keywords
 ```
 
 ---

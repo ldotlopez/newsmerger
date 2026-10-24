@@ -27,7 +27,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from .app import Application, LockedError, UnsupportedProviderError
-from .config import ConfigError
+from .config import Config, ConfigError
 from .consts import PACKAGE_NAME
 from .db import (
     ANNOTATION_SORTS,
@@ -65,10 +65,35 @@ def report_user_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
+def setup_logging(log_options: dict[str, Any], default_log_level: str) -> None:
+    """Configure the package logger from the global options, falling back to
+    NEWSMERGER_LOG_LEVEL, then to `default_log_level`."""
+    # Logs go through foundation's shared stderr console, the same one the
+    # progress bars use, so live progress redraws around log records.
+    logger = setup_logger_from_click(
+        PACKAGE_NAME,
+        **log_options,
+        default_log_level=default_log_level,
+        infect=RICH_ENABLED,
+    )
+    if RICH_DISABLED:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        logger.addHandler(handler)
+
+
 def app_from_context(ctx: click.Context, *, write: bool = False) -> Application:
     """Build the Application for this invocation and close it when the command
-    ends. Commands that `write` hold the write lock until then."""
-    app = Application.from_config_file(ctx.obj["config_path"])
+    ends. Commands that `write` hold the write lock until then.
+
+    Logging is set up here, between loading the config, which may set its
+    level, and building the Application, which already logs."""
+    config_path = ctx.obj["config_path"]
+    config = Config.from_file(config_path) if config_path else Config()
+    setup_logging(ctx.obj["log_options"], config.log_level)
+    app = Application(config)
     ctx.call_on_close(app.close)
     if write:
         app.lock()
@@ -158,27 +183,17 @@ artifact_ids_option = click.option(
 def cli(
     ctx: click.Context,
     config_path: Path | None,
-    log_level: str,
+    log_level: str | None,
     verbose: int,
     quiet: int,
 ) -> None:
-    # Logs go through foundation's shared stderr console, the same one the
-    # progress bars use, so live progress redraws around log records.
-    logger = setup_logger_from_click(
-        PACKAGE_NAME,
-        log_level=log_level,
-        verbose=verbose,
-        quiet=quiet,
-        infect=RICH_ENABLED,
-    )
-    if RICH_DISABLED:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        )
-        logger.addHandler(handler)
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config_path
+    ctx.obj["log_options"] = {
+        "log_level": log_level,
+        "verbose": verbose,
+        "quiet": quiet,
+    }
 
 
 def import_sources(app: Application) -> int:

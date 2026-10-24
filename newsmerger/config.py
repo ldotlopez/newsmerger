@@ -50,6 +50,8 @@ class DatabaseConfig(pydantic.BaseModel):
 
 class Config(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
+    # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set one.
+    log_level: str = "warning"
     sources: list[SourceData] = []
     # Plugin module name -> its options, validated by the plugin itself. Only
     # plugins listed here are loaded; an empty section enables its defaults.
