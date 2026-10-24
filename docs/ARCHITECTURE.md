@@ -165,7 +165,7 @@ class ExampleProvider(IndexSiteProvider):
             content=str(prune_to_spine(article)).encode("utf-8"),
             mimetype="text/html",
             published_at=...,  # optional
-            modified_at=...,  # optional
+            modified_at=...,   # optional
             data={"author": ..., "image": ...},  # any JSON-compatible extras
         )
 
