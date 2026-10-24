@@ -28,9 +28,8 @@ foundation (`../foundation`, separate commits; its push is manual):
 
 newsmerger:
 
-- [~] **4.** `uv lock --upgrade-package foundation`: pinned to foundation's
-  `fix-log-level-env` branch; switch `pyproject.toml` back to `main` and
-  relock once it merges.
+- [x] **4.** `uv lock --upgrade-package foundation` (foundation `main` at
+  `96d6929`).
 - [x] **5. `log_level: str = "warning"` in `Config`.** Low value (the level
   is a per-run concern; cron can pass `-v`); droppable without affecting the
   rest.

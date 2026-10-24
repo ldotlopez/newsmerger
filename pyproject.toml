@@ -41,4 +41,4 @@ feeds = [
 ]
 
 [tool.uv.sources]
-foundation = { git = "https://github.com/ldotlopez/foundation.git", branch = "fix-log-level-env" }
+foundation = { git = "https://github.com/ldotlopez/foundation.git", branch = "main" }
