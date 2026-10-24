@@ -150,8 +150,9 @@ uv run newsmerger -c config.yaml delete artifacts --artifact digest/castellonpla
 Items and annotations are selected by their numeric id, which `inspect`
 shows; artifacts by `<remixer>/<name>`. `enrich`, `remix`, `deliver`,
 `inspect` and `delete` accept `--source` (a source id), `--since`,
-`--until`, `--item` (repeatable) and `--limit`; `inspect` and `delete` add
-`--processor`, `--key` and `--annotation` for annotations, and
+`--until`, `--item` (repeatable) and `--limit`; `inspect` adds
+`--processor`, `--key` and `--annotation` for annotations (`delete` only
+`--processor`, and no `--limit`), and both add
 `--remixer`, `--artifact` and `--limit` for artifacts. Filters combine; an
 id that the selection does not return is an error.
 
@@ -177,8 +178,8 @@ selection with no filter or id is refused. Deleting an item takes its
 processing state, annotations and deliveries with it, and an item still in
 its source's index comes back on the next `import` with a new id.
 Annotations are deleted per processor (every key of that processor on the
-item, with its processing state), so the item is processed again; a `--key`
-or `--annotation` selection warns when that deletes other keys. Items and
+item, with its processing state), so the item is processed again; `delete`
+selects them by processor, not by key or id. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
 

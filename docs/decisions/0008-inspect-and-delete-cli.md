@@ -49,9 +49,9 @@ the newest rows lets their ids be reused.
   | Filter | items | annotations | artifacts | deliveries |
   | :--- | :---: | :---: | :---: | :---: |
   | `--source`, `--since`, `--until` (of the item) | ✓ | ✓ | | ✓ |
-  | `--limit` | ✓ | ✓ | ✓ | ✓ |
+  | `--limit` | ✓ | ✓ (`delete`: no) | ✓ | ✓ |
   | `--item ID` | ✓ | ✓ | | ✓ |
-  | `--processor`, `--key`, `--annotation ID` | | ✓ | | |
+  | `--processor`, `--key`, `--annotation ID` | | ✓ (`delete`: only `--processor`) | | |
   | `--remixer`, `--artifact ID` | | | ✓ | ✓ |
   | `--sink`, `--status` | | | | ✓ |
 
@@ -84,8 +84,10 @@ the newest rows lets their ids be reused.
     again.
   - Annotations are deleted per processor: every key of that processor on
     the item, together with its processing state, so the item becomes
-    pending (`Database.delete_annotations`). `--annotation ID` widens to
-    its processor, with a warning when that deletes other keys.
+    pending (`Database.delete_annotations`). `delete annotations` takes no
+    `--key`, `--annotation` or `--limit` (which counts annotations): a
+    selection names whole processors, so `inspect` with the same arguments
+    lists exactly what is deleted.
 - **Removed.** `items`, `annotations`, `artifacts`, `artifact` and 0007's
   `deliveries list`. `deliveries resolve` stays.
 
@@ -106,6 +108,10 @@ the newest rows lets their ids be reused.
 - **Deleting a single annotation key.** The processing state is per
   (item, processor): it would stay `done` with a key missing, never be
   regenerated, and break the processors that require it.
+- **Widening a `--key`/`--annotation` selection to its processor, with a
+  warning.** Discarded before release: the warning came after the delete,
+  and `inspect` listed less than what was deleted. `--limit` was dropped
+  from `delete annotations` for the same reason.
 - **Confirmation prompts.** The CLI is meant for scripts and cron.
 - **Rejecting the whole request when part of it has deliveries.**
   Impractical with broad filters; skipping those elements is visible in

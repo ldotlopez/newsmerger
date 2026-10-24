@@ -72,9 +72,9 @@ class DeleteCommandTests(unittest.TestCase):
         self.assertEqual(self.db.find_deliveries(), [])
 
     def test_a_selection_without_filters_is_refused(self) -> None:
-        for command in ("items", "annotations", "artifacts"):
-            with self.subTest(command=command):
-                result = self.run_cli("delete", command, "--limit", "1")
+        for args in (("items", "--limit", "1"), ("annotations",), ("artifacts",)):
+            with self.subTest(command=args[0]):
+                result = self.run_cli("delete", *args)
 
                 self.assertEqual(result.exit_code, 2)
                 self.assertIn("name a filter or an id", result.output)
@@ -101,6 +101,15 @@ class DeleteCommandTests(unittest.TestCase):
                 self.assertEqual(result.exit_code, 2)
                 self.assertIn("No such option", result.output)
                 self.assertIn(option, result.output)
+        self.assertEqual(len(self.db.find_annotations()), 4)
+
+    def test_annotations_refuse_a_limit(self) -> None:
+        result = self.run_cli(
+            "delete", "annotations", "--processor", "tagger", "--limit", "1"
+        )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("deleted per processor", result.output)
         self.assertEqual(len(self.db.find_annotations()), 4)
 
     def test_artifacts_with_deliveries_are_skipped_unless_forced(self) -> None:
