@@ -51,41 +51,58 @@ newsmerger:
 
 ## P2 — Rich progress across the app
 
-Progress bars complement the logs, never replace them: rich when stderr is a
-terminal, plain output otherwise (cron).
+Progress bars complement the logs, never replace them. Each stream is rich
+only when it is a terminal: stdout carries results (tables, `inspect`,
+contents, `--help`, and the `run`/`import`/`enrich`/`remix`/`deliver`
+summaries), stderr carries diagnostics (progress, logs).
+
+| | stdout terminal | stdout redirected |
+| :--- | :--- | :--- |
+| **stderr terminal** | all rich | rich progress and logs, plain tables |
+| **stderr redirected** | rich tables, no progress, plain logs | all plain (cron) |
+
+Progress goes per phase and unit only, driven from `cli.py`: plugin
+contracts stay untouched (per-item progress is in the backlog).
 
 foundation:
 
-- [ ] **1. More `RICH_DISABLED` criteria**, besides `NO_COLOR`,
-  `RICH_DISABLED` and `DISABLE_RICH`: `TERM=dumb` and stderr not a TTY (the
-  progress and the logs go there). `infect=RICH_ENABLED` then gives plain
-  logs under cron with no change in `cli.py`.
-- [ ] **2. Tests**, reloading `clilib` with a patched environment, since
-  `RICH_DISABLED` is computed at import.
+- [ ] **1. Per-stream rich in `clilib`.** `RICH_STDOUT_ENABLED` /
+  `RICH_STDOUT_DISABLED` and `RICH_STDERR_ENABLED` / `RICH_STDERR_DISABLED`,
+  computed at import from each stream's TTY; `DISABLE_RICH`,
+  `RICH_DISABLED` and `TERM=dumb` disable both. `RICH_ENABLED` /
+  `RICH_DISABLED` are removed, to avoid two ways of asking. `NO_COLOR` no
+  longer disables rich: it only drops colors, which rich already honors.
+- [ ] **2. `setup_logger` picks the handler.** With `infect=True`, a
+  `RichHandler` when stderr is rich, otherwise a plain `StreamHandler`
+  (`%(asctime)s %(levelname)s %(name)s: %(message)s`), on the root logger,
+  once. `infect=False` still attaches nothing.
+- [ ] **3. Tests**, reloading `clilib` with a patched environment and
+  streams (computed at import), and both handler choices.
 
 newsmerger:
 
-- [ ] **3.** `uv lock --upgrade-package foundation` and the whole suite:
-  under pytest stderr is not a TTY, so tests switch to plain output; check
-  the table assertions in `test_cli.py` and `test_delete_cli.py`.
-- [ ] **4. `type ProgressCallback = Callable[[int, int | None], None]`** in
-  `models.py`: (done, total), `None` when the total is unknown.
-- [ ] **5. Optional `progress: ProgressCallback | None = None`** on
-  `Processor.enrich` (protocol, `BaseProcessor`, `UnavailableProcessor`),
-  `Sink.deliver` (protocol, `_send_all`, `UnavailableSink`) and
-  `app.import_source` (no total; `Provider.retrieve_items` and the plugins
-  are untouched). Remixers keep their signature: a spinner row each.
+- [ ] **4.** `uv lock --upgrade-package foundation`; the README test command
+  becomes `DISABLE_RICH=1 uv run python -m unittest discover -s tests`, so
+  the mode is fixed whoever runs it (unittest keeps the caller's stderr).
+- [ ] **5. Per-stream switches in `cli.py`.** `rich_click` vs `click` and
+  `print_table` follow stdout; `print_content` uses `RICH_STDOUT_ENABLED`
+  instead of its own `isatty`. `setup_logging` drops its plain-handler
+  branch and the `infect` argument (it was on the package logger, so
+  third-party logs fell to `logging.lastResort` in plain mode).
 - [ ] **6. `Application` exposes processor, remixer and sink names**, like
-  `sources`, so the CLI runs each through `run_*` with its own row.
-  `app.enrich`/`remix`/`deliver` stay.
+  `sources`; `app.enrich`/`remix`/`deliver` are deleted and `test_app.py`
+  moves to `run_*` and the name lists (configuration order).
 - [ ] **7. One `Progress` in `cli.py`** on `get_stderr_console()`, with
-  `disable=RICH_DISABLED`, replacing `track`: `run` shows phase (`n/4`),
-  current unit and item rows; each phase command, unit and item rows.
-- [ ] **8. Test** that `BaseProcessor.enrich` and `_send_all` call
-  `progress` with `(i, total)`.
-- [ ] **Docs, when done:** propose `ARCHITECTURE.md` (`progress` on the
-  protocols, names on `Application`), `README.md` (terminal detection), and
-  ask whether the protocol change needs a decision record or a note on 0003.
+  `disable=RICH_STDERR_DISABLED`, replacing `track`; the CLI calls `run_*`
+  one unit at a time. `run` keeps a phase row (`n/4`); unit rows (spinner,
+  elapsed) are removed when done (`remove_task`).
+- [ ] **Docs, when done:** propose `ARCHITECTURE.md` (names on
+  `Application`, no `enrich`/`remix`/`deliver`; output per stream) and
+  `README.md` (terminal detection per stream, `NO_COLOR`, test command).
+
+Other foundation consumers (karasync, intelligence, gvavivenda,
+photolib-tools) use `RICH_ENABLED`/`RICH_DISABLED` and draw progress on
+stdout: they must migrate when they upgrade foundation. Plan pending.
 
 Out of scope: `inspect`, `delete` and `scripts/` (fast, tables already rich).
 
@@ -265,11 +282,11 @@ Risks:
 
 ## Backlog: ideas and pending plans (flagged, not scheduled)
 
-- **Force rich without a terminal** (e.g. `RICH_ENABLED=1` for `watch` or
-  `ssh` without a pty), in foundation. Only if P2's TTY detection gets in
-  the way.
-- **`NO_COLOR` semantics in foundation.** It disables rich entirely; the
-  no-color.org convention only drops colors.
+- **Force rich without a terminal** (e.g. for `watch` or `ssh` without a
+  pty), in foundation. Only if P2's TTY detection gets in the way.
+- **Per-item progress** inside processors, sinks and imports. P2 left it
+  out to keep the plugin contracts as they are (a callback would change
+  `Processor.enrich` and `Sink.deliver`); revisit if unit rows fall short.
 - **Concurrent imports.** Releasing replaced contents can race with another
   process starting to reference the same content. Add a lock if imports ever
   run in parallel.
