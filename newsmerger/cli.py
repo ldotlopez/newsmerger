@@ -454,6 +454,11 @@ def check_found(kind: str, requested: Iterable[Any], found: Iterable[Any]) -> No
         raise click.ClickException(f"no {kind} {listed} in the selection")
 
 
+processor_option = click.option(
+    "--processor", default=None, help="Only this processor's annotations"
+)
+
+
 def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     """Add --processor/--key/--annotation, which narrow an item selection."""
     command = click.option(
@@ -464,9 +469,7 @@ def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
         help="Annotation id (repeatable)",
     )(command)
     command = click.option("--key", default=None, help="Only this key")(command)
-    return click.option(
-        "--processor", default=None, help="Only this processor's annotations"
-    )(command)
+    return processor_option(command)
 
 
 def artifact_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
@@ -861,59 +864,24 @@ def delete_items_cmd(
 
 @delete_group.command("annotations")
 @scope_options
-@annotation_options
+@processor_option
 @sort_option(ANNOTATION_SORTS)
 @click.pass_context
 @report_user_errors
 def delete_annotations_cmd(
-    ctx: click.Context,
-    scope: ProcessingScope,
-    processor: str | None,
-    key: str | None,
-    annotation_ids: tuple[int, ...],
-    sort: str,
+    ctx: click.Context, scope: ProcessingScope, processor: str | None, sort: str
 ) -> None:
     """Delete annotations per processor: every key of that processor on the
     item, with its processing state, so the item becomes pending again.
 
-    A --key or --annotation selection widens to the rest of its processor's
-    keys on that item, with a warning.
+    There is no --key or --annotation: a single key would leave its processor
+    done with that key missing, never regenerated.
     """
-    require_selection(
-        scope.source,
-        scope.since,
-        scope.until,
-        scope.item_ids,
-        processor,
-        key,
-        annotation_ids,
-    )
+    require_selection(scope.source, scope.since, scope.until, scope.item_ids, processor)
     app = app_from_context(ctx, write=True)
-    annotations = app.find_annotations(
-        scope,
-        processor=processor,
-        key=key,
-        annotation_ids=annotation_ids or None,
-        sort=sort,
-    )
-    if scope.limit is None:
-        check_found("annotation", annotation_ids, (a.id for a in annotations))
+    annotations = app.find_annotations(scope, processor=processor, sort=sort)
 
     targets = sorted({(a.item_id, a.processor) for a in annotations})
-    selected = {a.id for a in annotations}
-    keys = app.get_annotation_keys(item_id for item_id, _ in targets)
-    for item_id, target in targets:
-        if widened := [
-            f"{annotation_id} {target}.{annotation_key}"
-            for annotation_id, row_processor, annotation_key in keys.get(item_id, [])
-            if row_processor == target and annotation_id not in selected
-        ]:
-            click.echo(
-                f"Also deleting {', '.join(widened)} of item {item_id}: annotations"
-                " are deleted per processor",
-                err=True,
-            )
-
     deleted = sum(
         app.delete_annotations(processor=target, item_id=item_id)
         for item_id, target in targets
