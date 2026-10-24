@@ -183,9 +183,11 @@ selects them by processor, not by key or id. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
 
-Global options: `--log-level LEVEL` (default `warning`; also accepts specs
-such as `info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one
-step each (`-v` shows progress messages, `-vv` debug). Set `DISABLE_RICH=1`
+Global options: `--log-level LEVEL` (also accepts specs such as
+`info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one step
+each from `warning` (`-v` shows progress messages, `-vv` debug). Without
+them, the level comes from `NEWSMERGER_LOG_LEVEL`, then from `log_level` in
+the config, then `warning`. Set `DISABLE_RICH=1`
 (or `RICH_DISABLED=1`, or `NO_COLOR=1`) for plain output: no colors, tables
 or progress bars, one line per log record.
 

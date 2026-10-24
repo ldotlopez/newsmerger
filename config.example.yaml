@@ -3,6 +3,9 @@
 # ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}.
 # Write a literal dollar sign in a value as $$; comments are not expanded.
 
+# Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set a level.
+# log_level: info
+
 sources:
   - id: elperiodicomediterraneo-castello
     name: El Periódico Mediterraneo (Castelló ciudad)
