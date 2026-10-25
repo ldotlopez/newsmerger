@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pydantic
 
 from newsmerger.models import SourceData, SourceItemData
+from newsmerger.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
 from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
 from newsmerger.plugins.telegram_channel import (
     TelegramChannelProvider,
@@ -19,6 +20,21 @@ from newsmerger.plugins.telegram_channel import (
 def read_sample(name: str) -> bytes:
     filepath = Path(__file__).parent / "samples" / name
     return filepath.read_bytes()
+
+
+class TestCSJuntasGobierno(unittest.TestCase):
+    def test_session_dates_follow_madrid_dst(self) -> None:
+        index = b"""<ul>
+        <li>Sesi\xc3\xb3n del d\xc3\xada 28 de mayo de 2026
+            <a href="/a.pdf/1">Descargar extracto</a></li>
+        <li>Sesi\xc3\xb3n del d\xc3\xada 3 de diciembre de 2026
+            <a href="/b.pdf/1">Descargar extracto</a></li>
+        </ul>"""
+        links = CSJuntasGobiernoProvider()._iter_pdf_links(index, "https://x.test/")
+
+        summer, winter = (link.dt.utcoffset() for link in links)
+        self.assertEqual(summer, datetime.timedelta(hours=2))
+        self.assertEqual(winter, datetime.timedelta(hours=1))
 
 
 class TestPrensaIberica(unittest.TestCase):

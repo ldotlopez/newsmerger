@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 
 import bs4
-from foundation.dtlib import get_local_tz
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
@@ -16,6 +16,8 @@ from ..providers import Provider
 from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
+# A named zone, not the import time's UTC offset: sessions span DST changes.
+MADRID_TZ = ZoneInfo("Europe/Madrid")
 
 
 MONTH_TABLE = {
@@ -115,7 +117,7 @@ class CSJuntasGobiernoProvider:
                 month=month,
                 day=int(day),
                 hour=12,
-                tzinfo=get_local_tz(),
+                tzinfo=MADRID_TZ,
             )
 
             yield PreparseData(
