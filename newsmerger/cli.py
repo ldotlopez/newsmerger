@@ -435,6 +435,39 @@ def run_cmd(ctx: click.Context) -> None:
         raise click.ClickException(f"{failures} failure(s); see the log above")
 
 
+def match_snippet(text: str, query: str, width: int = 60) -> str | None:
+    """The text around the first case-insensitive match, on one line."""
+    start = text.casefold().find(query.casefold())
+    if start < 0:
+        return None
+    snippet = text[max(start - width, 0) : start + len(query) + width]
+    return " ".join(snippet.split())
+
+
+@cli.command("search")
+@click.argument("query")
+@scope_options
+@click.pass_context
+@report_user_errors
+def search_cmd(ctx: click.Context, query: str, scope: ProcessingScope) -> None:
+    """Items whose markdownify text contains QUERY (case-insensitive).
+
+    --limit counts the items searched, not the matches.
+    """
+    app = app_from_context(ctx)
+    items = app.get_items(scope)
+    # shortcut: loads every markdown from disk, add an index if it gets slow
+    markdowns = app.get_annotation_values(
+        items, processor="markdownify", key="markdown"
+    )
+    rows = []
+    for item in items:
+        snippet = match_snippet(markdowns.get(item.key, ""), query)
+        if snippet is not None:
+            rows.append([item.id, item.source.id, item.title, snippet])
+    print_table("Matches", ["ID", "Source", "Title", "Match"], rows)
+
+
 @cli.group("deliveries")
 def deliveries_group() -> None:
     """Settle the delivery ledger (read it with `inspect deliveries`)."""

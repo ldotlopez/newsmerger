@@ -227,6 +227,27 @@ def annotation(annotation_id: int, key: str, value: object) -> Annotation:
     return Annotation(annotation_id, 7, "tagger", key, NOW, value)
 
 
+class SearchTests(unittest.TestCase):
+    def test_lists_items_whose_markdown_contains_the_query(self) -> None:
+        other = SourceItem(source=SOURCE, uid="def", title="Other", uri="u", id=8)
+        app = Mock()
+        app.get_items.return_value = [ITEM, other]
+        app.get_annotation_values.return_value = {
+            ITEM.key: "# Title\n\nLa Junta aprueba el PRESUPUESTO anual",
+            other.key: "Nothing here",
+        }
+
+        result = invoke(app, "search", "presupuesto", "--source", "plaza")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.get_items.assert_called_once_with(ProcessingScope(source="plaza"))
+        self.assertIn(
+            "7\tplaza\tTitle\t# Title La Junta aprueba el PRESUPUESTO anual",
+            result.output,
+        )
+        self.assertNotIn("Other", result.output)
+
+
 class LogLevelTests(unittest.TestCase):
     """Precedence: --log-level and -v/-q, then NEWSMERGER_LOG_LEVEL, then the
     config's log_level, then warning."""
