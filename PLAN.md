@@ -400,6 +400,22 @@ Risks:
   `digest` `context_length`); `json_mode`/`context_length` stay explicit in
   the `LLM` protocol. Review decision 0006 first; migrate when a
   backend-specific option needs a per-use override.
+- **Per-use options as pydantic models instead of signature binding.**
+  Each plugin splits its `Options` by inheritance: a model with the
+  per-use options (e.g. `FeedOptions`) and `Options(FeedOptions)` adding
+  the instance-only ones. The provider validates a source's
+  `provider_options` against it and merges them over its section defaults
+  (`model_copy(update=...model_dump(exclude_unset=True))`); the core calls
+  that at startup instead of `inspect.signature(...).bind`. Gains: each
+  option declared once (today twice: `Options` and the `retrieve_items`
+  keyword), types checked at startup, one fallback rule instead of each
+  provider's `x or self.x` (which cannot unset a section default). Costs:
+  `Provider` protocol change (typing the options argument needs a generic
+  protocol or provider-side validation; generic `ParametrosCompletos` /
+  `ParametrosDeVerbo` models in the core were rejected), rewrite decision
+  0003's per-use options. Not worth it for one provider with one option
+  (2026-10-26); propose it when more per-use options appear, in providers
+  or in other verbs (see *LLM options per use*).
 
 ---
 
