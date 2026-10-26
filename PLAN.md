@@ -305,6 +305,14 @@ Risks:
   sources.
 - **Generalizing `BaseProvider`/`IndexSiteProvider`** for non-news sources:
   wait for a second concrete use case.
+- **Save annotations and artifacts as soon as possible**: they stay in
+  memory until the loop finishes.
+- **Define enrich process (and order) in its own section (`enrich`)**.
+  Also make possible to override per source: `sources>enrich`
+- **Automatic plugin loading**. Use definition of sources and enrich
+  to detect which plugins to load
+- **summary plugin: make prompt configurable**: Global and per-source
+- **google chat deliver plugin**
 
 ---
 
