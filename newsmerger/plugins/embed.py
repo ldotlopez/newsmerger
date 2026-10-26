@@ -1,9 +1,7 @@
-"""Embeds the item's tags and markdown with an LLM, for the `embeddings`
+"""Embeds the item's tags or markdown with an LLM, for the `embeddings`
 grouping remixer."""
 
-from typing import Any, Literal
-
-import pydantic
+from typing import Any, Literal, get_args
 
 from ..db import Database
 from ..llms import LLM, LLMUnavailableError
@@ -11,47 +9,49 @@ from ..models import SourceItem
 from ..processors import BaseProcessor, Processor, UnavailableProcessor
 from . import PluginObjects, PluginOptions, Services
 
+type Input = Literal["tags", "markdown"]
+
 
 class Options(PluginOptions):
     llm: str | None = None
     model: str | None = None
-    inputs: list[Literal["tags", "markdown"]] = pydantic.Field(
-        default=["tags", "markdown"], min_length=1
-    )
     max_retries: int = 3
 
 
 class EmbedProcessor(BaseProcessor):
-    """Annotates `<input>_embedding` per configured input, plus `tags_text`,
-    the exact text the tags embedding was computed from."""
+    """Annotates `<input>_embedding`: the embedding of the `tags` (as
+    `tags_text`) or the `markdown` annotation, as the run's `input` option
+    says (default `tags`)."""
 
     name = "embed"
-    requires = "tagger"  # which in turn requires markdownify
+    key = "tags_embedding"
 
     def __init__(self, llm: LLM, cfg: Options) -> None:
         super().__init__(max_retries=cfg.max_retries)
         self.llm = llm
         self.model = cfg.model
-        self.inputs = cfg.inputs
 
-    def process_item(self, db: Database, item: SourceItem) -> dict[str, Any]:
-        texts: dict[str, str] = {}
-        if "tags" in self.inputs:
-            tags = self.require_annotation(db, item, "tagger", "tags")
-            texts["tags"] = tags_text(tags)
-        if "markdown" in self.inputs:
-            texts["markdown"] = self.require_annotation(
-                db, item, "markdownify", "markdown"
-            )
+    @classmethod
+    def output_key(cls, **options: Any) -> str:
+        super().output_key(**options)  # checks the option names
+        source_key = options.get("input", "tags")
+        if source_key not in get_args(Input.__value__):
+            raise ValueError(f"input must be one of {get_args(Input.__value__)}")
+        return f"{source_key}_embedding"
 
-        embeddings = self.llm.embed(list(texts.values()), model=self.model)
-        results: dict[str, Any] = {
-            f"{name}_embedding": embedding
-            for name, embedding in zip(texts, embeddings, strict=True)
-        }
-        if "tags" in texts:
-            results["tags_text"] = texts["tags"]
-        return results
+    def required_key(self, **options: Any) -> str | None:
+        return options.get("input", "tags")
+
+    def process_item(
+        self,
+        db: Database,
+        item: SourceItem,
+        input: Input = "tags",
+        model: str | None = None,
+    ) -> list[float]:
+        value = self.require_annotation(db, item, input)
+        text = tags_text(value) if input == "tags" else value
+        return self.llm.embed([text], model=model or self.model)[0]
 
 
 def tags_text(tags: list[str]) -> str:
@@ -65,5 +65,6 @@ def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     try:
         processor = EmbedProcessor(services.llm(cfg.llm), cfg)
     except LLMUnavailableError as e:
-        return [(name, Processor, UnavailableProcessor(name, str(e)))]
+        unavailable = UnavailableProcessor(name, str(e), EmbedProcessor.output_key)
+        return [(name, Processor, unavailable)]
     return [(name, Processor, processor)]

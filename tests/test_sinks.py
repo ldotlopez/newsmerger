@@ -14,7 +14,7 @@ SOURCE_B = SourceData(id="b", name="B", url="https://b.test/", provider="plaza")
 
 class RecordingItemSink(BaseItemSink):
     name = "recorder"
-    requires = "summarize"
+    requires = "summary"
 
     def __init__(self, failing: set[str] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -67,7 +67,7 @@ class SinkTestCase(unittest.TestCase):
         self.db.upsert_source_items([item])
         if summarized:
             self.db.record_result(
-                item, "summarize", ProcessingStatus.DONE, annotations={"summary": "S"}
+                item, "summarize", "summary", ProcessingStatus.DONE, value="S"
             )
         return item
 

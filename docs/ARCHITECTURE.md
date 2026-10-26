@@ -31,19 +31,19 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 
 | Module | Responsibility |
 | :--- | :--- |
-| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the phases one unit at a time (`import_source`, `run_processor`, `run_remixer`, `run_sink`; `sources`, `processors`, `remixers` and `sinks` list them in configuration order), answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
+| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the phases one unit at a time (`import_source`, `run_enrich`, `run_remixer`, `run_sink`; `sources`, `enrich_keys()`, `remixers` and `sinks` list them in configuration order, and `processors` the loaded processors), checks the `enrich:` entries at start-up, answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
 | `cli.py` | Click commands only: the phases (`import`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
-| `config.py` | Pydantic models for `config.yaml` (log level, sources, plugins, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
+| `config.py` | Pydantic models for `config.yaml` (log level, sources, plugins, the `enrich` runs, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` protocol and `IndexSiteProvider`, an optional base class. |
-| `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
+| `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem` and `RunSummary`. |
 | `remixers.py` | The `Remixer` protocol, `BaseRemixer` and `UnavailableRemixer`. |
 | `sinks.py` | The `Sink` protocol, `BaseItemSink`, `BaseArtifactSink`, `UnavailableSink` and `SelectionRequiredError`. |
 | `llms.py` | The `LLM` protocol, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
 | `plugins/` | The plugin bundles: one module per site provider (`telegram_channel` included), `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `feedgenerator` and `telegram` (the `telegram` and `telegram_artifacts` sinks). `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
-| `scripts/` | The one-shot migrations `migrate_autoincrement.py` and `migrate_telegram_state.py`. |
+| `scripts/` | The one-shot migrations `migrate_autoincrement.py`, `migrate_telegram_state.py` and `migrate_annotation_keys.sql`. |
 
 ## Plugins
 
@@ -74,14 +74,16 @@ are `PluginError`s. Both are user errors in the CLI. `name` and `self`
 cannot be options, because they are `register()`'s own parameters.
 
 The objects are built once and receive what each task needs as method
-arguments: providers get the source and the `HTTPClient`, processors,
-remixers and sinks the `Database` and the scope. Each protocol has its own
-method (`retrieve_items`, `enrich`, `remix`, `deliver`) and none declares
-`name` (decision 0003 explains why). Processors, remixers and sinks own
-their name, a class attribute that keys their annotations, state,
-artifacts or deliveries; entry points register each one under
-`obj.name`. Providers' names exist only in their
-triples.
+arguments: providers get the source, the `HTTPClient` and the source's
+`provider_options`, processors the `Database`, the scope, the key and the
+`enrich:` entry's options, remixers and sinks the `Database` and the scope.
+Each protocol has its own method (`retrieve_items`, `enrich`, `remix`,
+`deliver`) and none declares `name` (decision 0003 explains why).
+Processors, remixers and sinks own their name, a class attribute that
+records who wrote an annotation and keys artifacts or deliveries; entry
+points register each one under `obj.name`. Annotations and processing state
+are keyed by the run's key, not the processor's name. Providers' names
+exist only in their triples.
 
 `services` is what the core shares with entry points (decision 0006): the
 LLMs of the plugins registered so far, by name, in configuration order.
@@ -98,8 +100,8 @@ some, only those, in their order. This is the plugins' convention, not the
 core's: an entry point is free to decide what its options enable.
 
 Bundles never import each other. `grouping.embeddings` reads the vectors
-`embed` stores as annotations, the same way every grouping remixer
-reads `tagger.tags`.
+`embed` stores as `<input>_embedding` annotations, the same way every
+grouping remixer reads `tags`.
 
 ## Providers
 
@@ -204,9 +206,10 @@ validated model to its objects' constructors; `markdownify`, `feedgenerator` and
 `telegram` are examples, `grouping` shows a bundle with subsections and
 `summarize` an LLM consumer. Use `pydantic.SecretStr` for secrets, so they never show in a
 `repr` or a traceback. Processors and remixers usually subclass
-`BaseProcessor` (`process_item(db, item)`) and `BaseRemixer`
-(`produce(db, scope)`), set `name` as a class attribute and are returned as
-`(obj.name, Processor, obj)`.
+`BaseProcessor` (`process_item(db, item, <run options>)`, plus `key` and
+`requires` class attributes) and `BaseRemixer` (`produce(db, scope)`), set
+`name` as a class attribute and are returned as `(obj.name, Processor,
+obj)`.
 
 Rules every provider follows:
 
@@ -229,11 +232,11 @@ SQLite tables:
 - `source_items`: metadata of each item (`uid`, `uri`, `title`, `mimetype`,
   `content_sha256`, `data`, `published_at`, `modified_at`), unique per
   `(source_id, uid)`. `uri` is not unique.
-- `processing_state`: per item and processor, the status (`done`, `error`,
-  `ignored`), attempts, processor version and the `content_sha256` the run
-  used.
-- `item_annotations`: per item, processor and key, the `content_sha256` of
-  the value (e.g. `markdownify.markdown`, `summarize.summary`).
+- `processing_state`: per item and annotation key, the processor that ran,
+  the status (`done`, `error`, `ignored`), attempts, processor version and
+  the `content_sha256` the run used.
+- `item_annotations`: per item and key, the processor that wrote it and the
+  `content_sha256` of the value (e.g. `markdown`, `summary`, `summary/es`).
 - `artifacts`: remixer outputs, unique per `(remixer, name)`, with the
   `content_sha256` of their content.
 - `deliveries`: the ledger, one row per `(sink, subject)`, the subject an
@@ -285,20 +288,26 @@ touch `modified_at` (spec §4.1).
 
 The eligibility and retry rules are in spec §4.2; this is where they live:
 
-- `BaseProcessor.process_item(db, item)` returns annotations for one item.
-  `Database.get_unprocessed_items` selects the eligible items (backoff in
-  `backoff_seconds`, `max_retries` from the plugin's options, version in
-  `version`). Raising `SkipItem` marks the item `ignored`;
-  `PartialFailure` saves partial results and marks it `error`; any other
-  exception marks it `error`. `enrich()` returns a `RunSummary` (done,
-  ignored, failed).
-- `Database.record_result` saves a run's annotations and state in one
-  transaction, recording the item's `content_sha256`.
-- `BaseProcessor.requires` names the upstream processor;
+- `config.enrich` lists the runs: a processor and its options. At start-up
+  `app.enrich_runs` takes `key` out of the options, asks the processor for
+  its `output_key(**options)` (which rejects options it does not take) and
+  rejects malformed keys and keys written twice. `run_enrich(key)` calls
+  `processor.enrich(db, key=key, scope=..., force=..., **options)`.
+- `BaseProcessor.process_item(db, item, **options)` returns the value of
+  one annotation for one item; each run option is a declared keyword
+  argument that falls back to the plugin section's value.
+  `Database.get_unprocessed_items(key, ...)` selects the eligible items
+  (backoff in `backoff_seconds`, `max_retries` from the plugin's options,
+  version in `version`). Raising `SkipItem` marks the item `ignored`; any
+  other exception marks it `error`. `enrich()` returns a `RunSummary`
+  (done, ignored, failed).
+- `Database.record_result` saves a run's state and, when `done`, its
+  annotation in one transaction, recording the item's `content_sha256`.
+- `BaseProcessor.requires` (or `required_key(**options)`, which `embed`
+  overrides with its `input`) names the key the run reads;
   `require_annotation()` reads its value.
-- Dependencies: `summarize` and `tagger` read `markdownify.markdown`;
-  `embed` requires `tagger` and reads `tagger.tags` and, through `tagger`'s
-  own dependency, `markdownify.markdown`.
+- Dependencies: `summarize` and `tagger` read `markdown`; `embed` reads
+  `tags` or `markdown`.
 - `Database.delete_annotations` removes annotations by processor, item id
   or both, together with their processing state, so the items become
   pending. `delete annotations` calls it per (item, processor).
@@ -307,18 +316,18 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
 
 `BaseRemixer.produce(db, scope)` yields `(name, content, content_type)` for
 the whole scope, regenerated on each run and stored as an `Artifact`, unique
-per `(remixer, name)`. Remixers read items, bulk annotations
+per `(remixer, name)`. Remixers read items, bulk annotations by key
 (`Database.get_annotation_values`, one query for many items) and other
 remixers' artifacts. The three `grouping` remixers share `GroupingRemixer`
 and differ only in their clustering step: single-link and average-link over
 tag overlap, and single-link over tag overlap blended with the cosine
 similarity of the `embed` vectors (`embeddings`, which reads
-`embed.tags_embedding` or `embed.markdown_embedding` and leaves out items
-without one).
+`tags_embedding` or `markdown_embedding` and leaves out items without
+one).
 
 `digest` writes one markdown artifact per source in scope, named
 `<source id>/<since>_<until>` (YYYY-MM-DD), so each period is delivered
-once. It reads `markdownify.markdown` of the newest `max_items` items
+once. It reads `markdown` of the newest `max_items` items
 per source published since `since` (default: the last `days`), cuts each to
 `max_article_chars`, sends them oldest first in one prompt with a
 `context_length` window and prepends a `# <source name>: <since> – <until>`
@@ -334,7 +343,7 @@ runs one cycle over the ledger:
 1. queue the candidates: `queue_item_deliveries` or
    `queue_artifact_deliveries` insert `queued` rows for the subjects in
    scope without one (by default, those of the last `lookback` hours; item
-   sinks only take items their `requires` processor finished);
+   sinks only take items whose run of their `requires` key finished);
 2. read the sink's `queued`, `error` and `sending` rows with their subjects
    (`get_item_deliveries`, `get_artifact_deliveries`), in FIFO order; warn
    about `sending` ones, and pass `queued` ones and `error` ones with

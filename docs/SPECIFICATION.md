@@ -25,8 +25,8 @@ and reach it only through the `Application` class.
 | **Provider** | Object that knows how to handle one kind of site. One implementation serves every URL with the same structure. |
 | **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. It also has a numeric id, a local handle to select it that is never reused but changes if the database is rebuilt. |
 | **uid** | The item's identifier within its source, produced by the provider. It must be deterministic and stable across runs; how it is computed is up to the provider. |
-| **Annotation** | Data derived from an item by a processor. Key: `(item, processor, key)`; a processor can emit several keys per item. |
-| **Processor** | Object that produces annotations for one item at a time. |
+| **Annotation** | Data derived from an item by a processor run. Key: `(item, key)`; the processor that wrote it is recorded but is not part of the key. |
+| **Processor** | Object that produces annotations for one item at a time. Each entry of the `enrich` configuration section is a run of a processor with its own options, and writes one key. |
 | **Remixer** | Object that builds artifacts from many items. |
 | **Artifact** | Aggregated output of a remixer (newsletter, RSS, web page...). Key: `(remixer, name)`. |
 | **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). |
@@ -62,8 +62,9 @@ are a configuration error that names their path (`plugins.<plugin>.<option>`).
 A plugin decides which of its objects its options enable; the built-in
 bundles enable all of them unless the options name some. Provider,
 processor, remixer and sink names are unique per type across the loaded
-plugins; sources refer to providers, and annotations, artifacts and
-deliveries to processors, remixers and sinks, by those names.
+plugins; sources refer to providers, `enrich` entries to processors, and
+annotations, artifacts and deliveries to processors, remixers and sinks, by
+those names.
 
 A source's `id` is part of its items' key, so it must be stable; its `url`
 and `provider` can change without losing items.
@@ -97,36 +98,38 @@ article.
 
 ### 4.2 Enrichment
 
-Processors create annotations on items.
+Processors create annotations on items. `enrich` runs the entries of the
+`enrich` section in order; each run writes one key, by default the
+processor's own, and keeps its own processing state per item under that
+key. A key is written by one entry only. A run's options override those of
+the processor's plugin section for that run.
 
-- **Dependencies:** a processor declares the processor it depends on. It
-  only picks up items that processor finished successfully on their current
-  content; the rest wait without spending attempts, also under forced
-  regeneration. If the upstream processor finished but the needed annotation
-  is missing, the result is a retryable failure.
+- **Dependencies:** a run declares the key it reads. It only picks up items
+  whose run of that key finished successfully on their current content; the
+  rest wait without spending attempts, also under forced regeneration. If
+  the upstream run finished but the needed annotation is missing, the
+  result is a retryable failure.
 - **Possible results:**
-  - **Success:** the annotations are saved.
+  - **Success:** the annotation is saved.
   - **Skip:** the item does not apply to this processor. It is permanent for
     that content: it is only re-evaluated if the item's content changes or
     regeneration is forced.
-  - **Retryable failure:** no annotations.
-  - **Partial failure:** the keys obtained are saved and the item counts as
-    a retryable failure.
+  - **Retryable failure:** no annotation.
 - **Retries:** at most 3 attempts by default, configurable with
   `max_retries`. Attempts are spaced by an exponential backoff of
   `60 s · 2^(n-1)`, capped at 24 h.
 - **Attempt counter:** reset to zero on success or skip, when the item's
   content changes, when its annotations are deleted and when regeneration is
   forced from `Application`.
-- **Cardinality:** one annotation per `(item, processor, key)`; regenerating
-  overwrites the emitted keys.
+- **Cardinality:** one annotation per `(item, key)`; regenerating overwrites
+  it.
 - **Processor version:** each processor can declare a version in its code.
   When it changes, the items it had finished successfully are processed
   again without forcing; skipped items and exhausted failures are not.
-- Changing a processor's configuration regenerates **nothing**. Annotations
-  are kept until the item changes, the processor's version is bumped, or
-  they are regenerated or deleted from `Application`.
-- `enrich` runs every loaded processor, in the order of the YAML.
+- Changing a processor's or an entry's configuration regenerates
+  **nothing**. Annotations are kept until the item changes, the processor's
+  version is bumped, or they are regenerated or deleted from `Application`.
+- A loaded processor that no entry lists never runs.
 
 ### 4.3 Remix
 
@@ -154,8 +157,9 @@ remix, so they see freshly built artifacts.
 - **Candidates:** the subjects that have no delivery for the sink yet. By
   default, those of the last `lookback` hours (24; items by publication,
   artifacts by creation); an explicit date or selection replaces that
-  window. An item sink can depend on a processor, like processors do, and
-  then only queues items that processor finished on their current content.
+  window. An item sink can depend on an annotation key, like processor runs
+  do, and then only queues items whose run of that key finished on their
+  current content.
 - **States:** `queued`, `sending`, `done`, `error`. A delivery is marked
   `sending` before the external call; one still `sending` when a run starts
   was interrupted, its outcome is unknown, and it is never retried
@@ -198,8 +202,9 @@ The database is not exposed: every query goes through `Application`.
 - **Items:** content on disk through `foundation.storage.DiskStorage`, keyed
   by its sha256. Metadata goes in the database (title, URI, MIME type,
   `content_sha256`, `data`, `published_at`, `modified_at`).
-- **Processing state:** in the database, per `(item, processor)`: status,
-  attempts, last error, processor version and the `content_sha256` used.
+- **Processing state:** in the database, per `(item, key)`: the processor
+  that ran, status, attempts, last error, processor version and the
+  `content_sha256` used.
 - **Annotations and artifacts:** content is stored on disk through
   `foundation.storage.DiskStorage` and the database keeps the reference it
   returns. Their metadata:

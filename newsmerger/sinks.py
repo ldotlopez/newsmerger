@@ -221,8 +221,8 @@ class BaseSink[S: (SourceItem, Artifact)]:
 class BaseItemSink(BaseSink[SourceItem]):
     """Delivers items. Without `since` or item ids in scope, the candidates
     are the items of the last `lookback` hours; with `requires`, only those
-    that processor finished. Each source is a strict FIFO queue: a row that
-    is not due yet holds back the ones after it."""
+    whose run of that annotation key finished. Each source is a strict FIFO
+    queue: a row that is not due yet holds back the ones after it."""
 
     requires: str | None = None
     selection_hint = "a forced delivery needs --item"

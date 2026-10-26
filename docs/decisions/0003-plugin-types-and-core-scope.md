@@ -32,8 +32,9 @@ until it was first used.
   loaded with `foundation.plugin.Register`, unmodified. A module is a bundle:
   it can provide any number of objects of any type.
 - **Enabling.** The `plugins` config section lists the plugins to load, each
-  with its options, in the order phases run them. A plugin without a section
-  is not loaded. All of them are loaded when `Application` is built, before
+  with its options, in the order `remix` and `deliver` run them; `enrich`
+  runs the entries of the `enrich` section instead (decision 0002). A
+  plugin without a section is not loaded. All of them are loaded when `Application` is built, before
   the database is opened.
 - **Options.** The entry point, `__newsmerger_plugin__(**options)`, receives
   its section as keyword arguments, validates it with its own pydantic model
@@ -48,15 +49,20 @@ until it was first used.
   declares each one (never `**kwargs`) and falls back to its section's value.
   When `Application` is built, the core binds every source's options to that
   signature and reports a mismatch as a configuration error
-  (`sources.<id>.provider_options`). They live in the configuration only:
-  the database does not store them.
+  (`sources.<id>.provider_options`). Processors work the same way: an
+  `enrich` entry's `options` (but `key`) reach `process_item`, checked at
+  start-up through the processor's `output_key(**options)`, which also
+  gives the run's default key (`enrich.<n>.options`). They live in the
+  configuration only: the database does not store them.
 - **Objects.** Objects are built once and receive what each task needs as
   method arguments: providers the source, the HTTP client and the source's
-  provider options, processors and remixers the database and the scope.
+  provider options, processors the database, the scope, the run's key and
+  options, and remixers the database and the scope.
 - **Names.** Object names are unique per type across plugins and are what
-  sources, annotations, artifacts and the CLI refer to. Processors and
+  sources, `enrich` entries, artifacts and the CLI refer to. Processors and
   remixers own their name, a class attribute, and are registered under it;
-  providers' names exist only in their triples.
+  providers' names exist only in their triples. Annotations are keyed by
+  the run's key, which the configuration may rename (decision 0002).
 - **Methods.** Each protocol has a method of its own (`retrieve_items`,
   `enrich`, `remix`), named after the phase that calls it. foundation matches
   declared protocols with `issubclass()`, which compares method names only.
@@ -85,8 +91,8 @@ until it was first used.
 - **`name` in the protocols.** As a data attribute, `issubclass()` rejects
   the protocol. As a `name()` method, it adds API noise only to let the core
   compare it with the triple. Injected by the entry point, it would allow
-  renaming an object from the configuration, but `requires` and the
-  annotations other plugins read already fix every name in code.
+  renaming an object from the configuration; annotation keys are what the
+  configuration renames instead.
 - **A common `run` method.** `issubclass()` cannot tell protocols with the
   same methods apart, so remixers were loaded as processors and vice versa.
   A marker method per protocol would be noise, and registering against base
@@ -120,6 +126,9 @@ until it was first used.
 
 ## Revisions
 
+- **2026-10-26.** Per-use options extended to processors through the
+  `enrich` section; the `plugins` section no longer orders `enrich`.
+  Discarded: running every loaded processor once, in the order of `plugins`.
 - **2026-10-26.** Added per-use options. Discarded: `URLProvider`, the
   single-URL import (`import-url`) that used it, and external pipelines
   (processor chains over one item as scripts in `scripts/`, built on that

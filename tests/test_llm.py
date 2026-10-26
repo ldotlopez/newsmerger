@@ -72,21 +72,23 @@ class ProcessorTestCase(unittest.TestCase):
             ]
         )
         (self.item,) = self.db.get_items()
-        for processor, annotations in (
-            ("markdownify", {"markdown": "# T\n\nBody"}),
-            ("tagger", {"tags": ["pleno", "BCE"]}),
+        for processor, key, value in (
+            ("markdownify", "markdown", "# T\n\nBody"),
+            ("tagger", "tags", ["pleno", "BCE"]),
         ):
             self.db.record_result(
-                self.item, processor, ProcessingStatus.DONE, annotations=annotations
+                self.item, processor, key, ProcessingStatus.DONE, value=value
             )
 
     def tearDown(self) -> None:
         self.db.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def annotations(self, processor: Processor, name: str) -> dict:
-        self.assertEqual(processor.enrich(self.db, force=True).done, 1)
-        return self.db.get_annotations(self.item, processor=name)[name]
+    def annotation(self, processor: Processor, key: str, **options) -> object:
+        """Run `processor` with `options`, writing `key`; return its value."""
+        summary = processor.enrich(self.db, key=key, force=True, **options)
+        self.assertEqual(summary.done, 1)
+        return self.db.get_annotations(self.item, key=key)[key]
 
 
 class SummarizeTests(ProcessorTestCase):
@@ -94,14 +96,37 @@ class SummarizeTests(ProcessorTestCase):
         llm = StubLLM(" A summary. ")
         processor = summarize.SummarizeProcessor(llm, summarize.Options())
 
-        self.assertEqual(
-            self.annotations(processor, "summarize"), {"summary": "A summary."}
-        )
+        self.assertEqual(self.annotation(processor, "summary"), "A summary.")
         self.assertEqual(llm.calls[0][2], {"model": None, "json_mode": False})
 
         processor.model = "small"
-        self.annotations(processor, "summarize")
+        self.annotation(processor, "summary")
         self.assertEqual(llm.calls[1][2]["model"], "small")
+
+    def test_run_options_override_the_section_and_write_their_own_key(
+        self,
+    ) -> None:
+        llm = StubLLM("Resumen.")
+        processor = summarize.SummarizeProcessor(
+            llm, summarize.Options(model="small", prompt="Summarize: ")
+        )
+
+        self.annotation(processor, "summary")
+        self.annotation(processor, "summary/es", prompt="Resume: ", model="big")
+
+        self.assertEqual(
+            [(call[1], call[2]["model"]) for call in llm.calls],
+            [("Summarize: # T\n\nBody", "small"), ("Resume: # T\n\nBody", "big")],
+        )
+        self.assertEqual(
+            self.db.get_annotations(self.item).keys() & {"summary", "summary/es"},
+            {"summary", "summary/es"},
+        )
+
+    def test_output_key_rejects_options_the_processor_does_not_take(self) -> None:
+        self.assertEqual(summarize.SummarizeProcessor.output_key(), "summary")
+        with self.assertRaises(TypeError):
+            summarize.SummarizeProcessor.output_key(temperature=1)
 
 
 class TaggerTests(ProcessorTestCase):
@@ -109,35 +134,34 @@ class TaggerTests(ProcessorTestCase):
         llm = StubLLM('```json\n{"items": ["BCE", "Pleno"]}\n```')
         processor = tagger.TaggerProcessor(llm, tagger.Options(model="small"))
 
-        self.assertEqual(
-            self.annotations(processor, "tagger"), {"tags": ["BCE", "Pleno"]}
-        )
+        self.assertEqual(self.annotation(processor, "tags"), ["BCE", "Pleno"])
         self.assertEqual(llm.calls[0][2], {"model": "small", "json_mode": True})
 
 
 class EmbedTests(ProcessorTestCase):
-    def test_embeds_tags_and_markdown_in_one_call(self) -> None:
+    def test_embeds_the_tags_text_by_default(self) -> None:
         llm = StubLLM()
         processor = embed.EmbedProcessor(llm, embed.Options(model="embedder"))
 
-        self.assertEqual(
-            self.annotations(processor, "embed"),
-            {
-                "tags_text": "BCE, pleno",
-                "tags_embedding": [0.0],
-                "markdown_embedding": [1.0],
-            },
-        )
-        self.assertEqual(
-            llm.calls, [("embed", ["BCE, pleno", "# T\n\nBody"], {"model": "embedder"})]
-        )
+        self.assertEqual(self.annotation(processor, "tags_embedding"), [0.0])
+        self.assertEqual(llm.calls, [("embed", ["BCE, pleno"], {"model": "embedder"})])
 
-    def test_embeds_only_the_configured_inputs(self) -> None:
-        processor = embed.EmbedProcessor(StubLLM(), embed.Options(inputs=["markdown"]))
+    def test_embeds_the_input_each_run_names(self) -> None:
+        llm = StubLLM()
+        processor = embed.EmbedProcessor(llm, embed.Options())
 
+        self.annotation(processor, "markdown_embedding", input="markdown")
+
+        self.assertEqual(llm.calls, [("embed", ["# T\n\nBody"], {"model": None})])
+        self.assertEqual(processor.required_key(input="markdown"), "markdown")
+
+    def test_output_key_follows_the_input(self) -> None:
+        self.assertEqual(embed.EmbedProcessor.output_key(), "tags_embedding")
         self.assertEqual(
-            self.annotations(processor, "embed"), {"markdown_embedding": [0.0]}
+            embed.EmbedProcessor.output_key(input="markdown"), "markdown_embedding"
         )
+        with self.assertRaisesRegex(ValueError, "input must be one of"):
+            embed.EmbedProcessor.output_key(input="title")
 
 
 class ConsumerPluginTests(unittest.TestCase):

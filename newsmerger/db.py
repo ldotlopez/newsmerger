@@ -232,7 +232,8 @@ def backoff_seconds(
 
 
 class DBProcessingState(Base):
-    """Per-(item, processor) run state; no row means never attempted.
+    """Per-(item, key) run state; no row means never attempted. `key` is the
+    annotation the run writes; `processor` is the one that ran it.
 
     `ignored` is the processor's own permanent skip for that content.
     `error` rows count attempts for retries with backoff.
@@ -245,6 +246,7 @@ class DBProcessingState(Base):
         ForeignKey("source_items.id", ondelete="CASCADE")
     )
     processor: Mapped[str] = mapped_column(String(255))
+    key: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(50))
     attempts: Mapped[int] = mapped_column(default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -257,7 +259,7 @@ class DBProcessingState(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (
-        UniqueConstraint("source_item_id", "processor"),
+        UniqueConstraint("source_item_id", "key"),
         Index("ix_processing_state_processor_status", "processor", "status"),
         CheckConstraint(
             "status IN ('done', 'error', 'ignored')", name="ck_processing_state_status"
@@ -268,10 +270,7 @@ class DBProcessingState(Base):
 
 class DBItemAnnotation(Base):
     """One key a processor produced for an item; the value lives in storage.
-
-    Kept apart from DBProcessingState: a partial failure saves some keys
-    while the item is still marked for retry.
-    """
+    A key is unique per item, whichever processor wrote it."""
 
     __tablename__ = "item_annotations"
 
@@ -286,7 +285,7 @@ class DBItemAnnotation(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (
-        UniqueConstraint("source_item_id", "processor", "key"),
+        UniqueConstraint("source_item_id", "key"),
         Index("ix_item_annotations_processor", "processor"),
         AUTOINCREMENT,
     )
@@ -706,7 +705,7 @@ class Database:
 
     def get_unprocessed_items(
         self,
-        processor: str,
+        key: str,
         *,
         version: str | None,
         max_retries: int,
@@ -714,11 +713,12 @@ class Database:
         scope: ProcessingScope | None = None,
         requires: str | None = None,
     ) -> list[SourceItem]:
-        """Items a processor should run on, oldest first.
+        """Items a run writing `key` should process, oldest first.
 
-        With `requires`, only items that processor finished on their current
-        content are candidates, even with `force`: the rest wait instead of
-        failing here. `force` skips eligibility, including `ignored` items.
+        With `requires`, only items whose run of that key finished on their
+        current content are candidates, even with `force`: the rest wait
+        instead of failing here. `force` skips eligibility, including
+        `ignored` items.
         """
         scope = scope or ProcessingScope()
         now = datetime.now(UTC)
@@ -727,7 +727,7 @@ class Database:
             query = sess.query(DBSourceItem, DBProcessingState).outerjoin(
                 DBProcessingState,
                 (DBProcessingState.source_item_id == DBSourceItem.id)
-                & (DBProcessingState.processor == processor),
+                & (DBProcessingState.key == key),
             )
             if requires is not None:
                 query = self._join_finished(query, requires)
@@ -745,13 +745,13 @@ class Database:
             return result
 
     @staticmethod
-    def _join_finished(query: Query, processor: str) -> Query:
-        """Keep the items `processor` finished on their current content."""
+    def _join_finished(query: Query, key: str) -> Query:
+        """Keep the items whose run of `key` finished on their current content."""
         upstream = aliased(DBProcessingState)
         return query.join(
             upstream,
             (upstream.source_item_id == DBSourceItem.id)
-            & (upstream.processor == processor)
+            & (upstream.key == key)
             & (upstream.status == ProcessingStatus.DONE)
             & (upstream.content_sha256 == DBSourceItem.content_sha256),
         )
@@ -781,14 +781,16 @@ class Database:
         self,
         item: SourceItem,
         processor: str,
+        key: str,
         status: ProcessingStatus,
         *,
-        annotations: dict[str, Any] | None = None,
+        value: Any = None,
         error: str | None = None,
         version: str | None = None,
         reset_attempts: bool = False,
     ) -> None:
-        """Save a run's annotations and state in one transaction.
+        """Save a run's state and, when `done`, its annotation `key` with
+        `value`, in one transaction.
 
         The state records `item.content_sha256`, the content the run used.
         `reset_attempts` starts the retry count afresh (forced runs).
@@ -797,12 +799,20 @@ class Database:
         with self.session_scope() as sess:
             db_item = self._get_item_row(sess, item)
             now = datetime.now(UTC)
-            if annotations:
-                replaced = self._save_annotations(
-                    sess, db_item.id, processor, annotations, now
+            if status == ProcessingStatus.DONE:
+                replaced = self._save_annotation(
+                    sess, db_item.id, processor, key, value, now
                 )
             self._save_state(
-                sess, db_item, processor, status, error, version, reset_attempts, now
+                sess,
+                db_item,
+                processor,
+                key,
+                status,
+                error,
+                version,
+                reset_attempts,
+                now,
             )
         self._release_contents(replaced)
 
@@ -811,6 +821,7 @@ class Database:
         session: Session,
         db_item: DBSourceItem,
         processor: str,
+        key: str,
         status: ProcessingStatus,
         error: str | None,
         version: str | None,
@@ -819,13 +830,13 @@ class Database:
     ) -> None:
         state = (
             session.query(DBProcessingState)
-            .filter_by(source_item_id=db_item.id, processor=processor)
+            .filter_by(source_item_id=db_item.id, key=key)
             .one_or_none()
         )
         if state is None:
             state = DBProcessingState(
                 source_item_id=db_item.id,
-                processor=processor,
+                key=key,
                 attempts=0,
                 created_at=now,
             )
@@ -833,6 +844,7 @@ class Database:
         elif reset_attempts or state.content_sha256 != db_item.content_sha256:
             state.attempts = 0
 
+        state.processor = processor
         state.status = status
         state.content_sha256 = db_item.content_sha256
         state.processor_version = version
@@ -846,63 +858,55 @@ class Database:
 
     # --- Annotations -------------------------------------------------------
 
-    def _save_annotations(
+    def _save_annotation(
         self,
         session: Session,
         source_item_id: int,
         processor: str,
-        values: dict[str, Any],
+        key: str,
+        value: Any,
         now: datetime,
     ) -> set[str]:
-        """Store values, then upsert their rows; returns the replaced contents."""
-        existing_by_key = {
-            row.key: row
-            for row in session.query(DBItemAnnotation)
-            .filter_by(source_item_id=source_item_id, processor=processor)
-            .filter(DBItemAnnotation.key.in_(values))
-        }
+        """Store the value, then upsert its row; returns the replaced content."""
+        sha256, encoded = _encode_value(value)
+        self.contents.set(sha256, encoded)
 
-        replaced: set[str] = set()
-        for key, value in values.items():
-            sha256, encoded = _encode_value(value)
-            self.contents.set(sha256, encoded)
-
-            row = existing_by_key.get(key)
-            if row is None:
-                session.add(
-                    DBItemAnnotation(
-                        source_item_id=source_item_id,
-                        processor=processor,
-                        key=key,
-                        content_sha256=sha256,
-                        created_at=now,
-                        updated_at=now,
-                    )
+        row = (
+            session.query(DBItemAnnotation)
+            .filter_by(source_item_id=source_item_id, key=key)
+            .one_or_none()
+        )
+        if row is None:
+            session.add(
+                DBItemAnnotation(
+                    source_item_id=source_item_id,
+                    processor=processor,
+                    key=key,
+                    content_sha256=sha256,
+                    created_at=now,
+                    updated_at=now,
                 )
-            elif row.content_sha256 != sha256:
-                replaced.add(row.content_sha256)
-                row.content_sha256 = sha256
-                row.updated_at = now
+            )
+            return set()
+        row.processor = processor
+        if row.content_sha256 == sha256:
+            return set()
+        replaced = {row.content_sha256}
+        row.content_sha256 = sha256
+        row.updated_at = now
         return replaced
 
     def _load_value(self, sha256: str) -> Any:
         return load_json_compatible(self.contents.get(sha256).decode())
 
     def get_annotations(
-        self,
-        item: SourceItem,
-        *,
-        processor: str | None = None,
-        key: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
-        """An item's annotations as `{processor: {key: value}}`.
-
-        `processor`/`key` narrow the result; nothing found is `{}`.
-        """
+        self, item: SourceItem, *, key: str | None = None
+    ) -> dict[str, Any]:
+        """An item's annotations as `{key: value}`; `key` narrows the result.
+        Nothing found is `{}`."""
         with self.session_scope() as sess:
             query = (
                 sess.query(
-                    DBItemAnnotation.processor,
                     DBItemAnnotation.key,
                     DBItemAnnotation.content_sha256,
                 )
@@ -912,16 +916,11 @@ class Database:
                     DBSourceItem.uid == item.uid,
                 )
             )
-            if processor is not None:
-                query = query.filter(DBItemAnnotation.processor == processor)
             if key is not None:
                 query = query.filter(DBItemAnnotation.key == key)
             rows = query.all()
 
-        result: dict[str, dict[str, Any]] = {}
-        for row_processor, row_key, sha256 in rows:
-            result.setdefault(row_processor, {})[row_key] = self._load_value(sha256)
-        return result
+        return {row_key: self._load_value(sha256) for row_key, sha256 in rows}
 
     def get_annotation_keys(
         self, item_ids: Iterable[int]
@@ -999,7 +998,7 @@ class Database:
         ]
 
     def get_annotation_values(
-        self, items: Iterable[SourceItem], *, processor: str, key: str
+        self, items: Iterable[SourceItem], *, key: str
     ) -> dict[ItemKey, Any]:
         """One annotation's value per item, read in a single query.
 
@@ -1020,7 +1019,6 @@ class Database:
                 )
                 .filter(
                     tuple_(DBSourceItem.source_id, DBSourceItem.uid).in_(keys),
-                    DBItemAnnotation.processor == processor,
                     DBItemAnnotation.key == key,
                 )
                 .all()
@@ -1174,8 +1172,8 @@ class Database:
         self, sink: str, scope: ProcessingScope, *, requires: str | None = None
     ) -> int:
         """Queue the items in scope that have no row for `sink`; return how
-        many. With `requires`, only items that processor finished on their
-        current content."""
+        many. With `requires`, only items whose run of that annotation key
+        finished on their current content."""
         now = datetime.now(UTC)
         with self.session_scope() as sess:
             recorded = sess.query(DBDelivery.source_item_id).filter(

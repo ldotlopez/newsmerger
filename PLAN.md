@@ -4,6 +4,39 @@ Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 Ideas and plans not scheduled yet go to the backlog at the end.
 
+## `enrich` section: processor runs keyed by annotation key
+
+Agreed 2026-10-26 (decision 0002). `enrich:` lists processor runs in order;
+each writes one annotation key, and state and annotations are unique per
+`(item, key)`. Objects are built once from `plugins:`; non-essential options
+go to the verb, as with providers.
+
+```yaml
+enrich:
+  - markdownify
+  - processor: summarize
+    options: {key: summary/es, prompt: "...", model: modelB}
+```
+
+- [x] **1. Config:** `Config.enrich: list[EnrichEntry]` (`processor`,
+  `options`), a bare name for defaults.
+- [x] **2. Processors:** `Processor.output_key(**options)` and
+  `enrich(db, *, key, scope, force, **options)`; `process_item` returns one
+  value and declares its run options (`summarize`: `prompt`, `model`;
+  `tagger`: `model`; `embed`: `input`, `model`). `PartialFailure` and
+  `tags_text` removed; `embed` one input per entry.
+- [x] **3. Startup checks** in `Application`: processor loaded, options
+  accepted, key format, no key written twice.
+- [x] **4. Database:** `processing_state.key`, unique `(item, key)` in
+  `processing_state` and `item_annotations`; reads by key only.
+  `scripts/migrate_annotation_keys.sql` migrates existing databases.
+- [x] **5. Consumers** read by key (`telegram`, `grouping`, `digest`,
+  `search`); `requires` names a key.
+- [x] **6. CLI:** `enrich [PROCESSOR]` runs every entry (of that processor);
+  the summary lists keys. `delete annotations` stays per processor.
+- [x] **7. Docs and configs:** README, ARCHITECTURE, SPECIFICATION,
+  decisions 0002, 0003, 0007 and 0008, `config.example.yaml`.
+
 ## Per-source provider options (`provider_options`)
 
 Agreed 2026-10-26. A source passes options to its provider:
@@ -349,11 +382,17 @@ Risks:
   wait for a second concrete use case.
 - **Save annotations and artifacts as soon as possible**: they stay in
   memory until the loop finishes.
-- **Define enrich process (and order) in its own section (`enrich`)**.
-  Also make possible to override per source: `sources>enrich`
+- **Per-source `enrich` overrides** (`sources>enrich`): the `enrich`
+  section exists (see the plan above); per-source runs or options are next.
+- **Remix and deliver sections** with per-use options, like `enrich`
+  (`digest` has a prompt too).
+- **Configurable input keys for consumers**: `summarize`/`tagger` read
+  `markdown`, `telegram` `summary`, `grouping` `tags`; an option naming
+  another key when a run writes, e.g., `summary/es`.
 - **Automatic plugin loading**. Use definition of sources and enrich
   to detect which plugins to load
-- **summary plugin: make prompt configurable**: Global and per-source
+- **summary plugin: per-source prompt**: the prompt is configurable
+  globally and per `enrich` entry; per source is pending.
 - **google chat deliver plugin**
 - **LLM options per use (`llm` + `llm_options`)**, following the provider
   convention agreed on 2026-10-26: a plugin section holds defaults, each use

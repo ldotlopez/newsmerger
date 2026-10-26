@@ -8,6 +8,7 @@ from __future__ import annotations
 import fcntl
 import inspect
 import logging
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from types import TracebackType
@@ -18,7 +19,7 @@ from foundation.cache import UserCache
 from foundation.plugin import EntryPointError, ProtocolConformanceError, Register
 from sqlalchemy import make_url
 
-from .config import Config, ConfigError, plugin_options_error
+from .config import Config, ConfigError, EnrichEntry, plugin_options_error
 from .consts import PACKAGE_NAME
 from .db import Database, DeliveryStatus
 from .httpclient import HTTPClient
@@ -42,6 +43,8 @@ PLUGINS_NAMESPACE = "newsmerger.plugins"
 PLUGIN_ENTRY_POINT = "__newsmerger_plugin__"
 # register()'s own parameters: options with these names would collide with them.
 RESERVED_OPTIONS = ("self", "name")
+# Annotation keys: lowercase words, optionally in `/`-separated parts.
+KEY_PATTERN = re.compile(r"[a-z0-9_]+(/[a-z0-9_]+)*")
 
 LOGGER = logging.getLogger(__name__)
 
@@ -64,6 +67,7 @@ class Application:
                     f"source '{source.id}': provider '{source.provider}' is not loaded"
                 )
             check_provider_options(source, self._providers[source.provider])
+        self._enrich = enrich_runs(config.enrich, self._processors)
 
         self._db = Database(
             config.db.uri, config.db.content_dir, create_schema=create_schema
@@ -120,6 +124,14 @@ class Application:
         """Loaded processor names, in configuration order."""
         return list(self._processors)
 
+    def enrich_keys(self, processor: str | None = None) -> list[str]:
+        """The keys of the `enrich:` runs, in order; with `processor`, only
+        its runs."""
+        if processor is None:
+            return list(self._enrich)
+        lookup(self._processors, processor, "processor")
+        return [key for key, run in self._enrich.items() if run.processor == processor]
+
     @property
     def remixers(self) -> list[str]:
         """Loaded remixer names, in configuration order."""
@@ -149,12 +161,17 @@ class Application:
 
     # --- Enrich ------------------------------------------------------------
 
-    def run_processor(
-        self, name: str, *, scope: ProcessingScope | None = None, force: bool = False
+    def run_enrich(
+        self, key: str, *, scope: ProcessingScope | None = None, force: bool = False
     ) -> RunSummary:
-        """Run one loaded processor. `force` also resets attempts."""
-        processor = lookup(self._processors, name, "processor")
-        return processor.enrich(self._db, scope=scope, force=force)
+        """Run the `enrich:` entry that writes `key`. `force` also resets
+        attempts."""
+        if (run := self._enrich.get(key)) is None:
+            raise ConfigError(f"no enrich entry writes the key '{key}'")
+        processor = self._processors[run.processor]
+        return processor.enrich(
+            self._db, key=key, scope=scope, force=force, **run.options
+        )
 
     # --- Remix -------------------------------------------------------------
 
@@ -224,14 +241,10 @@ class Application:
         return self._db.get_stored_content(sha256)
 
     def get_annotations(
-        self,
-        item: SourceItem,
-        *,
-        processor: str | None = None,
-        key: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
-        """An item's annotations as `{processor: {key: value}}`; `{}` if none."""
-        return self._db.get_annotations(item, processor=processor, key=key)
+        self, item: SourceItem, *, key: str | None = None
+    ) -> dict[str, Any]:
+        """An item's annotations as `{key: value}`; `{}` if none."""
+        return self._db.get_annotations(item, key=key)
 
     def get_annotation_keys(
         self, item_ids: Iterable[int]
@@ -260,10 +273,10 @@ class Application:
         )
 
     def get_annotation_values(
-        self, items: Iterable[SourceItem], *, processor: str, key: str
+        self, items: Iterable[SourceItem], *, key: str
     ) -> dict[ItemKey, Any]:
         """One annotation's value per item; items without it are absent."""
-        return self._db.get_annotation_values(items, processor=processor, key=key)
+        return self._db.get_annotation_values(items, key=key)
 
     def get_artifact(self, remixer: str, name: str) -> Artifact | None:
         """The artifact with its content, or None if it does not exist."""
@@ -376,6 +389,35 @@ def check_provider_options(source: SourceData, provider: Provider) -> None:
         )
     except TypeError as e:
         raise ConfigError(f"sources.{source.id}.provider_options: {e}") from None
+
+
+def enrich_runs(
+    entries: list[EnrichEntry], processors: dict[str, Processor]
+) -> dict[str, EnrichEntry]:
+    """The `enrich:` entries by the key each writes, in order, with `key`
+    taken out of their options. Reject, at startup, entries whose processor
+    is not loaded or does not take their options, malformed keys and keys
+    written twice."""
+    runs: dict[str, EnrichEntry] = {}
+    for index, entry in enumerate(entries):
+        location = f"enrich.{index}"
+        if (processor := processors.get(entry.processor)) is None:
+            raise ConfigError(
+                f"{location}: processor '{entry.processor}' is not loaded"
+            )
+        options = dict(entry.options)
+        named_key = options.pop("key", None)
+        try:
+            default_key = processor.output_key(**options)
+        except (TypeError, ValueError) as e:
+            raise ConfigError(f"{location}.options: {e}") from None
+        key = str(named_key or default_key)
+        if not KEY_PATTERN.fullmatch(key):
+            raise ConfigError(f"{location}: invalid key '{key}'")
+        if key in runs:
+            raise ConfigError(f"{location}: key '{key}' is written by another entry")
+        runs[key] = EnrichEntry(processor=entry.processor, options=options)
+    return runs
 
 
 def objects_by_name[T](plugins: Register, protocol: type[T]) -> dict[str, T]:

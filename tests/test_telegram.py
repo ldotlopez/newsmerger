@@ -69,8 +69,9 @@ class TelegramTestCase(unittest.TestCase):
             self.db.record_result(
                 item,
                 "summarize",
+                "summary",
                 ProcessingStatus.DONE,
-                annotations={"summary": f"Summary {item.uid}"},
+                value=f"Summary {item.uid}",
             )
         return items
 

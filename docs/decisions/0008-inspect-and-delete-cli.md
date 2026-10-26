@@ -83,9 +83,9 @@ the newest rows lets their ids be reused.
     with a warning naming them, and the rest of the selection is deleted.
     `--force` deletes them and their ledger rows, so they can be delivered
     again.
-  - Annotations are deleted per processor: every key of that processor on
-    the item, together with its processing state, so the item becomes
-    pending (`Database.delete_annotations`). `delete annotations` takes no
+  - Annotations are deleted per processor: every key that processor wrote
+    on the item, together with their processing state, so every run of it
+    finds the item pending (`Database.delete_annotations`). `delete annotations` takes no
     `--key`, `--annotation` or `--limit` (which counts annotations): a
     selection names whole processors, so `inspect` with the same arguments
     lists exactly what is deleted.
@@ -106,9 +106,10 @@ the newest rows lets their ids be reused.
   old listing could delete another item.
 - **Rebuilding the database to get `AUTOINCREMENT`.** Loses the LLM
   annotations and the delivery ledger.
-- **Deleting a single annotation key.** The processing state is per
-  (item, processor): it would stay `done` with a key missing, never be
-  regenerated, and break the processors that require it.
+- **Deleting a single annotation key.** When the processing state was per
+  (item, processor), it would have stayed `done` with a key missing. State
+  is now per (item, key) (decision 0002), so that reason is gone; deleting
+  per processor stays, for simplicity.
 - **Widening a `--key`/`--annotation` selection to its processor, with a
   warning.** Discarded before release: the warning came after the delete,
   and `inspect` listed less than what was deleted. `--limit` was dropped
