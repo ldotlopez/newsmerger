@@ -33,4 +33,16 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-exclude: ^tests/samples/
+  # Last, so the graph sees the code as the hooks above left it. A changed
+  # graph stops the commit like any fixer: `git add graphify-out/` and retry.
+  - repo: local
+    hooks:
+      - id: graphify-update
+        name: graphify update (code graph)
+        entry: graphify update .
+        language: system
+        files: \.py$
+        pass_filenames: false
+
+# graphify-out/: generated, written minified; the fixers would fight graphify.
+exclude: ^(tests/samples|graphify-out)/
