@@ -139,6 +139,22 @@ class TestFeedReader(unittest.TestCase):
 
         self.assertEqual(item.content, b'<div class="body"><p>full</p></div>')
 
+    def test_home_page_links_to_its_feed(self) -> None:
+        home = b"""<html><head>
+        <link rel="stylesheet" href="/s.css">
+        <link rel="alternate" type="application/rss+xml" href="/feed">
+        </head><body>news</body></html>"""
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link><description>hi</description>
+        </item></channel></rss>"""
+        pages = {"https://x.test/": home, "https://x.test/feed": feed}
+        source = Mock(id="src", url="https://x.test/")
+        fetcher = Mock(get=lambda url: pages[url])
+
+        (item,) = FeedReaderProvider(None).retrieve_items(source, fetcher)
+
+        self.assertEqual(item.content, b"hi")
+
     def test_not_a_feed(self) -> None:
         with self.assertRaises(ValueError):
             self.parse(b"<html><body>404</body></html>")
