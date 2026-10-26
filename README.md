@@ -62,7 +62,7 @@ plugins:                             # only these are loaded, in this order
   telegram:
     bot_token: ${TELEGRAM_BOT_TOKEN}
     chat_id: ${TELEGRAM_CHAT_ID}
-  rssfeed:
+  feedgenerator:
     title: Castelló news
 ```
 
@@ -113,16 +113,13 @@ Changing a plugin's options never regenerates existing annotations; use
 # Import every configured source
 uv run newsmerger -c config.yaml import
 
-# Import a single article URL into a configured source
-uv run newsmerger -c config.yaml import-url --source castellonplaza <url>
-
 # Run every loaded processor in order, or just one
 uv run newsmerger -c config.yaml enrich
 uv run newsmerger -c config.yaml enrich markdownify --source castellonplaza --limit 20
 
 # Run every loaded remixer in order, or just one
 uv run newsmerger -c config.yaml remix
-uv run newsmerger -c config.yaml remix rssfeed --since 2026-10-01
+uv run newsmerger -c config.yaml remix feedgenerator --since 2026-10-01
 
 # Run every loaded sink in order, or just one
 uv run newsmerger -c config.yaml deliver
@@ -138,7 +135,7 @@ uv run newsmerger -c config.yaml inspect content --sha256 <sha256> > item.html
 uv run newsmerger -c config.yaml inspect annotations --item 4127
 uv run newsmerger -c config.yaml inspect annotations --annotation 512
 uv run newsmerger -c config.yaml inspect artifacts
-uv run newsmerger -c config.yaml inspect artifacts --artifact rssfeed/feed > feed.xml
+uv run newsmerger -c config.yaml inspect artifacts --artifact feedgenerator/feed > feed.xml
 uv run newsmerger -c config.yaml inspect deliveries --sink telegram --status error
 
 # Delete, without asking: the same options as inspect select what goes
@@ -216,7 +213,7 @@ output on both streams; `NO_COLOR=1` only drops the colors.
 ### Providers
 
 Each provider is a plugin of the same name, without options except
-`telegram_channel`.
+`telegram_channel` and `feedreader`.
 
 | Provider | Site | Content |
 | :--- | :--- | :--- |
@@ -226,6 +223,7 @@ Each provider is a plugin of the same name, without options except
 | `theguardian` | The Guardian | HTML |
 | `csjuntasgobierno` | Index page of *juntas de gobierno* minutes | PDF |
 | `telegram_channel` | Articles linked from a public Telegram channel (`url: https://t.me/<channel>`) | HTML |
+| `feedreader` | Any RSS or Atom feed (`url:` the feed) | The feed's HTML or text, or the article's HTML with `article_selector` |
 
 `telegram_channel` reads the channel's web preview, which only public
 channels have, and imports one item per linked article, keyed by its
@@ -234,6 +232,23 @@ resolve to the site's front page, such as a daily front-page post, are
 skipped. Its `pages`
 option (default 1, 20 posts each) reads further back. The preview is always
 fetched fresh, never from the HTTP cache.
+
+`feedreader` imports one item per feed entry: its full content (or summary),
+author, categories as `tags` (the first also as `section`) and an image.
+Feeds that carry only a summary can set `article_selector`, a CSS selector
+of the article body: each entry's link is then fetched and that element
+becomes the item's content. Set it in the plugin's section for every feed,
+or per source in `provider_options`, which wins:
+
+```yaml
+sources:
+  - id: some-blog
+    name: Some blog
+    provider: feedreader
+    url: https://blog.example.com/feed.xml
+    provider_options:
+      article_selector: article .post-body
+```
 
 To support a new site, see
 [Writing a plugin](docs/ARCHITECTURE.md#writing-a-plugin).
@@ -265,7 +280,7 @@ Options of `ollama`: `api_base` (default `http://localhost:11434`),
 
 | Plugin | Remixer | Artifact | Does |
 | :--- | :--- | :--- | :--- |
-| `rssfeed` | `rssfeed` | `feed` | RSS feed of the newest items in scope |
+| `feedgenerator` | `feedgenerator` | `feed` | RSS feed of the newest items in scope |
 | `grouping` | `singlelink` | `current` | Clusters tagged items into events (single-link over tag overlap) |
 | `grouping` | `avglink` | `current` | Clusters tagged items into events (average-link over tag overlap) |
 | `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `embed` annotations (single-link) |
@@ -281,7 +296,7 @@ Options:
   week, or `--since`/`--until` for another period. Each period is its own
   artifact (dates as `YYYY-MM-DD`), so `inspect artifacts --remixer digest`
   lists them and rebuilding a period overwrites it.
-- `rssfeed`: `title` (default `newsmerger feed`), `link`, `description`
+- `feedgenerator`: `title` (default `newsmerger feed`), `link`, `description`
   (default: the title), `max_items` (default 100).
 - `grouping`, per remixer: `min_score` (default 0.3), `tau_hours` (time
   decay, default 24; `null` disables it), `days` (default 7: the scope when
@@ -374,11 +389,10 @@ from pathlib import Path
 from newsmerger.app import Application
 
 with Application.from_config_file(Path("config.yaml"), create_schema=False) as app:
-    feed = app.get_artifact("rssfeed", "feed")  # None if it doesn't exist
+    feed = app.get_artifact("feedgenerator", "feed")  # None if it doesn't exist
 ```
 
-`scripts/pipeline_url.py` imports one URL and runs a list of processors on
-it (the publish-news flow). Code that writes takes `app.lock()` first.
+Code that writes takes `app.lock()` first.
 
 ## Development
 

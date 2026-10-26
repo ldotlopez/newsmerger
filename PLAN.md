@@ -4,6 +4,50 @@ Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 Ideas and plans not scheduled yet go to the backlog at the end.
 
+## Per-source provider options (`provider_options`)
+
+Agreed 2026-10-26. A source passes options to its provider:
+
+```yaml
+- id: some-blog
+  provider: rssparser
+  provider_options:
+    article_selector: .article
+```
+
+Convention for every plugin: its `plugins.<name>` section holds defaults,
+and each use overrides only what its verb declares. `import-url` goes for
+now; it comes back later on a model that fits (an ad hoc source).
+External pipelines go too: they will be replaced, not kept as scripts.
+
+- [x] **1. Remove `import-url`:** the command and its CLI test,
+  `Application.import_url`, `URLProvider` and `UnsupportedProviderError`
+  (the plugins register as `Provider`), `scripts/pipeline_url.py` (the
+  only pipeline).
+  `import_sample()` in `tests/test_app.py` imports another way.
+- [x] **2. Remove the pickle cache** (`NEWSMERGER_PICKLE_CACHE`) from
+  `Application.import_source`.
+- [x] **3. `provider_options` on sources**, from the config only: not stored
+  in the database (`DBSource` unchanged). `import_source` passes them to
+  `retrieve_items(source, fetcher, **provider_options)`.
+- [x] **4. Validate at startup:** `Application` binds each source's options
+  against its provider's `retrieve_items` signature; a failed bind is a
+  `ConfigError` naming `sources.<id>.provider_options`. Providers declare
+  their options explicitly, never `**kwargs` (it would accept anything).
+- [x] **5. `rssparser`:** `article_selector` becomes a `retrieve_items`
+  keyword, defaulting to the plugin section's `article_selector`; the
+  `article_selectors` map goes. Tests.
+- [x] **6. Docs**, each edit approved first: rewrite decision 0003 (options
+  convention; the pipelines point goes); 0001 (the single-URL import line);
+  SPECIFICATION (§4.1 and the external pipelines note); ARCHITECTURE (the
+  `scripts/` row and the Pipelines section); README (`import-url` and
+  `pipeline_url.py`); `config.example.yaml`; the backlog's *Pipeline
+  dependency graph* entry.
+- [x] **7. Naming review:** `provider`/`provider_options` stay. `rssparser`
+  is now `feedreader` and the `rssfeed` remixer `feedgenerator`;
+  `scripts/migrate_feed_names.py` renames the stored artifacts (run once).
+- [x] **8. Docs for the renames.**
+
 ## P1 — Plain logging and the `<APP>_LOG_LEVEL` fix
 
 Precedence: CLI (`--log-level`, `-v`/`-q`) > `NEWSMERGER_LOG_LEVEL` >
@@ -299,8 +343,6 @@ Risks:
   run in parallel.
 - **PDF text extraction.** `markdownify` skips non-HTML items; PDF items need
   their own extraction step before `summarize`/`tagger` can use them.
-- **Pipeline dependency graph.** Pipelines are linear; `REQUIRES` covers
-  single upstream dependencies only.
 - **Alembic.** Not needed while the database can be rebuilt from the
   sources.
 - **Generalizing `BaseProvider`/`IndexSiteProvider`** for non-news sources:
@@ -313,7 +355,13 @@ Risks:
   to detect which plugins to load
 - **summary plugin: make prompt configurable**: Global and per-source
 - **google chat deliver plugin**
+- **LLM options per use (`llm` + `llm_options`)**, following the provider
+  convention agreed on 2026-10-26: a plugin section holds defaults, each use
+  overrides what its verb declares. Today consumers override `model` (and
+  `digest` `context_length`); `json_mode`/`context_length` stay explicit in
+  the `LLM` protocol. Review decision 0006 first; migrate when a
+  backend-specific option needs a per-use override.
 
 ---
 
-*Last updated: 2026-10-24*
+*Last updated: 2026-10-26*

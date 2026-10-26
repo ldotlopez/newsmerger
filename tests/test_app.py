@@ -1,5 +1,5 @@
 """Application end to end on a temp database, with real plugins that need no
-network (markdownify, rssfeed) and a stubbed HTTP fetcher."""
+network (markdownify, feedgenerator) and a stubbed HTTP fetcher."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 from foundation.plugin import PluginNotFoundError
 
-from newsmerger.app import Application, LockedError, UnsupportedProviderError
+from newsmerger.app import Application, LockedError
 from newsmerger.config import Config, ConfigError
 from newsmerger.db import DeliveryStatus
-from newsmerger.models import ProcessingScope
+from newsmerger.models import ProcessingScope, SourceItem
 from newsmerger.plugins.ollama import OllamaLLM
 from newsmerger.processors import RunSummary
 
@@ -32,7 +32,7 @@ class ApplicationTests(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def make_app(
-        self, plugins: str = "  markdownify:\n  rssfeed: {title: Test feed}\n"
+        self, plugins: str = "  markdownify:\n  feedgenerator: {title: Test feed}\n"
     ) -> Application:
         config = Config.from_text(
             f"""
@@ -58,11 +58,14 @@ cache:
         )
         return Application(config)
 
-    def import_sample(self):
-        with patch.object(self.app._fetcher, "get", return_value=SAMPLE.read_bytes()):
-            return self.app.import_url("mediterraneo", "https://example.test/article")
+    def import_sample(self) -> SourceItem:
+        provider = self.app._providers["prensaiberica"]
+        item_data = provider.parse_item(SAMPLE.read_bytes())
+        with patch.object(provider, "retrieve_items", return_value=iter([item_data])):
+            (item,) = self.app.import_source("mediterraneo")
+        return item
 
-    def test_import_url_stores_the_item_in_the_configured_source(self) -> None:
+    def test_import_stores_the_item_in_the_configured_source(self) -> None:
         item = self.import_sample()
 
         (stored,) = self.app.get_items()
@@ -71,13 +74,45 @@ cache:
         self.assertEqual(item.key, stored.key)
         self.assertEqual(item.id, stored.id)
 
-    def test_import_url_needs_a_url_provider(self) -> None:
-        with self.assertRaises(UnsupportedProviderError):
-            self.app.import_url("juntas", "https://example.test/acta.pdf")
+    def test_provider_options_reach_the_provider(self) -> None:
+        app = self.make_rss_app("{article_selector: .body}")
+        provider = app._providers["feedreader"]
+        with patch.object(provider, "retrieve_items", return_value=iter([])) as call:
+            app.import_source("blog")
+        app.close()
+
+        call.assert_called_once_with(
+            app.config.get_source("blog"), app._fetcher, article_selector=".body"
+        )
+
+    def test_unknown_provider_option_is_a_config_error(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "sources.blog.provider_options"):
+            self.make_rss_app("{selector: .body}")
+
+    def make_rss_app(self, provider_options: str) -> Application:
+        return Application(
+            Config.from_text(
+                f"""
+sources:
+  - id: blog
+    name: Blog
+    provider: feedreader
+    url: https://blog.test/feed
+    provider_options: {provider_options}
+plugins:
+  feedreader:
+db:
+  uri: sqlite:///{self.tmp_dir}/rss.db
+  content_dir: {self.tmp_dir}/rss-content
+cache:
+  base_dir: {self.tmp_dir}/cache
+"""
+            )
+        )
 
     def test_unknown_source_is_a_config_error(self) -> None:
         with self.assertRaises(ConfigError):
-            self.app.import_url("missing", "https://example.test/article")
+            self.app.import_source("missing")
 
     def test_enrich_then_remix(self) -> None:
         item = self.import_sample()
@@ -87,8 +122,8 @@ cache:
         markdown = self.app.get_annotations(item)["markdownify"]["markdown"]
         self.assertIn("asedio carlista", markdown)
 
-        self.assertEqual(self.app.run_remixer("rssfeed"), ["feed"])
-        feed = self.app.get_artifact("rssfeed", "feed")
+        self.assertEqual(self.app.run_remixer("feedgenerator"), ["feed"])
+        feed = self.app.get_artifact("feedgenerator", "feed")
         self.assertIn("<title>Test feed</title>", feed.content)
         self.assertIn(f"mediterraneo/{SAMPLE_UID}", feed.content)
 
@@ -142,11 +177,11 @@ cache:
     def test_loaded_names_follow_configuration_order(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            "  rssfeed:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n"
+            "  feedgenerator:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n"
         )
 
         self.assertEqual(self.app.processors, ["markdownify"])
-        self.assertEqual(self.app.remixers, ["rssfeed", "avglink", "singlelink"])
+        self.assertEqual(self.app.remixers, ["feedgenerator", "avglink", "singlelink"])
 
     def test_invalid_plugin_options_report_their_config_path(self) -> None:
         with self.assertRaisesRegex(
@@ -164,7 +199,7 @@ cache:
                     ConfigError, f"'{option}' is a reserved option name"
                 ),
             ):
-                self.make_app(f"  rssfeed: {{{option}: feed}}\n")
+                self.make_app(f"  feedgenerator: {{{option}: feed}}\n")
 
     def test_llm_consumers_get_the_llm_of_a_plugin_listed_before(self) -> None:
         self.app.close()

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Self
 
 from foundation.jsonlib import JsonCompatible
-from pydantic import BaseModel, ConfigDict, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 # (source id, uid): an item's identity. Each source is its own uid space.
 type ItemKey = tuple[str, str]
@@ -21,6 +21,13 @@ class SourceData(BaseModel):
     name: str
     url: HttpUrl
     provider: str
+    # Passed to the provider's `retrieve_items` as keyword arguments. Config
+    # only: the database does not store them.
+    provider_options: dict[str, JsonCompatible] = Field(default_factory=dict)
+
+    def __hash__(self) -> int:
+        # The id is the identity (decision 0001), and the options are a dict.
+        return hash(self.id)
 
 
 class SourceItemData(BaseModel):

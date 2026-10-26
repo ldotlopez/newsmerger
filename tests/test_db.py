@@ -558,14 +558,14 @@ class AnnotationTests(DatabaseTestCase):
 class ArtifactTests(DatabaseTestCase):
     def test_save_replaces_and_get_returns_the_artifact(self):
         self.db.save_artifact(
-            Artifact("rssfeed", "feed", "<rss/>", "application/rss+xml")
+            Artifact("feedgenerator", "feed", "<rss/>", "application/rss+xml")
         )
-        first = self.db.get_artifact("rssfeed", "feed")
+        first = self.db.get_artifact("feedgenerator", "feed")
         self.db.save_artifact(
-            Artifact("rssfeed", "feed", "<rss>2</rss>", "application/rss+xml")
+            Artifact("feedgenerator", "feed", "<rss>2</rss>", "application/rss+xml")
         )
 
-        artifact = self.db.get_artifact("rssfeed", "feed")
+        artifact = self.db.get_artifact("feedgenerator", "feed")
 
         self.assertEqual(artifact.content, "<rss>2</rss>")
         self.assertEqual(artifact.created_at, first.created_at)
@@ -574,24 +574,27 @@ class ArtifactTests(DatabaseTestCase):
         self.assertEqual(self.stored_contents(), {artifact.content_sha256})
 
     def test_missing_artifact_is_none(self):
-        self.assertIsNone(self.db.get_artifact("rssfeed", "missing"))
+        self.assertIsNone(self.db.get_artifact("feedgenerator", "missing"))
 
     def test_list_artifacts_returns_metadata_without_content(self):
-        for remixer, name in (("rssfeed", "feed"), ("grouping_avglink", "current")):
+        for remixer, name in (
+            ("feedgenerator", "feed"),
+            ("grouping_avglink", "current"),
+        ):
             self.db.save_artifact(Artifact(remixer, name, f"{name}!", "text/plain"))
 
         listed = self.db.list_artifacts()
-        only_rss = self.db.list_artifacts("rssfeed")
+        only_rss = self.db.list_artifacts("feedgenerator")
 
         self.assertEqual(
             [(a.remixer, a.name) for a in listed],
-            [("grouping_avglink", "current"), ("rssfeed", "feed")],
+            [("feedgenerator", "feed"), ("grouping_avglink", "current")],
         )
         self.assertTrue(all(a.content is None for a in listed))
         self.assertEqual([a.name for a in only_rss], ["feed"])
 
     def test_list_artifacts_by_names_and_limit(self):
-        for remixer, name in (("rssfeed", "feed"), ("digest", "a/2026-10-01")):
+        for remixer, name in (("feedgenerator", "feed"), ("digest", "a/2026-10-01")):
             self.db.save_artifact(Artifact(remixer, name, f"{name}!", "text/plain"))
 
         named = self.db.list_artifacts(names=[("digest", "a/2026-10-01")])
@@ -671,7 +674,7 @@ class DeliveryTests(DatabaseTestCase):
         for remixer, name in (
             ("digest", "a/1"),
             ("digest", "a/2"),
-            ("rssfeed", "feed"),
+            ("feedgenerator", "feed"),
         ):
             self.db.save_artifact(Artifact(remixer, name, name, "text/markdown"))
 

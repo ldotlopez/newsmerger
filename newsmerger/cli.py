@@ -28,7 +28,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.syntax import Syntax
 from rich.table import Table
 
-from .app import Application, LockedError, UnsupportedProviderError
+from .app import Application, LockedError
 from .config import Config, ConfigError
 from .consts import PACKAGE_NAME
 from .db import (
@@ -51,7 +51,6 @@ LOGGER = logging.getLogger(PACKAGE_NAME)
 USER_ERRORS = (
     ConfigError,
     PluginError,
-    UnsupportedProviderError,
     LockedError,
     SelectionRequiredError,
 )
@@ -287,17 +286,6 @@ def import_cmd(ctx: click.Context) -> None:
         rows = import_sources(app, progress)
     if failed := print_import(rows):
         raise click.ClickException(f"{failed} source(s) failed")
-
-
-@cli.command("import-url")
-@click.option("--source", "source_id", required=True, help="Configured source id")
-@click.argument("url")
-@click.pass_context
-@report_user_errors
-def import_url_cmd(ctx: click.Context, source_id: str, url: str) -> None:
-    """Import one article URL into a configured source."""
-    item = app_from_context(ctx, write=True).import_url(source_id, url)
-    click.echo(f"Imported '{item.title}' from {item.uri}")
 
 
 @cli.command("enrich")

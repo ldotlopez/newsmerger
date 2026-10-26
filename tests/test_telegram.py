@@ -159,7 +159,7 @@ class TelegramArtifactSinkTests(TelegramTestCase):
         self.db.save_artifact(
             Artifact("digest", "a/2026-10-01_2026-10-08", "# Week", "text/markdown")
         )
-        self.db.save_artifact(Artifact("rssfeed", "feed", "<rss/>", "text/xml"))
+        self.db.save_artifact(Artifact("feedgenerator", "feed", "<rss/>", "text/xml"))
         sink = TelegramArtifactSink(
             self.client, ArtifactSinkOptions(artifacts=["digest"])
         )

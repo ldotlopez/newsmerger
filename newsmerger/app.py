@@ -6,9 +6,8 @@ runs the four phases (import, enrich, remix, deliver) and answers queries.
 from __future__ import annotations
 
 import fcntl
+import inspect
 import logging
-import os
-import pickle
 from collections.abc import Iterable
 from pathlib import Path
 from types import TracebackType
@@ -35,7 +34,7 @@ from .models import (
 )
 from .plugins import Services
 from .processors import Processor, RunSummary
-from .providers import Provider, URLProvider
+from .providers import Provider
 from .remixers import Remixer
 from .sinks import ArtifactNames, Sink
 
@@ -45,16 +44,6 @@ PLUGIN_ENTRY_POINT = "__newsmerger_plugin__"
 RESERVED_OPTIONS = ("self", "name")
 
 LOGGER = logging.getLogger(__name__)
-
-_USE_PICKLE_DATA = os.environ.get("NEWSMERGER_PICKLE_CACHE", "0").lower() not in (
-    "0",
-    "false",
-    "",
-)
-
-
-class UnsupportedProviderError(ValueError):
-    """The provider cannot perform the requested operation."""
 
 
 class LockedError(RuntimeError):
@@ -74,6 +63,7 @@ class Application:
                 raise ConfigError(
                     f"source '{source.id}': provider '{source.provider}' is not loaded"
                 )
+            check_provider_options(source, self._providers[source.provider])
 
         self._db = Database(
             config.db.uri, config.db.content_dir, create_schema=create_schema
@@ -145,37 +135,17 @@ class Application:
     def import_source(self, source_id: str) -> list[SourceItem]:
         """Fetch every item of a configured source and store it."""
         source = self.config.get_source(source_id)
-        pickle_path = Path(f"{source.id}.pkl")
-
-        if _USE_PICKLE_DATA and pickle_path.exists():
-            with pickle_path.open("rb") as fh:
-                items = pickle.load(fh)
-        else:
-            provider = self._providers[source.provider]
-            items = []
-            for item_data in provider.retrieve_items(source, self._fetcher):
-                item = SourceItem.from_data(source, item_data)
-                LOGGER.info(f"{source.id}: {item.uri}")
-                items.append(item)
-            if _USE_PICKLE_DATA:
-                with pickle_path.open("wb") as fh:
-                    pickle.dump(items, fh)
+        provider = self._providers[source.provider]
+        items = []
+        for item_data in provider.retrieve_items(
+            source, self._fetcher, **source.provider_options
+        ):
+            item = SourceItem.from_data(source, item_data)
+            LOGGER.info(f"{source.id}: {item.uri}")
+            items.append(item)
 
         self._db.upsert_source_items(items)
         return items
-
-    def import_url(self, source_id: str, url: str) -> SourceItem:
-        """Fetch one item URL into a configured source, with its provider."""
-        source = self.config.get_source(source_id)
-        provider = self._providers[source.provider]
-        if not isinstance(provider, URLProvider):
-            raise UnsupportedProviderError(
-                f"provider '{source.provider}' does not support URL imports"
-            )
-
-        item = SourceItem.from_data(source, provider.retrieve_item(url, self._fetcher))
-        self._db.upsert_source_items([item])
-        return item
 
     # --- Enrich ------------------------------------------------------------
 
@@ -395,6 +365,17 @@ def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:
             raise
         services.llms = objects_by_name(plugins, LLM)
     return plugins
+
+
+def check_provider_options(source: SourceData, provider: Provider) -> None:
+    """Reject, at startup rather than on import, options the provider's
+    `retrieve_items` does not take, or required ones that are missing."""
+    try:
+        inspect.signature(provider.retrieve_items).bind(
+            source, None, **source.provider_options
+        )
+    except TypeError as e:
+        raise ConfigError(f"sources.{source.id}.provider_options: {e}") from None
 
 
 def objects_by_name[T](plugins: Register, protocol: type[T]) -> dict[str, T]:

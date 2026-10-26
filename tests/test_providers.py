@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import unittest
 from pathlib import Path
 from pprint import pprint as pp
@@ -8,6 +9,7 @@ import pydantic
 
 from newsmerger.models import SourceData, SourceItemData
 from newsmerger.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
+from newsmerger.plugins.feedreader import FeedReaderProvider
 from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
 from newsmerger.plugins.telegram_channel import (
     TelegramChannelProvider,
@@ -35,6 +37,116 @@ class TestCSJuntasGobierno(unittest.TestCase):
         summer, winter = (link.dt.utcoffset() for link in links)
         self.assertEqual(summer, datetime.timedelta(hours=2))
         self.assertEqual(winter, datetime.timedelta(hours=1))
+
+
+class TestFeedReader(unittest.TestCase):
+    def parse(
+        self, feed: bytes, default_selector: str | None = None, **provider_options: str
+    ) -> list[SourceItemData]:
+        pages = {"https://x.test/feed": feed, "https://x.test/1": ARTICLE_PAGE}
+        source = Mock(id="src", url="https://x.test/feed")
+        provider = FeedReaderProvider(default_selector)
+        fetcher = Mock(get=lambda url: pages[url])
+        return list(provider.retrieve_items(source, fetcher, **provider_options))
+
+    def test_rss_with_encoded_content(self) -> None:
+        feed = b"""<?xml version="1.0"?>
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"
+             xmlns:dc="http://purl.org/dc/elements/1.1/"
+             xmlns:media="http://search.yahoo.com/mrss/"><channel>
+        <item>
+          <title>One</title><link>https://x.test/1</link><guid>id-1</guid>
+          <dc:creator>Ana</dc:creator>
+          <category>Local</category><category>Politics</category>
+          <pubDate>Mon, 26 Oct 2026 10:00:00 +0100</pubDate>
+          <description>short</description>
+          <content:encoded><![CDATA[<p>full body</p>]]></content:encoded>
+          <media:content url="https://x.test/1.jpg" medium="image"/>
+        </item>
+        <item><link>https://x.test/2</link><description>only summary</description></item>
+        <item><title>no link</title></item>
+        </channel></rss>"""
+        first, second = self.parse(feed)
+
+        self.assertEqual(first.uid, hashlib.sha256(b"id-1").hexdigest())
+        self.assertEqual(first.content, b"<p>full body</p>")
+        self.assertEqual(first.mimetype, "text/html")
+        self.assertEqual(
+            first.published_at,
+            datetime.datetime(2026, 10, 26, 9, tzinfo=datetime.UTC),
+        )
+        self.assertIsNone(first.modified_at)
+        self.assertEqual(
+            first.data,
+            {
+                "author": "Ana",
+                "image": "https://x.test/1.jpg",
+                "section": "Local",
+                "tags": ["Local", "Politics"],
+            },
+        )
+        self.assertEqual(second.uid, hashlib.sha256(b"https://x.test/2").hexdigest())
+        self.assertEqual(second.title, "")
+        self.assertEqual(second.content, b"only summary")
+        self.assertIsNone(second.published_at)
+
+    def test_atom_updated_and_enclosure(self) -> None:
+        feed = b"""<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom"><entry>
+          <title>A</title><id>urn:a</id><link href="https://x.test/a"/>
+          <link rel="enclosure" type="image/png" href="https://x.test/a.png"/>
+          <updated>2026-10-26T12:00:00Z</updated>
+          <author><name>B</name></author><author><name>C</name></author>
+          <content type="html">&lt;b&gt;x&lt;/b&gt;</content>
+        </entry></feed>"""
+        (item,) = self.parse(feed)
+
+        self.assertEqual(
+            item.modified_at,
+            datetime.datetime(2026, 10, 26, 12, tzinfo=datetime.UTC),
+        )
+        self.assertEqual(item.data["author"], "B, C")
+        self.assertEqual(item.data["image"], "https://x.test/a.png")
+        self.assertEqual(item.content, b"<b>x</b>")
+
+    def test_image_from_content_and_bad_date(self) -> None:
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link><pubDate>someday</pubDate>
+          <description>&lt;p&gt;&lt;img src="/i.jpg"&gt;&lt;/p&gt;</description>
+        </item></channel></rss>"""
+        with self.assertLogs("newsmerger.plugins.feedreader", "WARNING"):
+            (item,) = self.parse(feed)
+
+        self.assertIsNone(item.published_at)
+        self.assertEqual(item.data["image"], "https://x.test/i.jpg")
+        self.assertIsNone(item.data["section"])
+
+    def test_article_selector_fetches_full_body(self) -> None:
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link><description>teaser</description>
+        </item></channel></rss>"""
+        # The source's option beats the plugin's default.
+        (item,) = self.parse(feed, "nav", article_selector="article .body")
+
+        self.assertEqual(item.content, b'<div class="body"><p>full</p></div>')
+        self.assertEqual(item.mimetype, "text/html")
+
+    def test_article_selector_defaults_to_the_plugin_option(self) -> None:
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link><description>teaser</description>
+        </item></channel></rss>"""
+        (item,) = self.parse(feed, "article .body")
+
+        self.assertEqual(item.content, b'<div class="body"><p>full</p></div>')
+
+    def test_not_a_feed(self) -> None:
+        with self.assertRaises(ValueError):
+            self.parse(b"<html><body>404</body></html>")
+
+
+ARTICLE_PAGE = (
+    b'<html><body><article><div class="body"><p>full</p></div></article></body></html>'
+)
 
 
 class TestPrensaIberica(unittest.TestCase):

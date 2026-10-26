@@ -46,7 +46,9 @@ class MigrateAutoincrementTests(unittest.TestCase):
             ProcessingStatus.DONE,
             annotations={"summary": "S"},
         )
-        db.save_artifact(Artifact("rssfeed", "feed", "<rss/>", "application/rss+xml"))
+        db.save_artifact(
+            Artifact("feedgenerator", "feed", "<rss/>", "application/rss+xml")
+        )
         db.close()
 
     def tearDown(self) -> None:

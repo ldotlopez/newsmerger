@@ -15,9 +15,6 @@ built for news and meant to grow into a personal collector of generic
 information. External tools that consume its results are outside the project
 and reach it only through the `Application` class.
 
-Pipelines (chains of processors over one item) are external and still in
-development: for now they are scripts built on `Application` and are not part
-of this definition.
 
 ## 2. Glossary
 
@@ -95,8 +92,6 @@ article.
 - **Duplicates:** the same article in two sources is two items, even if both
   sources use the same provider. Deduplication, if wanted, is the remixers'
   job.
-- **Importing a single URL:** it must name a configured source, whose
-  provider is used.
 - **Source removed from the YAML:** its items are kept and stop being
   updated. Remixers still see them.
 

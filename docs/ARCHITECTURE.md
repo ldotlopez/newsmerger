@@ -7,7 +7,7 @@ defined there and not repeated here.
 ```
 config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/, external tools
                           │
-        HTTPClient ◄──────┤ import / import-url
+        HTTPClient ◄──────┤ import
         (cached)          ▼
                      Provider ──► SourceItemData ──► SourceItem
                                                        │
@@ -32,18 +32,18 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | Module | Responsibility |
 | :--- | :--- |
 | `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the phases one unit at a time (`import_source`, `run_processor`, `run_remixer`, `run_sink`; `sources`, `processors`, `remixers` and `sinks` list them in configuration order), answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
-| `cli.py` | Click commands only: the phases (`import`, `import-url`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
+| `cli.py` | Click commands only: the phases (`import`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
 | `config.py` | Pydantic models for `config.yaml` (log level, sources, plugins, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
-| `providers.py` | The `Provider` and `URLProvider` protocols and `IndexSiteProvider`, an optional base class. |
+| `providers.py` | The `Provider` protocol and `IndexSiteProvider`, an optional base class. |
 | `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem`, `PartialFailure` and `RunSummary`. |
 | `remixers.py` | The `Remixer` protocol, `BaseRemixer` and `UnavailableRemixer`. |
 | `sinks.py` | The `Sink` protocol, `BaseItemSink`, `BaseArtifactSink`, `UnavailableSink` and `SelectionRequiredError`. |
 | `llms.py` | The `LLM` protocol, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
-| `plugins/` | The plugin bundles: one module per site provider (`telegram_channel` included), `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `rssfeed` and `telegram` (the `telegram` and `telegram_artifacts` sinks). `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
-| `scripts/` | Standalone tools: the URL pipeline, built on `Application`, and the one-shot migrations `migrate_autoincrement.py` and `migrate_telegram_state.py`. |
+| `plugins/` | The plugin bundles: one module per site provider (`telegram_channel` included), `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `feedgenerator` and `telegram` (the `telegram` and `telegram_artifacts` sinks). `PluginOptions`, `PluginObjects` and `Services` live in its `__init__`. |
+| `scripts/` | The one-shot migrations `migrate_autoincrement.py` and `migrate_telegram_state.py`. |
 
 ## Plugins
 
@@ -60,11 +60,11 @@ models:
    with its own pydantic model (a `PluginOptions` subclass, so unknown keys
    are errors), builds its objects with the validated model and returns
    `[(name, Protocol, object), ...]`: one triple per object, declared under
-   `Provider`, `URLProvider`, `Processor`, `Remixer`, `Sink` or `LLM`.
+   `Provider`, `Processor`, `Remixer`, `Sink` or `LLM`.
 3. `Application` indexes the objects by name per protocol, with
-   `get_by_protocol` (hierarchy-aware: a `URLProvider` is also a
-   `Provider`), and checks that names are unique per protocol and that every
-   source's `provider` is loaded.
+   `get_by_protocol`, and checks that names are unique per protocol, that
+   every source's `provider` is loaded and that its `provider_options` bind
+   to that provider's `retrieve_items` (see *Providers*).
 
 Everything fails at construction, before the database is opened, so a broken
 plugin fails every command. A `pydantic.ValidationError` from an entry point
@@ -103,12 +103,28 @@ reads `tagger.tags`.
 
 ## Providers
 
-`Provider.retrieve_items(source, fetcher)` yields `SourceItemData`. Most
-sites are `IndexSiteProvider`s, which are `URLProvider`s: fetch
+`Provider.retrieve_items(source, fetcher, **provider_options)` yields
+`SourceItemData`. Most sites are `IndexSiteProvider`s: fetch
 `index_url(source)` (the source's URL unless the provider overrides it),
 `parse_index` it into article URLs, fetch each article and `parse_item` it.
-`import-url` uses `retrieve_item(url, fetcher)` to skip the index, and needs
-a `URLProvider`.
+
+A source's `provider_options` are passed as keyword arguments (decision
+0003). A provider that takes options declares each one as a parameter of
+`retrieve_items`, never `**kwargs`, and falls back to the value in its
+plugin section, so the source's value wins:
+
+```yaml
+sources:
+  - id: some-blog
+    provider: feedreader
+    provider_options:
+      article_selector: .article   # overrides plugins.feedreader.article_selector
+```
+
+`Application` binds every source's options to that signature when it is
+built, so an unknown or missing option fails every command at start-up as a
+configuration error (`sources.<id>.provider_options`). The options live in
+the configuration only; the database does not store them.
 
 HTML providers keep the article's cleaned HTML rather than converting it:
 `foundation.scrapelib.prune_to_spine` keeps the main node and its ancestors,
@@ -136,7 +152,7 @@ from foundation.scrapelib import drop_selectors, prune_to_spine
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, URLProvider
+from ..providers import URI, IndexSiteProvider, Provider
 from . import PluginObjects, PluginOptions
 
 
@@ -172,19 +188,19 @@ class ExampleProvider(IndexSiteProvider):
 
 def __newsmerger_plugin__(**options: Any) -> PluginObjects:
     PluginOptions.model_validate(options)  # no options: reject any
-    return [("example", URLProvider, ExampleProvider())]
+    return [("example", Provider, ExampleProvider())]
 ```
 
 `retrieve_items` fetches the index and each article; a `ValueError` from
 `parse_item` is logged and that article is skipped, so raise it for pages
 that aren't articles. For anything else (several items in one page, binary
 files), implement `retrieve_items(source, fetcher)` yourself, fetching with
-`fetcher.get(url)`, and declare the object as a `Provider`;
-`csjuntasgobierno` is an example.
+`fetcher.get(url)`; `csjuntasgobierno` is an example, and `feedreader` one
+with a per-source option.
 
 A plugin with options declares a `PluginOptions` subclass with defaults for
 the general case, so an empty section is enough to enable it, and passes the
-validated model to its objects' constructors; `markdownify`, `rssfeed` and
+validated model to its objects' constructors; `markdownify`, `feedgenerator` and
 `telegram` are examples, `grouping` shows a bundle with subsections and
 `summarize` an LLM consumer. Use `pydantic.SecretStr` for secrets, so they never show in a
 `repr` or a traceback. Processors and remixers usually subclass
@@ -203,9 +219,7 @@ Rules every provider follows:
   sample pages in `tests/samples/` and add a case to
   `tests/test_providers.py`.
 
-While developing, set `NEWSMERGER_PICKLE_CACHE=1` to cache each source's
-fetched items in a local `<source id>.pkl` file and skip re-scraping. Add the
-plugin to the README's tables.
+Add the plugin to the README's tables.
 
 ## Persistence
 
@@ -346,10 +360,3 @@ head of each source's queue once that source's last `done` delivery
 sends the artifacts of its `artifacts` remixers with `sendDocument`.
 Request errors are re-raised `from None` with their class only, since the
 URL embeds the bot token.
-
-## Pipelines
-
-Pipelines stay outside the core (decision 0003). `scripts/pipeline_url.py`
-takes the write lock, imports one URL into a configured source and runs a
-linear list of processors on it, stopping at the first one without output. There is no
-dependency graph and no idempotency guarantee for external side effects.

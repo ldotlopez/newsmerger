@@ -1,7 +1,7 @@
 import logging
 from abc import abstractmethod
 from collections.abc import Iterator
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from .httpclient import HTTPClient
 from .models import SourceData, SourceItemData
@@ -13,22 +13,18 @@ type URI = str
 
 @runtime_checkable
 class Provider(Protocol):
-    """Retrieves a source's items. Sources name it in `provider:`."""
+    """Retrieves a source's items. Sources name it in `provider:` and pass it
+    their `provider_options` as keyword arguments, which an implementation
+    declares one by one (never `**kwargs`: the core checks them against its
+    signature)."""
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
+        self, source: SourceData, fetcher: HTTPClient, **provider_options: Any
     ) -> Iterator[SourceItemData]: ...
 
 
-@runtime_checkable
-class URLProvider(Provider, Protocol):
-    """A provider that can also retrieve one item from its URL (`import-url`)."""
-
-    def retrieve_item(self, url: str, fetcher: HTTPClient) -> SourceItemData: ...
-
-
 class IndexSiteProvider:
-    """A URLProvider for a site with an index page listing article URLs, one
+    """A Provider for a site with an index page listing article URLs, one
     item per article."""
 
     def index_url(self, source: SourceData) -> str:
