@@ -1,6 +1,6 @@
 # Copy to config.yaml and adjust.
 # Secrets come from the environment or from a .env file next to this one:
-# ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}.
+# ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}, ${GOOGLECHAT_WEBHOOK_URL}.
 # Write a literal dollar sign in a value as $$; comments are not expanded.
 
 # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set a level.
@@ -84,6 +84,8 @@ plugins:
       interval: 30                   # minutes between posts of the same source
     telegram_artifacts:              # artifacts, as documents
       artifacts: [digest]
+  googlechat:                        # summarized items, by incoming webhook
+    url: ${GOOGLECHAT_WEBHOOK_URL}   # or `channel` (space id) and `token`
 
 # The runs of `enrich`, in order. Each writes one annotation key, the
 # processor's own unless `options` names another with `key`; a key is written
