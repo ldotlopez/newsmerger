@@ -41,10 +41,7 @@ class MigrateAutoincrementTests(unittest.TestCase):
         db = Database(self.url, self.tmp_dir / "content", create_schema=False)
         db.upsert_source_items([make_item("i1"), make_item("i2")])
         db.record_result(
-            make_item("i1"),
-            "summarize",
-            ProcessingStatus.DONE,
-            annotations={"summary": "S"},
+            make_item("i1"), "summarize", "summary", ProcessingStatus.DONE, value="S"
         )
         db.save_artifact(
             Artifact("feedgenerator", "feed", "<rss/>", "application/rss+xml")

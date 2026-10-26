@@ -77,9 +77,7 @@ class FeedGeneratorTests(RemixerTestCase):
 
 class GroupingTests(RemixerTestCase):
     def tag(self, item: SourceItem, tags: list[str]) -> None:
-        self.db.record_result(
-            item, "tagger", ProcessingStatus.DONE, annotations={"tags": tags}
-        )
+        self.db.record_result(item, "tagger", "tags", ProcessingStatus.DONE, value=tags)
 
     def groups(self, remixer_class) -> list[list[str]]:
         cfg = grouping.GroupingOptions(tau_hours=None, days=10_000)
@@ -129,14 +127,15 @@ class EmbeddingGroupingTests(RemixerTestCase):
             (self.d4, ["BCE"], None),  # tagged, but not embedded yet
         ):
             self.db.record_result(
-                item, "tagger", ProcessingStatus.DONE, annotations={"tags": tags}
+                item, "tagger", "tags", ProcessingStatus.DONE, value=tags
             )
             if embedding is not None:
                 self.db.record_result(
                     item,
                     "embed",
+                    "tags_embedding",
                     ProcessingStatus.DONE,
-                    annotations={"tags_embedding": embedding},
+                    value=embedding,
                 )
 
     def groups_of(self, **options) -> tuple[list[list[str]], dict]:

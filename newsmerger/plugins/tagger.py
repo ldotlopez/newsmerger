@@ -61,18 +61,21 @@ class Options(PluginOptions):
 
 class TaggerProcessor(BaseProcessor):
     name = "tagger"
-    requires = "markdownify"
+    key = "tags"
+    requires = "markdown"
 
     def __init__(self, llm: LLM, cfg: Options) -> None:
         super().__init__(max_retries=cfg.max_retries)
         self.llm = llm
         self.model = cfg.model
 
-    def process_item(self, db: Database, item: SourceItem) -> dict[str, Any]:
-        markdown = self.require_annotation(db, item, "markdownify", "markdown")
+    def process_item(
+        self, db: Database, item: SourceItem, model: str | None = None
+    ) -> list[str]:
+        markdown = self.require_annotation(db, item, "markdown")
 
         response = self.llm.prompt(
-            TAGS_PROMPT + markdown, model=self.model, json_mode=True
+            TAGS_PROMPT + markdown, model=model or self.model, json_mode=True
         )
 
         try:
@@ -86,16 +89,12 @@ class TaggerProcessor(BaseProcessor):
         ) as e:
             raise ValueError(f"invalid tags response {response!r}: {e}") from e
 
-        results = {}
-
         item_tags = item.data.get("tags", [])
-        if isinstance(item_tags, list):
-            results["tags"] = merge_tags(llm_tags, item_tags)
-        else:
-            results["tags"] = llm_tags
-
-        LOGGER.debug(f"Tags for {item.title}: {results['tags']!r}")
-        return results
+        tags = (
+            merge_tags(llm_tags, item_tags) if isinstance(item_tags, list) else llm_tags
+        )
+        LOGGER.debug(f"Tags for {item.title}: {tags!r}")
+        return tags
 
 
 def merge_tags(existing_tags: list[str], new_tags: list[str]) -> list[str]:
@@ -112,5 +111,6 @@ def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     try:
         processor = TaggerProcessor(services.llm(cfg.llm), cfg)
     except LLMUnavailableError as e:
-        return [(name, Processor, UnavailableProcessor(name, str(e)))]
+        unavailable = UnavailableProcessor(name, str(e), TaggerProcessor.output_key)
+        return [(name, Processor, unavailable)]
     return [(name, Processor, processor)]

@@ -10,6 +10,7 @@ import platformdirs
 import pydantic
 import yaml
 from dotenv import dotenv_values
+from foundation.jsonlib import JsonCompatible
 
 from .consts import PACKAGE_NAME
 from .models import SourceData
@@ -48,6 +49,22 @@ class DatabaseConfig(pydantic.BaseModel):
     )
 
 
+class EnrichEntry(pydantic.BaseModel):
+    """One run of a processor in the enrich phase. `options` are passed to
+    it as keyword arguments; `key`, among them, names the annotation it
+    writes (default: the processor's own)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+    processor: str
+    options: dict[str, JsonCompatible] = {}
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def from_name(cls, value: Any) -> Any:
+        """A bare processor name runs it with its defaults."""
+        return {"processor": value} if isinstance(value, str) else value
+
+
 class Config(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set one.
@@ -56,6 +73,8 @@ class Config(pydantic.BaseModel):
     # Plugin module name -> its options, validated by the plugin itself. Only
     # plugins listed here are loaded; an empty section enables its defaults.
     plugins: dict[str, dict[str, Any] | None] = {}
+    # The processor runs of `enrich`, in order. A processor not listed never runs.
+    enrich: list[EnrichEntry] = []
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
 

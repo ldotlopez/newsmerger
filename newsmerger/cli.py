@@ -250,7 +250,7 @@ def print_enrich(summaries: dict[str, RunSummary]) -> int:
     """Print the enrich summary; return how many items failed."""
     print_table(
         "Enrich",
-        ["Processor", "Done", "Ignored", "Failed"],
+        ["Key", "Done", "Ignored", "Failed"],
         [[name, s.done, s.ignored, s.failed] for name, s in summaries.items()],
     )
     return sum(s.failed for s in summaries.values())
@@ -301,13 +301,13 @@ def import_cmd(ctx: click.Context) -> None:
 def enrich_cmd(
     ctx: click.Context, processor: str | None, scope: ProcessingScope, force: bool
 ) -> None:
-    """Run one processor, or every configured one in order."""
+    """Run every `enrich:` entry in order, or only PROCESSOR's."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         summaries = run_each(
             progress,
-            [processor] if processor else app.processors,
-            lambda name: app.run_processor(name, scope=scope, force=force),
+            app.enrich_keys(processor),
+            lambda key: app.run_enrich(key, scope=scope, force=force),
         )
     print_enrich(summaries)
 
@@ -390,7 +390,7 @@ def run_cmd(ctx: click.Context) -> None:
         ("import", lambda progress: import_sources(app, progress), print_import),
         (
             "enrich",
-            lambda progress: run_each(progress, app.processors, app.run_processor),
+            lambda progress: run_each(progress, app.enrich_keys(), app.run_enrich),
             print_enrich,
         ),
         (
@@ -445,9 +445,7 @@ def search_cmd(ctx: click.Context, query: str, scope: ProcessingScope) -> None:
     app = app_from_context(ctx)
     items = app.get_items(scope)
     # shortcut: loads every markdown from disk, add an index if it gets slow
-    markdowns = app.get_annotation_values(
-        items, processor="markdownify", key="markdown"
-    )
+    markdowns = app.get_annotation_values(items, key="markdown")
     rows = []
     for item in items:
         snippet = match_snippet(markdowns.get(item.key, ""), query)
@@ -954,12 +952,11 @@ def delete_items_cmd(
 def delete_annotations_cmd(
     ctx: click.Context, scope: ProcessingScope, processor: str | None, sort: str
 ) -> None:
-    """Delete annotations per processor: every key of that processor on the
-    item, with its processing state, so the item becomes pending again.
+    """Delete annotations per processor: every key it wrote on the item,
+    with their processing state, so the item becomes pending again for each
+    of its runs.
 
-    There is no --key or --annotation: a single key would leave its processor
-    done with that key missing, never regenerated. --limit is refused for the
-    same reason: it counts annotations, not processors.
+    --limit is refused: it counts annotations, not processors.
     """
     if scope.limit is not None:
         raise click.UsageError(

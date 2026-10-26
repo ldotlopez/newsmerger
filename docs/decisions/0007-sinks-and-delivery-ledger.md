@@ -88,7 +88,8 @@ What matters is not item versus collection but derived versus recorded:
   database and fail at once if another holds it.
 - **`telegram`.** A bundle of two sinks sharing `bot_token` and `chat_id`,
   each with an optional subsection, as in `grouping`:
-  - `telegram` (items): `requires = "summarize"`, no redelivery. `select`
+  - `telegram` (items): `requires = "summary"` (an annotation key,
+    decision 0002), no redelivery. `select`
     takes the head of each source's queue if that source's last `done`
     delivery is at least `interval` minutes old. Its state artifact is no
     longer produced.

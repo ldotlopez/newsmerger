@@ -40,8 +40,8 @@ cache:
   expiration: 21600
 
 # Only plugins with a section are loaded; options left out take the plugin's
-# defaults, so an empty section enables a plugin as is. `enrich` and `remix`
-# run their objects in this order.
+# defaults, so an empty section enables a plugin as is. `remix` and `deliver`
+# run their objects in this order; `enrich` runs the `enrich` section below.
 plugins:
   # Providers, named by sources' `provider:`.
   prensaiberica_plain:
@@ -63,13 +63,12 @@ plugins:
     embed_model: mxbai-embed-large:latest
 
   # LLM processors: `llm:` picks the LLM (default: the first listed) and
-  # `model:` overrides its default model.
+  # `model:` overrides its default model, for every run of the processor.
   summarize:                         # first LLM, its chat_model
   tagger:
     llm: ollama
     model: gemma4:12b
-  embed:
-    inputs: [tags, markdown]         # first LLM, its embed_model
+  embed:                             # first LLM, its embed_model
 
   # Remixers.
   feedgenerator:
@@ -81,7 +80,25 @@ plugins:
   telegram:
     bot_token: ${TELEGRAM_BOT_TOKEN}
     chat_id: ${TELEGRAM_CHAT_ID}
-    telegram:                        # summarized items
+    telegram:                        # summarized items (`summary`)
       interval: 30                   # minutes between posts of the same source
     telegram_artifacts:              # artifacts, as documents
       artifacts: [digest]
+
+# The runs of `enrich`, in order. Each writes one annotation key, the
+# processor's own unless `options` names another with `key`; a key is written
+# by one entry only. `options` override the plugin section for that run.
+enrich:
+  - markdownify                      # markdown
+  - summarize                        # summary
+  - tagger                           # tags
+  - embed                            # tags_embedding
+  - processor: embed
+    options:
+      input: markdown                # markdown_embedding
+  # A second summary, in Spanish, with its own prompt and model:
+  # - processor: summarize
+  #   options:
+  #     key: summary/es
+  #     prompt: "Resume en español el siguiente artículo:\n\n"
+  #     model: gemma4:27b

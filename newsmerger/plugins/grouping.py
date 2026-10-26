@@ -11,7 +11,7 @@ are left out.
   merge must be justified by the average score across all cross-pairs, so a
   bridge item can't chain clusters together.
 - `embeddings`: single-link over tag overlap blended with the cosine
-  similarity of the items' `embed` annotations (tags or markdown), which
+  similarity of the items' `tags_embedding` or `markdown_embedding`, which
   catches variants of the same entity ("BCE" vs "Banco Central Europeo").
   The score is (weight * cosine + (1 - weight) * jaccard) * time decay, so
   `embedding_weight=0` reproduces `singlelink`.
@@ -253,7 +253,7 @@ class GroupingRemixer(BaseRemixer):
             )
 
         items = db.get_items(scope)
-        tags = db.get_annotation_values(items, processor="tagger", key="tags")
+        tags = db.get_annotation_values(items, key="tags")
         scored = tagged_items(items, tags)
         if not scored:
             LOGGER.info(f"{self.name}: no tagged items in scope - nothing to group")
@@ -330,7 +330,7 @@ class EmbeddingsRemixer(GroupingRemixer):
 
     def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
         vectors = db.get_annotation_values(
-            [scored.item for scored in items], processor="embed", key=self.embedding_key
+            [scored.item for scored in items], key=self.embedding_key
         )
         embedded = [scored for scored in items if scored.item.key in vectors]
         if skipped := len(items) - len(embedded):

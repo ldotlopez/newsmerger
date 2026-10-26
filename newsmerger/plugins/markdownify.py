@@ -18,8 +18,9 @@ class Options(PluginOptions):
 
 class MarkdownifyProcessor(BaseProcessor):
     name = "markdownify"
+    key = "markdown"
 
-    def process_item(self, db: Database, item: SourceItem) -> dict[str, Any]:
+    def process_item(self, db: Database, item: SourceItem) -> str:
         match item.mimetype:
             case "text/html":
                 markdown = self.extract_html(db.get_content(item))
@@ -34,7 +35,7 @@ class MarkdownifyProcessor(BaseProcessor):
         if item.title and item.title not in markdown:
             markdown = f"# {item.title}\n\n{markdown}"
 
-        return {"markdown": markdown}
+        return markdown
 
     @staticmethod
     def extract_html(content: bytes) -> str | None:

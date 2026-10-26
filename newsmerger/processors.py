@@ -1,7 +1,9 @@
 import dataclasses
+import inspect
 import logging
 import time
 from abc import abstractmethod
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from .db import Database, ProcessingStatus
@@ -20,19 +22,6 @@ class MissingAnnotationError(LookupError):
     """An annotation a processor needs from an upstream one is missing."""
 
 
-class PartialFailure(Exception):
-    """Raise from `process_item` when only some annotation keys were computed.
-
-    `results` is saved anyway and the item is marked `error`, so a retry may
-    recompute keys that already succeeded.
-    """
-
-    def __init__(self, results: dict[str, Any], errors: dict[str, str]) -> None:
-        self.results = results
-        self.errors = errors
-        super().__init__(f"{len(errors)} key(s) failed: {list(errors)}")
-
-
 @dataclasses.dataclass(slots=True)
 class RunSummary:
     done: int = 0
@@ -42,79 +31,118 @@ class RunSummary:
 
 @runtime_checkable
 class Processor(Protocol):
-    """Annotates items. Its registered name keys its annotations and processing
-    state: entry points register each object under its own `name`."""
+    """Annotates items. Each `enrich:` entry runs it with its options, which
+    an implementation declares one by one (never `**kwargs`). Every run
+    writes one annotation key, which also keys its processing state."""
+
+    def output_key(self, **options: Any) -> str:
+        """The key a run with `options` writes unless the entry names one.
+        Raise `TypeError` for options the processor does not take."""
+        ...
 
     def enrich(
-        self, db: Database, *, scope: ProcessingScope | None = None, force: bool = False
+        self,
+        db: Database,
+        *,
+        key: str,
+        scope: ProcessingScope | None = None,
+        force: bool = False,
+        **options: Any,
     ) -> RunSummary: ...
 
 
 class UnavailableProcessor:
     """Stands in for a processor that cannot run, such as one whose LLM is
-    not loaded: `enrich` logs why and leaves every item pending."""
+    not loaded: `enrich` logs why and leaves every item pending.
+    `output_key` is the real processor's, so its entries are still checked."""
 
-    def __init__(self, name: str, reason: str) -> None:
+    def __init__(self, name: str, reason: str, output_key: Callable[..., str]) -> None:
         self.name = name
         self.reason = reason
+        self._output_key = output_key
+
+    def output_key(self, **options: Any) -> str:
+        return self._output_key(**options)
 
     def enrich(
-        self, db: Database, *, scope: ProcessingScope | None = None, force: bool = False
+        self,
+        db: Database,
+        *,
+        key: str,
+        scope: ProcessingScope | None = None,
+        force: bool = False,
+        **options: Any,
     ) -> RunSummary:
         LOGGER.error(f"{self.name}: {self.reason}; nothing processed")
         return RunSummary()
 
 
 class BaseProcessor:
-    """A Processor that produces annotations for each eligible item.
+    """A Processor that produces one annotation for each eligible item.
 
-    Changing `version` makes items it finished eligible again. `requires`
-    names the processor whose output this one reads: only items it finished
-    on their current content are picked up.
+    `key` is the annotation it writes by default. Changing `version` makes
+    items it finished eligible again. `requires` names the annotation key
+    this one reads: only items whose run of it finished on their current
+    content are picked up.
     """
 
     name: str
+    key: str
     version: str | None = None
     requires: str | None = None
 
     def __init__(self, *, max_retries: int = 3) -> None:
         self.max_retries = max_retries
 
+    @classmethod
+    def output_key(cls, **options: Any) -> str:
+        inspect.signature(cls.process_item).bind(None, None, None, **options)
+        return cls.key
+
+    def required_key(self, **options: Any) -> str | None:
+        """The key a run with `options` reads, if any."""
+        return self.requires
+
     def enrich(
-        self, db: Database, *, scope: ProcessingScope | None = None, force: bool = False
+        self,
+        db: Database,
+        *,
+        key: str,
+        scope: ProcessingScope | None = None,
+        force: bool = False,
+        **options: Any,
     ) -> RunSummary:
+        requires = self.required_key(**options)
         items = db.get_unprocessed_items(
-            self.name,
+            key,
             version=self.version,
             max_retries=self.max_retries,
             force=force,
             scope=scope,
-            requires=self.requires,
+            requires=requires,
         )
         total = len(items)
         LOGGER.info(
-            f"{self.name}: {total} item(s) to process"
-            f" (version={self.version}, requires={self.requires}, force={force})"
+            f"{key}: {total} item(s) to process with {self.name}"
+            f" (version={self.version}, requires={requires}, force={force})"
         )
 
         summary = RunSummary()
         run_started = time.monotonic()
         for position, item in enumerate(items, start=1):
-            LOGGER.info(
-                f"{self.name}: [{position}/{total}] '{item.title}' ({item.uri})"
-            )
+            LOGGER.info(f"{key}: [{position}/{total}] '{item.title}' ({item.uri})")
             item_started = time.monotonic()
-            status, annotations, error = self._process(db, item)
+            status, value, error = self._process(db, item, options)
             LOGGER.debug(
-                f"{self.name}: '{item.uri}' {status.value}"
+                f"{key}: '{item.uri}' {status.value}"
                 f" in {time.monotonic() - item_started:.2f}s"
-                f" (keys: {', '.join(annotations or {}) or '-'})"
             )
             db.record_result(
                 item,
                 self.name,
+                key,
                 status,
-                annotations=annotations,
+                value=value,
                 error=error,
                 version=self.version,
                 reset_attempts=force,
@@ -128,44 +156,37 @@ class BaseProcessor:
                     summary.failed += 1
 
         LOGGER.info(
-            f"{self.name}: finished in {time.monotonic() - run_started:.1f}s:"
+            f"{key}: finished in {time.monotonic() - run_started:.1f}s:"
             f" {summary.done} done, {summary.ignored} ignored, {summary.failed} failed"
         )
         return summary
 
     def _process(
-        self, db: Database, item: SourceItem
-    ) -> tuple[ProcessingStatus, dict[str, Any] | None, str | None]:
+        self, db: Database, item: SourceItem, options: dict[str, Any]
+    ) -> tuple[ProcessingStatus, Any, str | None]:
         """Run `process_item` and translate its outcome into a result."""
         try:
-            return ProcessingStatus.DONE, self.process_item(db, item), None
+            return ProcessingStatus.DONE, self.process_item(db, item, **options), None
         except SkipItem as e:
             LOGGER.info(f"{self.name} ignored '{item.uri}': {e}")
             return ProcessingStatus.IGNORED, None, None
-        except PartialFailure as e:
-            LOGGER.warning(f"{self.name} partial failure on '{item.uri}': {e.errors}")
-            error = "; ".join(f"{k}: {v}" for k, v in e.errors.items())
-            return ProcessingStatus.ERROR, e.results, error
         except Exception as e:
             LOGGER.exception(f"{self.name} failed on '{item.uri}'")
             return ProcessingStatus.ERROR, None, str(e)
 
     @staticmethod
-    def require_annotation(
-        db: Database, item: SourceItem, processor: str, key: str
-    ) -> Any:
-        """Return an upstream processor's annotation, or raise if it is missing."""
-        annotations = db.get_annotations(item, processor=processor, key=key)
-        value = annotations.get(processor, {}).get(key)
+    def require_annotation(db: Database, item: SourceItem, key: str) -> Any:
+        """Return an upstream annotation, or raise if it is missing."""
+        value = db.get_annotations(item, key=key).get(key)
         if not value:
-            raise MissingAnnotationError(f"{processor}.{key} annotation is missing")
+            raise MissingAnnotationError(f"{key} annotation is missing")
         return value
 
     @abstractmethod
-    def process_item(self, db: Database, item: SourceItem) -> dict[str, Any]:
-        """Return annotation key -> value on full success.
+    def process_item(self, db: Database, item: SourceItem, **options: Any) -> Any:
+        """Return the annotation's value. Implementations declare each option
+        they take, with a default.
 
-        Raise `SkipItem` if the item doesn't apply, `PartialFailure` if only
-        some keys were computed. Any other exception marks the item `error`
-        with no annotations saved.
+        Raise `SkipItem` if the item doesn't apply. Any other exception marks
+        the item `error`.
         """

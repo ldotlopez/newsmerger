@@ -64,9 +64,7 @@ class DigestRemixer(BaseRemixer):
         since = scope.since or now - timedelta(days=self.days)
         until = scope.until or now
         items = db.get_items(dataclasses.replace(scope, since=since), newest_first=True)
-        markdowns = db.get_annotation_values(
-            items, processor="markdownify", key="markdown"
-        )
+        markdowns = db.get_annotation_values(items, key="markdown")
 
         items_by_source: dict[str, list[SourceItem]] = {}
         for item in items:

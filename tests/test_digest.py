@@ -40,10 +40,7 @@ class DigestRemixerTests(unittest.TestCase):
         self.db.upsert_source_items([item])
         if markdown is not None:
             self.db.record_result(
-                item,
-                "markdownify",
-                ProcessingStatus.DONE,
-                annotations={"markdown": markdown},
+                item, "markdownify", "markdown", ProcessingStatus.DONE, value=markdown
             )
 
     def digest(

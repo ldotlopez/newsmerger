@@ -89,8 +89,32 @@ Only plugins with a section under `plugins` are loaded, and only their
 providers, processors, remixers and sinks can be used. A plugin's section
 holds its options: the missing ones take the defaults listed below, and
 unknown or invalid ones are rejected with their path
-(`plugins.summarize.max_retries: ...`). `enrich`, `remix` and `deliver` run
-their objects in the order of this section.
+(`plugins.summarize.max_retries: ...`). `remix` and `deliver` run their
+objects in the order of this section; `enrich` runs the `enrich` section.
+
+The `enrich` section lists the processor runs, in order. An entry is a
+processor's name, or a processor with `options` for that run. Every run
+writes one annotation **key**, the processor's own unless `options` names
+another with `key` (lowercase words, optionally in `/`-separated parts:
+`summary`, `summary/es`). A key is written by one entry only, so a processor
+can run several times with different options and keys:
+
+```yaml
+enrich:
+  - markdownify                      # writes `markdown`
+  - processor: summarize             # writes `summary`
+  - processor: summarize
+    options:
+      key: summary/es
+      prompt: "Resume en español el siguiente artículo:\n\n"
+      model: gemma4:27b
+```
+
+A run's options override, for that run only, those of the processor's
+plugin section; the ones a processor takes are listed below. A processor
+that is loaded but not listed never runs. An entry whose processor is not
+loaded, or that gives it an option it does not take, fails every command at
+start-up.
 
 `grouping` bundles several remixers and `telegram` two sinks, each with its
 own subsection. With no subsections, all of them are enabled with their
@@ -104,8 +128,8 @@ one it names is not, still loads, but `enrich` or `remix` logs an error for
 it and does nothing; a processor's items stay pending. Everything else works without an LLM, but
 `grouping` and `telegram` read the tags and summaries those processors write.
 
-Changing a plugin's options never regenerates existing annotations; use
-`enrich --force` for that.
+Changing a plugin's or an entry's options never regenerates existing
+annotations; use `enrich --force` for that.
 
 ## Usage
 
@@ -113,7 +137,7 @@ Changing a plugin's options never regenerates existing annotations; use
 # Import every configured source
 uv run newsmerger -c config.yaml import
 
-# Run every loaded processor in order, or just one
+# Run every enrich entry in order, or only one processor's
 uv run newsmerger -c config.yaml enrich
 uv run newsmerger -c config.yaml enrich markdownify --source castellonplaza --limit 20
 
@@ -174,9 +198,9 @@ can be redirected. `--format json` prints full records.
 selection with no filter or id is refused. Deleting an item takes its
 processing state, annotations and deliveries with it, and an item still in
 its source's index comes back on the next `import` with a new id.
-Annotations are deleted per processor (every key of that processor on the
-item, with its processing state), so the item is processed again; `delete`
-selects them by processor, not by key or id. Items and
+Annotations are deleted per processor (every key that processor wrote on
+the item, with their processing state), so every run of it processes the
+item again; `delete` selects them by processor, not by key or id. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
 
@@ -198,14 +222,15 @@ output on both streams; `NO_COLOR=1` only drops the colors.
 
 ### How `enrich` behaves
 
-- Each processor handles every item once. It runs again on an item only when
-  the item's content changed, or when the processor itself was upgraded.
+- Each entry handles every item once, and keeps its own state per item
+  under its key. It runs again on an item only when the item's content
+  changed, or when the processor itself was upgraded.
 - A processor can skip items it does not apply to (e.g. `markdownify` on a
   PDF). Skipped items stay skipped until their content changes.
 - Failures are retried on later runs, up to 3 attempts by default (the
   `max_retries` option), waiting longer each time (1 min, 2 min, 4 min... up
   to 24 h).
-- A processor only sees items its upstream processor finished (see the
+- A run only sees items whose run of the key it reads finished (see the
   *Reads* column below). Items skipped upstream never reach it.
 - `--force` reprocesses everything in scope, skipped items included, with
   fresh retry attempts.
@@ -255,16 +280,22 @@ To support a new site, see
 
 ### Processors
 
-| Plugin | Processor | Reads | Does |
-| :--- | :--- | :--- | :--- |
-| `markdownify` | `markdownify` | item content | Extracts the article's markdown from HTML items |
-| `summarize` | `summarize` | `markdownify.markdown` | Summarizes the article with an LLM |
-| `tagger` | `tagger` | `markdownify.markdown` | Extracts entity tags with an LLM |
-| `embed` | `embed` | `tagger.tags`, `markdownify.markdown` | Embeds the tags (`tags_embedding`, plus the embedded `tags_text`) and the markdown (`markdown_embedding`) with an LLM |
+| Plugin | Processor | Reads | Writes | Does |
+| :--- | :--- | :--- | :--- | :--- |
+| `markdownify` | `markdownify` | item content | `markdown` | Extracts the article's markdown from HTML and PDF items |
+| `summarize` | `summarize` | `markdown` | `summary` | Summarizes the article with an LLM |
+| `tagger` | `tagger` | `markdown` | `tags` | Extracts entity tags with an LLM |
+| `embed` | `embed` | `tags` or `markdown` | `<input>_embedding` | Embeds the tags (sorted and comma-separated) or the markdown with an LLM |
 
-Every processor takes `max_retries` (default 3). `summarize`, `tagger` and
-`embed` take `llm` and `model` (see above); `embed` also takes `inputs`
-(default `[tags, markdown]`).
+Every processor takes `max_retries` (default 3) in its plugin section.
+`summarize`, `tagger` and `embed` take `llm` and `model` (see above);
+`summarize` also takes `prompt`, followed by the article's markdown.
+
+Each run takes `key`, plus `model` (`summarize`, `tagger`, `embed`),
+`prompt` (`summarize`) and `input` (`embed`: `tags`, the default, or
+`markdown`; one entry per input). Consumers read annotations by key:
+`telegram` reads `summary`, `grouping` reads `tags` and
+`<embedding>_embedding`, and `digest` and `search` read `markdown`.
 
 ### LLMs
 
@@ -283,8 +314,8 @@ Options of `ollama`: `api_base` (default `http://localhost:11434`),
 | `feedgenerator` | `feedgenerator` | `feed` | RSS feed of the newest items in scope |
 | `grouping` | `singlelink` | `current` | Clusters tagged items into events (single-link over tag overlap) |
 | `grouping` | `avglink` | `current` | Clusters tagged items into events (average-link over tag overlap) |
-| `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `embed` annotations (single-link) |
-| `digest` | `digest` | `<source id>/<since>_<until>` | Markdown digest of the highlights of each source in scope, written with an LLM from `markdownify.markdown` |
+| `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `tags_embedding` or `markdown_embedding` (single-link) |
+| `digest` | `digest` | `<source id>/<since>_<until>` | Markdown digest of the highlights of each source in scope, written with an LLM from `markdown` |
 
 Options:
 
@@ -303,7 +334,7 @@ Options:
   it sets no `--since`). `embeddings` adds `embedding` (`tags` or
   `markdown`, default `tags`) and `embedding_weight` (0 to 1, default 0.5).
   Items without the annotations a remixer reads are left out of its groups,
-  so `embeddings` needs `enrich` to have run `embed` first.
+  so `embeddings` needs `enrich` to have run `embed` with that input first.
 
 Artifacts are rebuilt each time their remixer runs, so between runs they can
 lag behind the stored items. Remixers never act outside newsmerger.
@@ -336,8 +367,8 @@ How `deliver` behaves:
 - Each run queues what is new, then delivers what is due. Without `--since`
   or `--item` (`--artifact` for artifact sinks), new means the subjects of
   the last `lookback` hours without a delivery yet; `telegram` only queues
-  items `summarize` finished. Run `deliver` (or `run`) periodically, e.g.
-  from cron every few minutes.
+  items whose `summary` run finished. Run `deliver` (or `run`)
+  periodically, e.g. from cron every few minutes.
 - Items go out oldest first per source. A failed delivery is retried like a
   processor's, holding back the rest of its source until it succeeds or runs
   out of attempts; `--requeue` gives the failed ones in scope fresh attempts.
@@ -361,7 +392,7 @@ it), not by copying `data.db` alone.
 
 The schema is created, never migrated: after an upgrade that changes it,
 move the old `data.db` and `content_dir` aside and re-import. New tables are
-added on their own. Two upgrades come with a one-shot script for existing
+added on their own. Three upgrades come with a one-shot script for existing
 databases (back up first):
 
 - `scripts/migrate_autoincrement.py -c config.yaml`: ids that are never
@@ -369,6 +400,10 @@ databases (back up first):
 - `scripts/migrate_telegram_state.py -c config.yaml`: turns the old
   `telegram/state` artifact into deliveries. Run it before the first
   `deliver telegram`, or the last `lookback` hours are posted again.
+- `sqlite3 -bail data.db < scripts/migrate_annotation_keys.sql`: keys
+  processing state and annotations by annotation key (the `enrich` section),
+  keeping every row and id. Run it before the first `enrich` on the new
+  schema.
 
 Commands that write take a lock next to the database (`data.db.lock`), so
 a second one fails at once instead of running alongside the first.

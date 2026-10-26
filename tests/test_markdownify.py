@@ -36,7 +36,7 @@ class MarkdownifyPdfTests(unittest.TestCase):
 
     def test_extracts_the_text_of_every_page(self) -> None:
         content = make_pdf("Primera pagina", "Segunda pagina")
-        markdown = self.process(content)["markdown"]
+        markdown = self.process(content)
 
         self.assertEqual(markdown, "# Acta\n\nPrimera pagina\n\nSegunda pagina")
 

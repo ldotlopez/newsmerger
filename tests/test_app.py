@@ -32,7 +32,9 @@ class ApplicationTests(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def make_app(
-        self, plugins: str = "  markdownify:\n  feedgenerator: {title: Test feed}\n"
+        self,
+        plugins: str = "  markdownify:\n  feedgenerator: {title: Test feed}\n",
+        enrich: str = "enrich: [markdownify]\n",
     ) -> Application:
         config = Config.from_text(
             f"""
@@ -49,6 +51,7 @@ plugins:
   prensaiberica:
   csjuntasgobierno:
 {plugins}
+{enrich}
 db:
   uri: sqlite:///{self.tmp_dir}/data.db
   content_dir: {self.tmp_dir}/content
@@ -117,9 +120,9 @@ cache:
     def test_enrich_then_remix(self) -> None:
         item = self.import_sample()
 
-        self.assertEqual(self.app.run_processor("markdownify").done, 1)
-        self.assertEqual(self.app.run_processor("markdownify").done, 0)
-        markdown = self.app.get_annotations(item)["markdownify"]["markdown"]
+        self.assertEqual(self.app.run_enrich("markdown").done, 1)
+        self.assertEqual(self.app.run_enrich("markdown").done, 0)
+        markdown = self.app.get_annotations(item)["markdown"]
         self.assertIn("asedio carlista", markdown)
 
         self.assertEqual(self.app.run_remixer("feedgenerator"), ["feed"])
@@ -129,7 +132,7 @@ cache:
 
     def test_delete_annotations_makes_the_item_pending_again(self) -> None:
         item = self.import_sample()
-        self.app.run_processor("markdownify")
+        self.app.run_enrich("markdown")
 
         self.assertEqual(
             self.app.delete_annotations(processor="markdownify", item_id=item.id), 1
@@ -137,7 +140,7 @@ cache:
 
         self.assertEqual(self.app.get_annotations(item), {})
         scope = ProcessingScope(source="mediterraneo")
-        self.assertEqual(self.app.run_processor("markdownify", scope=scope).done, 1)
+        self.assertEqual(self.app.run_enrich("markdown", scope=scope).done, 1)
 
     def test_write_lock_is_exclusive_until_close(self) -> None:
         self.app.lock()
@@ -168,7 +171,9 @@ cache:
 
     def test_only_loaded_plugins_run(self) -> None:
         with self.assertRaisesRegex(ConfigError, "processor 'summarize' is not loaded"):
-            self.app.run_processor("summarize")
+            self.app.enrich_keys("summarize")
+        with self.assertRaisesRegex(ConfigError, "no enrich entry writes the key"):
+            self.app.run_enrich("summary")
         with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is not loaded"):
             self.app.run_remixer("avglink")
         with self.assertRaisesRegex(ConfigError, "sink 'telegram' is not loaded"):
@@ -182,6 +187,51 @@ cache:
 
         self.assertEqual(self.app.processors, ["markdownify"])
         self.assertEqual(self.app.remixers, ["feedgenerator", "avglink", "singlelink"])
+
+    def test_enrich_entries_run_in_order_each_with_its_key(self) -> None:
+        self.app.close()
+        self.app = self.make_app(
+            enrich="enrich:\n  - markdownify\n"
+            "  - {processor: markdownify, options: {key: markdown/copy}}\n"
+        )
+        item = self.import_sample()
+
+        self.assertEqual(self.app.enrich_keys(), ["markdown", "markdown/copy"])
+        self.assertEqual(self.app.enrich_keys("markdownify"), self.app.enrich_keys())
+        self.assertEqual(self.app.run_enrich("markdown").done, 1)
+        # Its own state: the first run being done does not skip it.
+        self.assertEqual(self.app.run_enrich("markdown/copy").done, 1)
+        annotations = self.app.get_annotations(item)
+        self.assertEqual(annotations["markdown"], annotations["markdown/copy"])
+
+    def test_invalid_enrich_entries_are_config_errors(self) -> None:
+        for enrich, message in (
+            ("enrich: [summarize]\n", "processor 'summarize' is not loaded"),
+            (
+                "enrich: [{processor: markdownify, options: {model: m}}]\n",
+                r"enrich\.0\.options: got an unexpected keyword argument 'model'",
+            ),
+            (
+                "enrich: [{processor: markdownify, options: {key: Mark Down}}]\n",
+                r"enrich\.0: invalid key 'Mark Down'",
+            ),
+            (
+                "enrich: [markdownify, markdownify]\n",
+                r"enrich\.1: key 'markdown' is written by another entry",
+            ),
+        ):
+            with (
+                self.subTest(enrich=enrich),
+                self.assertRaisesRegex(ConfigError, message),
+            ):
+                self.make_app(enrich=enrich)
+
+    def test_unlisted_processors_load_but_never_run(self) -> None:
+        self.app.close()
+        self.app = self.make_app(enrich="")
+
+        self.assertEqual(self.app.processors, ["markdownify"])
+        self.assertEqual(self.app.enrich_keys(), [])
 
     def test_invalid_plugin_options_report_their_config_path(self) -> None:
         with self.assertRaisesRegex(
@@ -203,7 +253,9 @@ cache:
 
     def test_llm_consumers_get_the_llm_of_a_plugin_listed_before(self) -> None:
         self.app.close()
-        self.app = self.make_app("  ollama:\n  summarize:\n  embed: {llm: ollama}\n")
+        self.app = self.make_app(
+            "  ollama:\n  summarize:\n  embed: {llm: ollama}\n", enrich=""
+        )
 
         llm = self.app._processors["summarize"].llm
         self.assertIsInstance(llm, OllamaLLM)
@@ -211,16 +263,17 @@ cache:
 
     def test_llm_consumers_without_their_llm_load_but_process_nothing(self) -> None:
         self.app.close()
-        self.app = self.make_app("  markdownify:\n  tagger:\n  ollama:\n")
+        self.app = self.make_app(
+            "  markdownify:\n  tagger:\n  ollama:\n",
+            enrich="enrich: [markdownify, tagger]\n",
+        )
         self.import_sample()
 
         with self.assertLogs("newsmerger.processors", "ERROR") as logs:
-            summaries = {
-                name: self.app.run_processor(name) for name in ("markdownify", "tagger")
-            }
+            summaries = {key: self.app.run_enrich(key) for key in ("markdown", "tags")}
 
-        self.assertEqual(summaries["markdownify"].done, 1)
-        self.assertEqual(summaries["tagger"], RunSummary())
+        self.assertEqual(summaries["markdown"].done, 1)
+        self.assertEqual(summaries["tags"], RunSummary())
         self.assertIn(
             "tagger: no llm is loaded (llm plugins must be listed before the plugins that use them); nothing processed",
             logs.output[0],

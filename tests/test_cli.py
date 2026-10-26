@@ -45,14 +45,17 @@ class CommandTests(unittest.TestCase):
         self.assertIn("site down", result.output)
         self.assertIn("1 source(s) failed", result.output)
 
-    def test_enrich_runs_one_processor_with_scope_and_force(self) -> None:
+    def test_enrich_runs_every_entry_of_one_processor_with_scope_and_force(
+        self,
+    ) -> None:
         app = Mock()
-        app.run_processor.return_value = RunSummary(done=2)
+        app.enrich_keys.return_value = ["summary/es", "summary/en"]
+        app.run_enrich.return_value = RunSummary(done=2)
 
         result = invoke(
             app,
             "enrich",
-            "markdownify",
+            "summarize",
             "--source",
             "plaza",
             "--item",
@@ -65,24 +68,29 @@ class CommandTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.run_processor.assert_called_once_with(
-            "markdownify",
-            scope=ProcessingScope(source="plaza", item_ids=(3, 4), limit=5),
-            force=True,
+        app.enrich_keys.assert_called_once_with("summarize")
+        scope = ProcessingScope(source="plaza", item_ids=(3, 4), limit=5)
+        self.assertEqual(
+            app.run_enrich.call_args_list,
+            [
+                call("summary/es", scope=scope, force=True),
+                call("summary/en", scope=scope, force=True),
+            ],
         )
 
-    def test_enrich_without_processor_runs_every_configured_one(self) -> None:
+    def test_enrich_without_processor_runs_every_entry(self) -> None:
         app = Mock()
-        app.processors = ["markdownify"]
-        app.run_processor.return_value = RunSummary(done=1)
+        app.enrich_keys.return_value = ["markdown"]
+        app.run_enrich.return_value = RunSummary(done=1)
 
         result = invoke(app, "enrich")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.run_processor.assert_called_once_with(
-            "markdownify", scope=ProcessingScope(), force=False
+        app.enrich_keys.assert_called_once_with(None)
+        app.run_enrich.assert_called_once_with(
+            "markdown", scope=ProcessingScope(), force=False
         )
-        self.assertIn("markdownify", result.output)
+        self.assertIn("markdown", result.output)
 
     def test_remix_runs_one_or_every_remixer(self) -> None:
         app = Mock()
@@ -151,8 +159,8 @@ class CommandTests(unittest.TestCase):
     def test_run_goes_on_after_a_failed_phase_and_exits_with_error(self) -> None:
         app = Mock()
         app.sources = []
-        app.processors = ["summarize"]
-        app.run_processor.side_effect = RuntimeError("llm down")
+        app.enrich_keys.return_value = ["summary"]
+        app.run_enrich.side_effect = RuntimeError("llm down")
         app.remixers = ["feedgenerator"]
         app.run_remixer.return_value = ["feed"]
         app.sinks = ["telegram"]
@@ -189,14 +197,12 @@ class CommandTests(unittest.TestCase):
 
     def test_user_errors_are_reported_without_traceback(self) -> None:
         app = Mock()
-        app.run_processor.side_effect = ConfigError(
-            "processor 'nope' is not configured"
-        )
+        app.enrich_keys.side_effect = ConfigError("processor 'nope' is not loaded")
 
         result = invoke(app, "enrich", "nope")
 
         self.assertEqual(result.exit_code, 1)
-        self.assertIn("processor 'nope' is not configured", result.output)
+        self.assertIn("processor 'nope' is not loaded", result.output)
         self.assertNotIn("Traceback", result.output)
 
 

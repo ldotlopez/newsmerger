@@ -106,7 +106,7 @@ class TelegramClient:
 
 class TelegramSink(BaseItemSink):
     name = "telegram"
-    requires = "summarize"
+    requires = "summary"
 
     def __init__(self, client: TelegramClient, cfg: ItemSinkOptions) -> None:
         super().__init__(max_retries=cfg.max_retries, lookback=cfg.lookback)
@@ -131,9 +131,7 @@ class TelegramSink(BaseItemSink):
         ]
 
     def send(self, db: Database, subject: SourceItem) -> dict[str, int]:
-        summaries = db.get_annotation_values(
-            [subject], processor="summarize", key="summary"
-        )
+        summaries = db.get_annotation_values([subject], key="summary")
         caption = build_caption(subject.title, str(summaries[subject.key]), subject.uri)
         image = subject.data.get("image")
         if isinstance(image, str) and image.strip():

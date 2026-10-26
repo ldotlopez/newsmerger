@@ -357,75 +357,100 @@ class ProcessingTests(DatabaseTestCase):
         self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v1")])
         (self.item,) = self.db.get_items()
 
-    def unprocessed_uids(self, processor: str, **kwargs) -> list[str]:
+    def unprocessed_uids(self, key: str, **kwargs) -> list[str]:
         kwargs.setdefault("version", None)
         kwargs.setdefault("max_retries", 3)
-        return [i.uid for i in self.db.get_unprocessed_items(processor, **kwargs)]
+        return [i.uid for i in self.db.get_unprocessed_items(key, **kwargs)]
 
-    def attempts(self, processor: str) -> int:
+    def attempts(self, key: str) -> int:
         with self.db.session_scope() as sess:
-            return (
-                sess.query(DBProcessingState)
-                .filter_by(processor=processor)
-                .one()
-                .attempts
-            )
+            return sess.query(DBProcessingState).filter_by(key=key).one().attempts
 
     def test_done_item_is_eligible_again_after_its_content_changes(self):
-        self.db.record_result(self.item, "markdownify", ProcessingStatus.DONE)
-        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+        self.db.record_result(
+            self.item, "markdownify", "markdown", ProcessingStatus.DONE
+        )
+        self.assertEqual(self.unprocessed_uids("markdown"), [])
 
         self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v2")])
 
-        self.assertEqual(self.unprocessed_uids("markdownify"), ["a1"])
+        self.assertEqual(self.unprocessed_uids("markdown"), ["a1"])
 
     def test_version_change_makes_done_items_eligible(self):
         self.db.record_result(
-            self.item, "markdownify", ProcessingStatus.DONE, version="1"
+            self.item, "markdownify", "markdown", ProcessingStatus.DONE, version="1"
         )
 
-        self.assertEqual(self.unprocessed_uids("markdownify", version="1"), [])
-        self.assertEqual(self.unprocessed_uids("markdownify", version="2"), ["a1"])
+        self.assertEqual(self.unprocessed_uids("markdown", version="1"), [])
+        self.assertEqual(self.unprocessed_uids("markdown", version="2"), ["a1"])
 
     def test_ignored_item_is_only_revisited_when_forced(self):
-        self.db.record_result(self.item, "markdownify", ProcessingStatus.IGNORED)
+        self.db.record_result(
+            self.item, "markdownify", "markdown", ProcessingStatus.IGNORED
+        )
 
-        self.assertEqual(self.unprocessed_uids("markdownify"), [])
-        self.assertEqual(self.unprocessed_uids("markdownify", force=True), ["a1"])
+        self.assertEqual(self.unprocessed_uids("markdown"), [])
+        self.assertEqual(self.unprocessed_uids("markdown", force=True), ["a1"])
 
     def test_errors_stop_at_max_retries(self):
         for _ in range(3):
-            self.db.record_result(self.item, "markdownify", ProcessingStatus.ERROR)
+            self.db.record_result(
+                self.item, "markdownify", "markdown", ProcessingStatus.ERROR
+            )
 
-        self.assertEqual(self.attempts("markdownify"), 3)
-        self.assertEqual(self.unprocessed_uids("markdownify"), [])
+        self.assertEqual(self.attempts("markdown"), 3)
+        self.assertEqual(self.unprocessed_uids("markdown"), [])
 
     def test_forced_run_resets_attempts(self):
         for _ in range(3):
-            self.db.record_result(self.item, "markdownify", ProcessingStatus.ERROR)
+            self.db.record_result(
+                self.item, "markdownify", "markdown", ProcessingStatus.ERROR
+            )
 
         self.db.record_result(
-            self.item, "markdownify", ProcessingStatus.ERROR, reset_attempts=True
+            self.item,
+            "markdownify",
+            "markdown",
+            ProcessingStatus.ERROR,
+            reset_attempts=True,
         )
 
-        self.assertEqual(self.attempts("markdownify"), 1)
+        self.assertEqual(self.attempts("markdown"), 1)
 
     def test_requires_waits_for_upstream_done_on_current_content(self):
-        self.assertEqual(self.unprocessed_uids("tagger", requires="markdownify"), [])
+        self.assertEqual(self.unprocessed_uids("tags", requires="markdown"), [])
 
-        self.db.record_result(self.item, "markdownify", ProcessingStatus.DONE)
-        self.assertEqual(
-            self.unprocessed_uids("tagger", requires="markdownify"), ["a1"]
+        self.db.record_result(
+            self.item, "markdownify", "markdown", ProcessingStatus.DONE
         )
+        self.assertEqual(self.unprocessed_uids("tags", requires="markdown"), ["a1"])
 
         self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v2")])
-        self.assertEqual(self.unprocessed_uids("tagger", requires="markdownify"), [])
+        self.assertEqual(self.unprocessed_uids("tags", requires="markdown"), [])
+
+    def test_each_key_of_a_processor_has_its_own_state(self):
+        self.db.record_result(
+            self.item, "summarize", "summary/es", ProcessingStatus.DONE, value="ES"
+        )
+
+        self.assertEqual(self.unprocessed_uids("summary/es"), [])
+        self.assertEqual(self.unprocessed_uids("summary/en"), ["a1"])
+
+    def test_failed_run_saves_no_annotation(self):
+        self.db.record_result(
+            self.item, "summarize", "summary", ProcessingStatus.ERROR, error="down"
+        )
+
+        self.assertEqual(self.db.get_annotations(self.item), {})
+        self.assertEqual(self.attempts("summary"), 1)
 
     def test_requires_skips_items_upstream_ignored_even_with_force(self):
-        self.db.record_result(self.item, "markdownify", ProcessingStatus.IGNORED)
+        self.db.record_result(
+            self.item, "markdownify", "markdown", ProcessingStatus.IGNORED
+        )
 
         self.assertEqual(
-            self.unprocessed_uids("tagger", requires="markdownify", force=True), []
+            self.unprocessed_uids("tags", requires="markdown", force=True), []
         )
 
 
@@ -436,26 +461,21 @@ class AnnotationTests(DatabaseTestCase):
         self.db.upsert_source_items([make_item(self.source, uid="a1", content=b"v1")])
         (self.item,) = self.db.get_items()
 
-    def annotate(self, item: SourceItem, processor: str, **values) -> None:
-        self.db.record_result(
-            item, processor, ProcessingStatus.DONE, annotations=values
-        )
+    def annotate(self, item: SourceItem, processor: str, key: str, value) -> None:
+        self.db.record_result(item, processor, key, ProcessingStatus.DONE, value=value)
 
     def test_annotations_round_trip_through_storage(self):
-        self.annotate(self.item, "markdownify", markdown="# Title")
+        self.annotate(self.item, "markdownify", "markdown", "# Title")
 
-        self.assertEqual(
-            self.db.get_annotations(self.item), {"markdownify": {"markdown": "# Title"}}
-        )
+        self.assertEqual(self.db.get_annotations(self.item), {"markdown": "# Title"})
         self.assertEqual(len(self.stored_contents()), 2)  # item content + value
 
     def test_replaced_annotation_value_is_released(self):
-        self.annotate(self.item, "summarize", summary="first")
-        self.annotate(self.item, "summarize", summary="second")
+        self.annotate(self.item, "summarize", "summary", "first")
+        self.annotate(self.item, "summarize", "summary", "second")
 
         self.assertEqual(
-            self.db.get_annotations(self.item, processor="summarize"),
-            {"summarize": {"summary": "second"}},
+            self.db.get_annotations(self.item, key="summary"), {"summary": "second"}
         )
         self.assertEqual(len(self.stored_contents()), 2)
 
@@ -463,17 +483,18 @@ class AnnotationTests(DatabaseTestCase):
         other = make_source("other")
         self.db.upsert_source_items([make_item(other, uid="a1", content=b"x")])
         items = self.db.get_items()
-        self.annotate(self.item, "tagger", tags=["a"])
+        self.annotate(self.item, "tagger", "tags", ["a"])
 
-        values = self.db.get_annotation_values(items, processor="tagger", key="tags")
+        values = self.db.get_annotation_values(items, key="tags")
 
         self.assertEqual(values, {("example", "a1"): ["a"]})
 
     def test_get_annotation_keys_lists_ids_processors_and_keys_by_item(self):
         other = make_item(self.source, uid="a2", content=b"x")
         self.db.upsert_source_items([other])
-        self.annotate(self.item, "tagger", tags=["a"], tags_text="a")
-        self.annotate(self.item, "markdownify", markdown="# T")
+        self.annotate(self.item, "tagger", "tags", ["a"])
+        self.annotate(self.item, "embed", "tags_embedding", [0.5])
+        self.annotate(self.item, "markdownify", "markdown", "# T")
 
         keys = self.db.get_annotation_keys([self.item.id, other.id])
 
@@ -481,9 +502,9 @@ class AnnotationTests(DatabaseTestCase):
             keys,
             {
                 self.item.id: [
+                    (2, "embed", "tags_embedding"),
                     (3, "markdownify", "markdown"),
                     (1, "tagger", "tags"),
-                    (2, "tagger", "tags_text"),
                 ]
             },
         )
@@ -491,9 +512,10 @@ class AnnotationTests(DatabaseTestCase):
     def test_find_annotations_combines_scope_processor_key_ids_and_limit(self):
         other = make_item(self.source, uid="a2", content=b"x")
         self.db.upsert_source_items([other])
-        self.annotate(self.item, "tagger", tags=["a"], tags_text="a")
-        self.annotate(other, "tagger", tags=["b"])
-        self.annotate(other, "markdownify", markdown="# T")
+        self.annotate(self.item, "tagger", "tags", ["a"])
+        self.annotate(self.item, "embed", "tags_embedding", [0.5])
+        self.annotate(other, "tagger", "tags", ["b"])
+        self.annotate(other, "markdownify", "markdown", "# T")
 
         def found(scope=None, **filters) -> list[tuple[int, str, str]]:
             return [
@@ -513,27 +535,25 @@ class AnnotationTests(DatabaseTestCase):
             [(self.item.id, "tagger.tags", ["a"]), (other.id, "tagger.tags", ["b"])],
         )
         self.assertEqual(
-            found(annotation_ids=[2]), [(self.item.id, "tagger.tags_text", "a")]
+            found(annotation_ids=[2]), [(self.item.id, "embed.tags_embedding", [0.5])]
         )
         self.assertEqual(len(found(ProcessingScope(limit=3))), 3)
 
     def test_delete_by_item_and_processor_makes_the_item_pending(self):
-        self.annotate(self.item, "markdownify", markdown="# Title")
-        self.annotate(self.item, "tagger", tags=["a"])
+        self.annotate(self.item, "markdownify", "markdown", "# Title")
+        self.annotate(self.item, "tagger", "tags", ["a"])
 
         deleted = self.db.delete_annotations(
             processor="markdownify", item_id=self.item.id
         )
 
         self.assertEqual(deleted, 1)
-        self.assertEqual(
-            self.db.get_annotations(self.item), {"tagger": {"tags": ["a"]}}
-        )
+        self.assertEqual(self.db.get_annotations(self.item), {"tags": ["a"]})
         self.assertEqual(
             [
                 i.uid
                 for i in self.db.get_unprocessed_items(
-                    "markdownify", version=None, max_retries=3
+                    "markdown", version=None, max_retries=3
                 )
             ],
             ["a1"],
@@ -545,7 +565,7 @@ class AnnotationTests(DatabaseTestCase):
         other = make_source("other")
         self.db.upsert_source_items([make_item(other, uid="b1", content=b"x")])
         for item in self.db.get_items():
-            self.annotate(item, "tagger", tags=[item.uid])
+            self.annotate(item, "tagger", "tags", [item.uid])
 
         self.assertEqual(self.db.delete_annotations(processor="tagger"), 2)
         self.assertEqual(self.count(DBProcessingState), 0)
@@ -623,7 +643,7 @@ class DeliveryTests(DatabaseTestCase):
 
     def summarize(self, item: SourceItem) -> None:
         self.db.record_result(
-            item, "summarize", ProcessingStatus.DONE, annotations={"summary": "S"}
+            item, "summarize", "summary", ProcessingStatus.DONE, value="S"
         )
 
     def test_queue_items_once_in_fifo_order_and_only_finished_upstream(self):
@@ -631,10 +651,10 @@ class DeliveryTests(DatabaseTestCase):
         self.summarize(self.items[2])
 
         queued = self.db.queue_item_deliveries(
-            "telegram", ProcessingScope(), requires="summarize"
+            "telegram", ProcessingScope(), requires="summary"
         )
         again = self.db.queue_item_deliveries(
-            "telegram", ProcessingScope(), requires="summarize"
+            "telegram", ProcessingScope(), requires="summary"
         )
 
         self.assertEqual((queued, again), (2, 0))
@@ -745,8 +765,9 @@ class DeleteTests(DatabaseTestCase):
             self.db.record_result(
                 item,
                 "summarize",
+                "summary",
                 ProcessingStatus.DONE,
-                annotations={"summary": f"S {item.uid}"},
+                value=f"S {item.uid}",
             )
         self.db.queue_item_deliveries("telegram", ProcessingScope())
 
