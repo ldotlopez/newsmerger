@@ -10,7 +10,7 @@ from pathlib import Path
 
 from newsmerger.db import Database, ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceData, SourceItem
-from newsmerger.plugins import Services, grouping, rssfeed
+from newsmerger.plugins import Services, feedgenerator, grouping
 from newsmerger.remixers import Remixer
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
@@ -45,9 +45,9 @@ class RemixerTestCase(unittest.TestCase):
         return self.db.get_items()
 
 
-class RSSFeedTests(RemixerTestCase):
+class FeedGeneratorTests(RemixerTestCase):
     def feed(self, **params) -> ET.Element:
-        remixer = rssfeed.RSSFeedRemixer(rssfeed.Options(**params))
+        remixer = feedgenerator.FeedGeneratorRemixer(feedgenerator.Options(**params))
         (artifact,) = remixer.produce(self.db, ProcessingScope())
         name, content, content_type = artifact
         self.assertEqual((name, content_type), ("feed", "application/rss+xml"))

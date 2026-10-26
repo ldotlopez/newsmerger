@@ -167,7 +167,7 @@ class ItemSinkTests(SinkTestCase):
 class ArtifactSinkTests(SinkTestCase):
     def test_delivers_new_artifacts_of_its_remixers_once(self) -> None:
         self.db.save_artifact(Artifact("digest", "a/1", "# A", "text/markdown"))
-        self.db.save_artifact(Artifact("rssfeed", "feed", "<rss/>", "text/xml"))
+        self.db.save_artifact(Artifact("feedgenerator", "feed", "<rss/>", "text/xml"))
         sink = RecordingArtifactSink()
 
         sink.deliver(self.db)

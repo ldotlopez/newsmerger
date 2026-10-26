@@ -19,7 +19,7 @@ from pydantic import PositiveInt
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URLProvider
+from ..providers import Provider
 from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
@@ -131,9 +131,6 @@ class TelegramChannelProvider:
                 raise ValueError(f"no posts in '{source.url}': not a public channel?")
             yield from posts
 
-    def retrieve_item(self, url: str, fetcher: HTTPClient) -> SourceItemData:
-        return parse_article(fetcher.get(url))
-
     def retrieve_items(
         self, source: SourceData, fetcher: HTTPClient
     ) -> Iterator[SourceItemData]:
@@ -151,4 +148,4 @@ class TelegramChannelProvider:
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     cfg = Options.model_validate(options)
-    return [("telegram_channel", URLProvider, TelegramChannelProvider(cfg.pages))]
+    return [("telegram_channel", Provider, TelegramChannelProvider(cfg.pages))]

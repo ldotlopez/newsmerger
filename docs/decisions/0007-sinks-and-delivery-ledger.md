@@ -156,8 +156,8 @@ What matters is not item versus collection but derived versus recorded:
   digest/...` takes the dated name. The old undated `digest/<source>`
   artifacts fall outside `lookback` once they are more than 24 hours old.
 - A file-export sink (RSS to a file to be served) is out of scope; the
-  feed is still written with `inspect artifacts --artifact rssfeed/feed >
-  feed.xml`.
+  feed is still written with
+  `inspect artifacts --artifact feedgenerator/feed > feed.xml`.
 
 ## Revisions
 

@@ -2,7 +2,8 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-18
-- **Revised:** 2026-10-20 (plugin bundles loaded with `Register`)
+- **Revised:** 2026-10-20 (plugin bundles loaded with `Register`);
+  2026-10-26 (per-use options; see *Revisions*)
 - **Amended by:** 0006 (LLM plugins and the `services` argument), 0007
   (sinks and the `deliver` phase)
 
@@ -24,7 +25,7 @@ until it was first used.
 
 - **Types.** There are three plugin types: provider, processor and remixer,
   each defined by a `typing.Protocol` the core consumes (`Provider`,
-  `URLProvider`, `Processor`, `Remixer`). Remixers read items, annotations
+  `Processor`, `Remixer`). Remixers read items, annotations
   and other remixers' artifacts, and produce artifacts; they run on demand
   from the CLI.
 - **Loading.** Plugins live in one namespace, `newsmerger.plugins`, and are
@@ -41,9 +42,17 @@ until it was first used.
   triples. The core never sees a plugin's models; it reports a
   `ValidationError` raised by an entry point as a configuration error with
   the options' path (`plugins.<plugin>.<option>`).
+- **Per-use options.** A plugin's section holds its defaults; each use
+  overrides only the options its method declares as keyword arguments. A
+  source's `provider_options` reach its provider's `retrieve_items`, which
+  declares each one (never `**kwargs`) and falls back to its section's value.
+  When `Application` is built, the core binds every source's options to that
+  signature and reports a mismatch as a configuration error
+  (`sources.<id>.provider_options`). They live in the configuration only:
+  the database does not store them.
 - **Objects.** Objects are built once and receive what each task needs as
-  method arguments: providers the source and HTTP client, processors and
-  remixers the database and the scope.
+  method arguments: providers the source, the HTTP client and the source's
+  provider options, processors and remixers the database and the scope.
 - **Names.** Object names are unique per type across plugins and are what
   sources, annotations, artifacts and the CLI refer to. Processors and
   remixers own their name, a class attribute, and are registered under it;
@@ -56,8 +65,6 @@ until it was first used.
   never import each other: they share data through annotations (`llm.embed`
   stores the vectors `grouping.embeddings` reads). Code used by a single
   bundle, such as clustering, lives in that bundle.
-- **Pipelines.** Processor chains over one item stay outside the core, as
-  scripts in `scripts/` built on `Application`.
 
 ## Rejected options
 
@@ -84,6 +91,12 @@ until it was first used.
   same methods apart, so remixers were loaded as processors and vice versa.
   A marker method per protocol would be noise, and registering against base
   classes instead of protocols would force inheritance.
+- **Per-use options checked when the provider is called**, a `TypeError`
+  as the error. It would surface only on import, and a `TypeError` raised
+  inside the provider would read as a bad option.
+- **A map of per-source values in the plugin's section** (source id →
+  value). A mistyped source id goes unnoticed, since a plugin never sees the
+  sources, and a source's settings end up in two places.
 - **Options passed as one positional dict.** It avoids reserved option
   names, but entry points take keyword arguments. Making `register()`'s
   `name` positional-only would also avoid them, but foundation stays as is.
@@ -98,8 +111,17 @@ until it was first used.
 - Every loaded plugin is imported and built on start-up, so a broken plugin
   or invalid options fail every command, including read-only ones.
 - A new plugin type needs a method name of its own: a protocol whose methods
-  are a subset of another's is taken as its parent, which is only intended
-  for `URLProvider` and `Provider`.
+  are a subset of another's is taken as its parent.
 - `name` and `self` cannot be plugin options: they are `register()`'s own
   parameters.
 - Grouping with embeddings needs `enrich` to have run `embed` first.
+- A source that gives its provider an option it does not declare fails
+  every command at start-up, like invalid plugin options.
+
+## Revisions
+
+- **2026-10-26.** Added per-use options. Discarded: `URLProvider`, the
+  single-URL import (`import-url`) that used it, and external pipelines
+  (processor chains over one item as scripts in `scripts/`, built on that
+  import). Neither was in use; both may return on a model that fits
+  sources defined on the fly.

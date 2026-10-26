@@ -37,7 +37,6 @@ date-based change rule.
   duplicates twice.
 - A source's `url` or `provider` can change without losing its items;
   renaming its `id` orphans them.
-- Single-URL imports must name a configured source.
 - Re-importing an identical item writes nothing. Sources without dates are
   no longer reimported on every run.
 - A content change makes every processing state of the item eligible again.
@@ -49,3 +48,6 @@ date-based change rule.
   `--source` and `--uid`, too long to type with sha256 uids. Remains:
   `(source id, uid)` as the item's identity; the numeric `id` is added as
   a local handle.
+- **2026-10-26 (0003).** Discarded: single-URL imports into a configured
+  source, removed with `import-url`. Remains: every item belongs to a
+  configured source.

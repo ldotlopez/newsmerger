@@ -34,18 +34,6 @@ def invoke(app: Mock, *args: str):
 
 
 class CommandTests(unittest.TestCase):
-    def test_import_url_passes_source_id_and_url(self) -> None:
-        app = Mock()
-        app.import_url.return_value = SourceItem(
-            source=SOURCE, uid="1", title="Imported title", uri="https://plaza.test/1"
-        )
-
-        result = invoke(app, "import-url", "--source", "plaza", "https://plaza.test/1")
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        app.import_url.assert_called_once_with("plaza", "https://plaza.test/1")
-        self.assertIn("Imported 'Imported title'", result.output)
-
     def test_import_reports_failed_sources_and_exits_with_error(self) -> None:
         app = Mock()
         app.sources = [SOURCE]
@@ -98,17 +86,17 @@ class CommandTests(unittest.TestCase):
 
     def test_remix_runs_one_or_every_remixer(self) -> None:
         app = Mock()
-        app.remixers = ["rssfeed", "digest"]
+        app.remixers = ["feedgenerator", "digest"]
         app.run_remixer.return_value = ["feed"]
 
-        self.assertEqual(invoke(app, "remix", "rssfeed").exit_code, 0)
+        self.assertEqual(invoke(app, "remix", "feedgenerator").exit_code, 0)
         self.assertEqual(invoke(app, "remix").exit_code, 0)
 
         self.assertEqual(
             app.run_remixer.call_args_list,
             [
-                call("rssfeed", scope=ProcessingScope()),
-                call("rssfeed", scope=ProcessingScope()),
+                call("feedgenerator", scope=ProcessingScope()),
+                call("feedgenerator", scope=ProcessingScope()),
                 call("digest", scope=ProcessingScope()),
             ],
         )
@@ -165,7 +153,7 @@ class CommandTests(unittest.TestCase):
         app.sources = []
         app.processors = ["summarize"]
         app.run_processor.side_effect = RuntimeError("llm down")
-        app.remixers = ["rssfeed"]
+        app.remixers = ["feedgenerator"]
         app.run_remixer.return_value = ["feed"]
         app.sinks = ["telegram"]
         app.run_sink.return_value = RunSummary(done=1)
@@ -174,7 +162,7 @@ class CommandTests(unittest.TestCase):
             result = invoke(app, "run")
 
         self.assertEqual(result.exit_code, 1)
-        app.run_remixer.assert_called_once_with("rssfeed")
+        app.run_remixer.assert_called_once_with("feedgenerator")
         app.run_sink.assert_called_once_with("telegram")
         self.assertIn("1 failure(s)", result.output)
         # Summaries are results: stdout only, after the progress rows.
@@ -446,16 +434,18 @@ class InspectCommandTests(unittest.TestCase):
     def test_artifacts_lists_metadata(self) -> None:
         app = Mock()
         app.list_artifacts.return_value = [
-            Artifact("rssfeed", "feed", None, "application/rss+xml", updated_at=NOW)
+            Artifact(
+                "feedgenerator", "feed", None, "application/rss+xml", updated_at=NOW
+            )
         ]
 
-        result = invoke(app, "inspect", "artifacts", "--remixer", "rssfeed")
+        result = invoke(app, "inspect", "artifacts", "--remixer", "feedgenerator")
 
         self.assertEqual(result.exit_code, 0, result.output)
         app.list_artifacts.assert_called_once_with(
-            "rssfeed", names=None, limit=None, sort="updated"
+            "feedgenerator", names=None, limit=None, sort="updated"
         )
-        self.assertIn("rssfeed/feed", result.output)
+        self.assertIn("feedgenerator/feed", result.output)
         self.assertIn("application/rss+xml", result.output)
         app.get_artifact.assert_not_called()
 
@@ -487,10 +477,10 @@ class InspectCommandTests(unittest.TestCase):
         app = Mock()
         app.list_artifacts.return_value = []
 
-        result = invoke(app, "inspect", "artifacts", "--artifact", "rssfeed/nope")
+        result = invoke(app, "inspect", "artifacts", "--artifact", "feedgenerator/nope")
 
         self.assertEqual(result.exit_code, 1)
-        self.assertIn("no artifact rssfeed/nope in the selection", result.output)
+        self.assertIn("no artifact feedgenerator/nope in the selection", result.output)
 
     def test_deliveries_show_their_subject_and_state(self) -> None:
         app = Mock()
@@ -529,10 +519,10 @@ class InspectCommandTests(unittest.TestCase):
         self.assertIn("chat not", result.output)
 
     def test_malformed_artifact_id_is_a_usage_error(self) -> None:
-        result = invoke(Mock(), "inspect", "artifacts", "--artifact", "rssfeed")
+        result = invoke(Mock(), "inspect", "artifacts", "--artifact", "feedgenerator")
 
         self.assertEqual(result.exit_code, 2)
-        self.assertIn("'rssfeed' is not <remixer>/<name>", result.output)
+        self.assertIn("'feedgenerator' is not <remixer>/<name>", result.output)
 
 
 if __name__ == "__main__":

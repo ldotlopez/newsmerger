@@ -25,8 +25,8 @@ the newest rows lets their ids be reused.
 
 - **Ids.** Items and annotations are selected by their numeric database
   `id` (`--item 4127`, `--annotation 512`). Artifacts keep `remixer/name`
-  (`--artifact rssfeed/feed`), split at the first `/`, so dated `digest`
-  names (`digest/<source>/<since>_<until>`) work. Deliveries are selected
+  (`--artifact feedgenerator/feed`), split at the first `/`, so dated
+  `digest` names (`digest/<source>/<since>_<until>`) work. Deliveries are selected
   by their subject. The identity of an item is still `(source id, uid)`
   (decision 0001); the numeric id is a local handle of one database.
 - **`AUTOINCREMENT`.** Every table with an integer id uses it
@@ -66,7 +66,8 @@ the newest rows lets their ids be reused.
     `Sink · Subject · Status · Attempts · Updated`.
   - One `--annotation` or `--artifact` in table format prints the full
     value or content to stdout and its metadata to stderr, so it can be
-    redirected (`inspect artifacts --artifact rssfeed/feed > feed.xml`).
+    redirected
+    (`inspect artifacts --artifact feedgenerator/feed > feed.xml`).
   - JSON is always a list on stdout, dates in ISO 8601 UTC. Items carry
     every stored field but `content`, plus `annotations: [{id, processor,
     key}]`. Annotations carry their full value. Artifacts carry `content`
@@ -128,7 +129,7 @@ the newest rows lets their ids be reused.
   new ones get `AUTOINCREMENT` from `create_all`.
 - Scripts that call `items`, `annotations`, `artifact` or `--uid` must
   change; the RSS feed is written with `inspect artifacts --artifact
-  rssfeed/feed > feed.xml`.
+  feedgenerator/feed > feed.xml`.
 - `delete` needs the ledger of decision 0007 to know what was delivered,
   so it comes after it; `inspect` comes before it, and `inspect
   deliveries` with it.

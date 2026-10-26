@@ -25,8 +25,8 @@ class Options(PluginOptions):
     max_items: int = 100
 
 
-class RSSFeedRemixer(BaseRemixer):
-    name = "rssfeed"
+class FeedGeneratorRemixer(BaseRemixer):
+    name = "feedgenerator"
 
     def __init__(self, cfg: Options) -> None:
         self.title = cfg.title
@@ -74,5 +74,5 @@ class RSSFeedRemixer(BaseRemixer):
 
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    remixer = RSSFeedRemixer(Options.model_validate(options))
+    remixer = FeedGeneratorRemixer(Options.model_validate(options))
     return [(remixer.name, Remixer, remixer)]

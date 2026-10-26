@@ -74,14 +74,16 @@ class ConfigTests(unittest.TestCase):
 
     def test_comments_are_not_expanded(self) -> None:
         with patch.dict("os.environ", clear=True):
-            config = Config.from_text("# needs ${API_KEY}\nplugins:\n  rssfeed:\n")
+            config = Config.from_text(
+                "# needs ${API_KEY}\nplugins:\n  feedgenerator:\n"
+            )
 
-        self.assertEqual(config.plugins, {"rssfeed": None})
+        self.assertEqual(config.plugins, {"feedgenerator": None})
 
     def test_double_dollar_is_a_literal_dollar(self) -> None:
-        config = Config.from_text("plugins:\n  rssfeed: {title: costs $$5}\n")
+        config = Config.from_text("plugins:\n  feedgenerator: {title: costs $$5}\n")
 
-        self.assertEqual(config.plugins["rssfeed"], {"title": "costs $5"})
+        self.assertEqual(config.plugins["feedgenerator"], {"title": "costs $5"})
 
     def test_sources_are_found_by_id(self) -> None:
         source = Config.from_text(SOURCE).get_source("plaza")
@@ -107,13 +109,13 @@ class ConfigTests(unittest.TestCase):
                 Config.from_text(section)
 
     def test_empty_plugin_section_enables_the_plugin(self) -> None:
-        config = Config.from_text("plugins:\n  markdownify:\n  rssfeed: {}\n")
+        config = Config.from_text("plugins:\n  markdownify:\n  feedgenerator: {}\n")
 
-        self.assertEqual(config.plugins, {"markdownify": None, "rssfeed": {}})
+        self.assertEqual(config.plugins, {"markdownify": None, "feedgenerator": {}})
 
     def test_plugin_section_must_be_a_mapping(self) -> None:
         with self.assertRaises(ConfigError):
-            Config.from_text("plugins:\n  rssfeed: [title]\n")
+            Config.from_text("plugins:\n  feedgenerator: [title]\n")
 
     def test_unconfigured_source_has_clear_error(self) -> None:
         with self.assertRaisesRegex(ConfigError, "source 'missing' is not configured"):

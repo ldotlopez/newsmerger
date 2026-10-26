@@ -27,6 +27,15 @@ sources:
     provider: theguardian
     url: https://www.theguardian.com/world/spain
 
+  # Any RSS or Atom feed. `provider_options` overrides, for this source only,
+  # the options in the provider's plugin section.
+  # - id: some-blog
+  #   name: Some blog
+  #   provider: feedreader
+  #   url: https://blog.example.com/feed.xml
+  #   provider_options:
+  #     article_selector: article .post-body  # fetch the full article
+
 cache:
   expiration: 21600
 
@@ -39,6 +48,8 @@ plugins:
   castelloninformacion:
   plaza:
   theguardian:
+  # feedreader:
+  #   article_selector: article  # default for every feedreader source
 
   # Processors.
   markdownify:
@@ -61,7 +72,7 @@ plugins:
     inputs: [tags, markdown]         # first LLM, its embed_model
 
   # Remixers.
-  rssfeed:
+  feedgenerator:
   grouping:                          # singlelink, avglink and embeddings
   digest:                            # sends a week of articles per source
     days: 7
