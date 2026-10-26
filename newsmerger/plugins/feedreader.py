@@ -34,11 +34,7 @@ class FeedReaderProvider:
         fetcher: HTTPClient,
         article_selector: str | None = None,
     ) -> Iterator[SourceItemData]:
-        feed = feedparser.parse(fetcher.get(url=str(source.url)))
-        # An empty but valid feed is fine; an HTML page has no version.
-        if not feed["entries"] and (feed.bozo or not feed.version):
-            raise ValueError(f"not a valid feed: {feed.get('bozo_exception')}")
-
+        feed = fetch_feed(str(source.url), fetcher)
         selector = article_selector or self.article_selector
         for entry in feed["entries"]:
             try:
@@ -49,6 +45,26 @@ class FeedReaderProvider:
                 yield item
             except (KeyError, ValueError) as e:
                 LOGGER.error(f"error '{e}' while parsing entry '{entry.get('link')}'")
+
+
+def fetch_feed(url: str, fetcher: HTTPClient) -> FeedParserDict:
+    content = fetcher.get(url)
+    feed = feedparser.parse(content)
+    # No version means HTML: maybe a site's home page advertising its feed.
+    if not feed.version and (feed_url := discover_feed_url(content, url)):
+        feed = feedparser.parse(fetcher.get(feed_url))
+    # An empty but valid feed is fine.
+    if not feed["entries"] and (feed.bozo or not feed.version):
+        raise ValueError(f"not a valid feed: {feed.get('bozo_exception')}")
+    return feed
+
+
+def discover_feed_url(page: bytes, page_url: str) -> str | None:
+    link = soupify(page.decode("utf-8", errors="replace")).select_one(
+        'link[rel~="alternate"][type="application/rss+xml"][href],'
+        'link[rel~="alternate"][type="application/atom+xml"][href]'
+    )
+    return urljoin(page_url, str(link["href"])) if link else None
 
 
 def parse_entry(entry: FeedParserDict) -> SourceItemData:
