@@ -1,6 +1,7 @@
 """The `googlechat` sink posts summarized items (title, summary and link) to a
 Google Chat space through an incoming webhook, given either as its `url` or
-as its `channel` (space id) and `token`. What was delivered is in the ledger
+as its `channel` (space id) and `token`, in the section (the default) or in
+each `deliver:` entry. What was delivered is in the ledger
 (`inspect deliveries`), so nothing is ever posted twice unless forced.
 """
 
@@ -14,7 +15,7 @@ from pydantic import SecretStr
 
 from ..db import Database
 from ..models import SourceItem
-from ..sinks import BaseItemSink, Sink
+from ..sinks import BaseItemSink, DeliveryOptions, Sink
 from . import PluginObjects, PluginOptions, Services
 
 # The API key Google puts in every incoming webhook URL; only the token is secret.
@@ -35,11 +36,17 @@ def build_text(title: str, summary: str, uri: str) -> str:
 
 
 class Options(PluginOptions):
+    """Defaults for every entry."""
+
     url: SecretStr | None = None
     channel: str | None = None
     token: SecretStr | None = None
-    max_retries: int = 3
-    lookback: int = 24  # hours: the candidates without --since or --item
+
+
+class WebhookOptions(DeliveryOptions):
+    url: SecretStr | None = None
+    channel: str | None = None
+    token: SecretStr | None = None
 
     @pydantic.model_validator(mode="after")
     def url_or_channel_and_token(self) -> Self:
@@ -60,20 +67,21 @@ class Options(PluginOptions):
         )
 
 
-class GoogleChatSink(BaseItemSink):
+class GoogleChatSink(BaseItemSink[WebhookOptions]):
     name = "googlechat"
     requires = "summary"
+    options_model = WebhookOptions
 
-    def __init__(self, cfg: Options) -> None:
-        super().__init__(max_retries=cfg.max_retries, lookback=cfg.lookback)
-        self.webhook_url = cfg.webhook_url()
-
-    def send(self, db: Database, subject: SourceItem) -> dict[str, str]:
+    def send(
+        self, db: Database, subject: SourceItem, options: WebhookOptions
+    ) -> dict[str, str]:
         summaries = db.get_annotation_values([subject], key="summary")
         text = build_text(subject.title, str(summaries[subject.key]), subject.uri)
         try:
             response = requests.post(
-                self.webhook_url.get_secret_value(), json={"text": text}, timeout=30
+                options.webhook_url().get_secret_value(),
+                json={"text": text},
+                timeout=30,
             )
             result = response.json()
         except requests.RequestException as e:
@@ -85,6 +93,5 @@ class GoogleChatSink(BaseItemSink):
 
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    sink = GoogleChatSink(cfg)
+    sink = GoogleChatSink(Options.model_validate(options))
     return [(sink.name, Sink, sink)]

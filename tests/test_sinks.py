@@ -4,38 +4,59 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
+import pydantic
+
+from newsmerger.db import Database, DBDelivery, DeliveryStatus, ProcessingStatus
 from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
-from newsmerger.sinks import BaseArtifactSink, BaseItemSink, SelectionRequiredError
+from newsmerger.processors import RunSummary
+from newsmerger.sinks import (
+    ArtifactDeliveryOptions,
+    BaseArtifactSink,
+    BaseItemSink,
+    DeliveryOptions,
+    SelectionRequiredError,
+)
 
 SOURCE_A = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
 SOURCE_B = SourceData(id="b", name="B", url="https://b.test/", provider="plaza")
 
 
-class RecordingItemSink(BaseItemSink):
+class RecordingItemSink(BaseItemSink[DeliveryOptions]):
     name = "recorder"
     requires = "summary"
+    options_model = DeliveryOptions
 
-    def __init__(self, failing: set[str] | None = None, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, failing: set[str] | None = None, **options) -> None:
+        super().__init__()
+        self.options = self.use_options(options)
         self.failing = failing or set()
         self.sent: list[str] = []
 
-    def send(self, db: Database, subject: SourceItem) -> dict:
+    def run(self, db: Database, **kwargs) -> RunSummary:
+        return self.deliver(db, key="recorder", options=self.options, **kwargs)
+
+    def send(self, db: Database, subject: SourceItem, options: DeliveryOptions) -> dict:
         if subject.uid in self.failing:
             raise RuntimeError(f"{subject.uid} rejected")
         self.sent.append(subject.uid)
         return {"message_id": len(self.sent)}
 
 
-class RecordingArtifactSink(BaseArtifactSink):
+class RecordingArtifactSink(BaseArtifactSink[ArtifactDeliveryOptions]):
     name = "artifact_recorder"
+    options_model = ArtifactDeliveryOptions
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(["digest"], **kwargs)
+    def __init__(self, **options) -> None:
+        super().__init__()
+        self.options = self.use_options({"artifacts": ["digest"], **options})
         self.sent: list[str] = []
 
-    def send(self, db: Database, subject: Artifact) -> dict:
+    def run(self, db: Database, **kwargs) -> RunSummary:
+        return self.deliver(db, key="artifacts", options=self.options, **kwargs)
+
+    def send(
+        self, db: Database, subject: Artifact, options: ArtifactDeliveryOptions
+    ) -> dict:
         self.sent.append(subject.name)
         return {"message_id": len(self.sent)}
 
@@ -82,8 +103,8 @@ class ItemSinkTests(SinkTestCase):
         self.add(SOURCE_A, "bare", hours_ago=1, summarized=False)
         sink = RecordingItemSink()
 
-        summary = sink.deliver(self.db)
-        sink.deliver(self.db)
+        summary = sink.run(self.db)
+        sink.run(self.db)
 
         self.assertEqual((summary.done, summary.failed), (1, 0))
         self.assertEqual(sink.sent, ["new"])
@@ -92,8 +113,40 @@ class ItemSinkTests(SinkTestCase):
         self.assertEqual(row.external_ref, {"message_id": 1})
         self.assertEqual(row.content_sha256, item.content_sha256)
 
-        sink.deliver(self.db, scope=ProcessingScope(item_ids=(old.id,)))
+        sink.run(self.db, scope=ProcessingScope(item_ids=(old.id,)))
         self.assertEqual(sink.sent, ["new", "old"])
+
+    def test_interval_paces_the_whole_entry_oldest_first(self) -> None:
+        self.add(SOURCE_B, "b1", hours_ago=3)
+        self.add(SOURCE_A, "a1", hours_ago=2)
+        sink = RecordingItemSink(interval=30)
+
+        sink.run(self.db)
+        sink.run(self.db)  # the first delivery is not 30 minutes old yet
+
+        self.assertEqual(sink.sent, ["b1"])
+        ((row, _),) = self.db.get_item_deliveries("recorder", statuses=["done"])
+        row.updated_at = self.now - timedelta(minutes=31)
+        with self.db.session_scope() as sess:  # save_delivery would stamp it now
+            sess.get_one(DBDelivery, row.id).updated_at = row.updated_at
+        sink.run(self.db)
+        self.assertEqual(sink.sent, ["b1", "a1"])
+
+    def test_max_per_run_caps_every_run(self) -> None:
+        for number in range(3):
+            self.add(SOURCE_A, f"a{number}", hours_ago=3 - number)
+        sink = RecordingItemSink(max_per_run=2)
+
+        sink.run(self.db)
+        self.assertEqual(sink.sent, ["a0", "a1"])
+        sink.run(self.db)
+        self.assertEqual(sink.sent, ["a0", "a1", "a2"])
+
+    def test_options_are_validated(self) -> None:
+        with self.assertRaises(pydantic.ValidationError):
+            RecordingItemSink(max_per_run=0)
+        with self.assertRaises(pydantic.ValidationError):
+            RecordingItemSink(chat_id="x")
 
     def test_a_failure_holds_back_its_source_until_it_is_due(self) -> None:
         self.add(SOURCE_A, "a1", hours_ago=3)
@@ -102,8 +155,8 @@ class ItemSinkTests(SinkTestCase):
         sink = RecordingItemSink(failing={"a1"})
 
         with self.assertLogs("newsmerger.sinks", "ERROR"):
-            summary = sink.deliver(self.db)
-        sink.deliver(self.db)  # a1 is in its backoff: nothing of source a moves
+            summary = sink.run(self.db)
+        sink.run(self.db)  # a1 is in its backoff: nothing of source a moves
 
         self.assertEqual((summary.done, summary.failed), (2, 1))
         self.assertEqual(sink.sent, ["a2", "b1"])
@@ -115,9 +168,9 @@ class ItemSinkTests(SinkTestCase):
         sink = RecordingItemSink(failing={"a1", "a2"}, max_retries=1)
 
         with self.assertLogs("newsmerger.sinks", "ERROR"):
-            sink.deliver(self.db)
+            sink.run(self.db)
         sink.failing = set()
-        sink.deliver(self.db)
+        sink.run(self.db)
 
         self.assertEqual(sink.sent, [])
         self.assertEqual(
@@ -128,10 +181,10 @@ class ItemSinkTests(SinkTestCase):
         self.add(SOURCE_A, "a1", hours_ago=3)
         sink = RecordingItemSink(failing={"a1"}, max_retries=1)
         with self.assertLogs("newsmerger.sinks", "ERROR"):
-            sink.deliver(self.db)
+            sink.run(self.db)
         sink.failing = set()
 
-        sink.deliver(self.db, requeue=True)
+        sink.run(self.db, requeue=True)
 
         self.assertEqual(sink.sent, ["a1"])
         self.assertEqual(self.statuses(), {"a1": DeliveryStatus.DONE})
@@ -145,7 +198,7 @@ class ItemSinkTests(SinkTestCase):
         sink = RecordingItemSink()
 
         with self.assertLogs("newsmerger.sinks", "WARNING") as logs:
-            sink.deliver(self.db)
+            sink.run(self.db)
 
         self.assertEqual(sink.sent, [])
         self.assertIn("deliveries resolve", logs.output[0])
@@ -153,11 +206,11 @@ class ItemSinkTests(SinkTestCase):
     def test_force_resends_the_selected_items_whatever_their_state(self) -> None:
         item = self.add(SOURCE_A, "a1", hours_ago=3)
         sink = RecordingItemSink()
-        sink.deliver(self.db)
+        sink.run(self.db)
 
         with self.assertRaises(SelectionRequiredError):
-            sink.deliver(self.db, force=True)
-        sink.deliver(self.db, scope=ProcessingScope(item_ids=(item.id,)), force=True)
+            sink.run(self.db, force=True)
+        sink.run(self.db, scope=ProcessingScope(item_ids=(item.id,)), force=True)
 
         self.assertEqual(sink.sent, ["a1", "a1"])
         ((row, _),) = self.db.get_item_deliveries("recorder")
@@ -170,9 +223,9 @@ class ArtifactSinkTests(SinkTestCase):
         self.db.save_artifact(Artifact("feedgenerator", "feed", "<rss/>", "text/xml"))
         sink = RecordingArtifactSink()
 
-        sink.deliver(self.db)
+        sink.run(self.db)
         self.db.save_artifact(Artifact("digest", "a/1", "# A again", "text/markdown"))
-        sink.deliver(self.db)
+        sink.run(self.db)
 
         self.assertEqual(sink.sent, ["a/1"])
 
@@ -181,8 +234,8 @@ class ArtifactSinkTests(SinkTestCase):
         sink = RecordingArtifactSink(lookback=0)
 
         with self.assertRaises(SelectionRequiredError):
-            sink.deliver(self.db, force=True)
-        sink.deliver(self.db, artifacts=(("digest", "a/1"),), force=True)
+            sink.run(self.db, force=True)
+        sink.run(self.db, artifacts=(("digest", "a/1"),), force=True)
 
         self.assertEqual(sink.sent, ["a/1"])
 

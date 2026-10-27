@@ -5,8 +5,8 @@ runs the four phases (import, process, remix, deliver) and answers queries.
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
-import inspect
 import logging
 import re
 from collections.abc import Iterable
@@ -25,7 +25,13 @@ from foundation.plugin import (
 )
 from sqlalchemy import make_url
 
-from .config import Config, ConfigError, ProcessEntry, plugin_options_error
+from .config import (
+    DEFAULT_WORKFLOW,
+    Config,
+    ConfigError,
+    Workflow,
+    options_error,
+)
 from .consts import PACKAGE_NAME
 from .db import Database, DeliveryStatus
 from .httpclient import HTTPClient
@@ -59,6 +65,16 @@ class LockedError(RuntimeError):
     """Another newsmerger command holds the write lock."""
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Run:
+    """One configured use of a plugin object: in which workflow, by which
+    object, with its options validated at startup."""
+
+    workflow: Workflow
+    name: str  # the object's
+    options: pydantic.BaseModel | None = None
+
+
 class Application:
     def __init__(self, config: Config, *, create_schema: bool = True) -> None:
         self.config = config
@@ -67,13 +83,12 @@ class Application:
         self._processors: dict[str, Processor] = objects_by_name(plugins, Processor)
         self._remixers: dict[str, Remixer] = objects_by_name(plugins, Remixer)
         self._sinks: dict[str, Sink] = objects_by_name(plugins, Sink)
-        for source in config.sources:
-            if source.provider not in self._providers:
-                raise ConfigError(
-                    f"source '{source.id}': provider '{source.provider}' is not loaded"
-                )
-            check_provider_options(source, self._providers[source.provider])
-        self._process = process_runs(config.process, self._processors)
+        self._source_options = source_options(config.sources, self._providers)
+        workflows = config.all_workflows()
+        self._workflows = {workflow.name: workflow for workflow in workflows}
+        self._process = process_runs(workflows, self._processors)
+        self._remix = remix_runs(workflows, self._remixers)
+        self._deliveries = delivery_runs(workflows, self._sinks)
 
         self._db = Database(
             config.db.uri, config.db.content_dir, create_schema=create_schema
@@ -122,31 +137,44 @@ class Application:
         self._lock_file = write_lock(self.config.db.uri)
 
     @property
-    def sources(self) -> list[SourceData]:
-        return self.config.sources
+    def workflows(self) -> list[str]:
+        """Workflow names, `default` first."""
+        return list(self._workflows)
+
+    def workflow(self, name: str = DEFAULT_WORKFLOW) -> Workflow:
+        return lookup(self._workflows, name, "workflow")
+
+    def sources(self, workflow: str = DEFAULT_WORKFLOW) -> list[SourceData]:
+        """The workflow's sources, in configuration order."""
+        ids = set(self.workflow(workflow).sources)
+        return [source for source in self.config.sources if source.id in ids]
 
     @property
     def processors(self) -> list[str]:
         """Loaded processor names, in configuration order."""
         return list(self._processors)
 
-    def process_keys(self, processor: str | None = None) -> list[str]:
-        """The keys of the `process:` runs, in order; with `processor`, only
-        its runs."""
-        if processor is None:
-            return list(self._process)
-        lookup(self._processors, processor, "processor")
-        return [key for key, run in self._process.items() if run.processor == processor]
+    def process_keys(
+        self, processor: str | None = None, *, workflow: str = DEFAULT_WORKFLOW
+    ) -> list[str]:
+        """The keys of the workflow's `process:` runs, in order; with
+        `processor`, only its runs."""
+        self.workflow(workflow)
+        if processor is not None:
+            lookup(self._processors, processor, "processor")
+        return [
+            key
+            for key, run in self._process.items()
+            if run.workflow.name == workflow and processor in (None, run.name)
+        ]
 
-    @property
-    def remixers(self) -> list[str]:
-        """Loaded remixer names, in configuration order."""
-        return list(self._remixers)
+    def remixers(self, workflow: str = DEFAULT_WORKFLOW) -> list[str]:
+        """The workflow's `remix:` entries, in order."""
+        return list(self.workflow(workflow).remix)
 
-    @property
-    def sinks(self) -> list[str]:
-        """Loaded sink names, in configuration order."""
-        return list(self._sinks)
+    def delivery_keys(self, workflow: str = DEFAULT_WORKFLOW) -> list[str]:
+        """The keys of the workflow's `deliver:` entries, in order."""
+        return [entry.name for entry in self.workflow(workflow).deliver]
 
     # --- Import ------------------------------------------------------------
 
@@ -156,7 +184,7 @@ class Application:
         provider = self._providers[source.provider]
         items = []
         for item_data in provider.retrieve_items(
-            source, self._fetcher, **source.options
+            source, self._fetcher, self._source_options[source.id]
         ):
             item = SourceItem.from_data(source, item_data)
             LOGGER.info(f"{source.id}: {item.uri}")
@@ -170,13 +198,16 @@ class Application:
     def run_process(
         self, key: str, *, scope: ProcessingScope | None = None, force: bool = False
     ) -> RunSummary:
-        """Run the `process:` entry that writes `key`. `force` also resets
-        attempts."""
+        """Run the `process:` entry that writes `key` on its workflow's
+        sources. `force` also resets attempts."""
         if (run := self._process.get(key)) is None:
             raise ConfigError(f"no process entry writes the key '{key}'")
-        processor = self._processors[run.processor]
-        return processor.process(
-            self._db, key=key, scope=scope, force=force, **run.options
+        return self._processors[run.name].process(
+            self._db,
+            key=key,
+            options=run.options,
+            scope=workflow_scope(run.workflow, scope),
+            force=force,
         )
 
     # --- Remix -------------------------------------------------------------
@@ -184,26 +215,39 @@ class Application:
     def run_remixer(
         self, name: str, *, scope: ProcessingScope | None = None
     ) -> list[str]:
-        """Run one loaded remixer; return the names of the artifacts saved."""
-        remixer = lookup(self._remixers, name, "remixer")
-        return remixer.remix(self._db, scope=scope)
+        """Run a `remix:` entry on its workflow's sources; return the names
+        of the artifacts saved."""
+        if (run := self._remix.get(name)) is None:
+            raise ConfigError(f"remixer '{name}' is in no workflow's `remix:`")
+        return self._remixers[name].remix(
+            self._db, scope=workflow_scope(run.workflow, scope)
+        )
 
     # --- Deliver -----------------------------------------------------------
 
-    def run_sink(
+    def run_delivery(
         self,
-        name: str,
+        key: str,
         *,
+        workflow: str = DEFAULT_WORKFLOW,
         scope: ProcessingScope | None = None,
         artifacts: ArtifactNames = (),
         requeue: bool = False,
         force: bool = False,
     ) -> RunSummary:
-        """Run one loaded sink. `force` sends the selected subjects now and
-        needs an explicit selection."""
-        sink = lookup(self._sinks, name, "sink")
-        return sink.deliver(
-            self._db, scope=scope, artifacts=artifacts, requeue=requeue, force=force
+        """Run the workflow's `deliver:` entry `key` on its sources. `force`
+        sends the selected subjects now and needs an explicit selection."""
+        ledger_key = self.workflow(workflow).ledger_key(key)
+        if (run := self._deliveries.get(ledger_key)) is None:
+            raise ConfigError(f"workflow '{workflow}' has no delivery '{key}'")
+        return self._sinks[run.name].deliver(
+            self._db,
+            key=ledger_key,
+            options=run.options,
+            scope=workflow_scope(run.workflow, scope),
+            artifacts=artifacts,
+            requeue=requeue,
+            force=force,
         )
 
     def resolve_deliveries(
@@ -214,9 +258,9 @@ class Application:
         scope: ProcessingScope | None = None,
         artifact_names: ArtifactNames | None = None,
     ) -> int:
-        """Settle the sink's interrupted (`sending`) rows in the selection as
-        `done` (it was delivered) or `queued` (deliver it again); return how
-        many. The sink does not need to be loaded."""
+        """Settle the interrupted (`sending`) rows of the ledger key `sink`
+        in the selection as `done` (it was delivered) or `queued` (deliver it
+        again); return how many. Its entry does not need to be configured."""
         if status not in (DeliveryStatus.DONE, DeliveryStatus.QUEUED):
             raise ValueError(f"cannot resolve a delivery as '{status}'")
         rows = self._db.find_deliveries(
@@ -363,19 +407,41 @@ def write_lock(database_url: str) -> IO[str] | None:
     return lock_file
 
 
+def workflow_scope(
+    workflow: Workflow, scope: ProcessingScope | None
+) -> ProcessingScope:
+    """`scope` restricted to the workflow's sources."""
+    return dataclasses.replace(
+        scope or ProcessingScope(), sources=tuple(workflow.sources)
+    )
+
+
+def entry_location(workflow: Workflow, section: str, index: int) -> str:
+    """Where a workflow's entry is in the config, for error messages."""
+    if workflow.name == DEFAULT_WORKFLOW:
+        return f"{section}.{index}"
+    return f"workflows.{workflow.name}.{section}.{index}"
+
+
 def referenced_plugins(config: Config) -> list[tuple[str, type, str]]:
-    """The `(name, protocol, config location)` of every provider and
-    processor the sources and the `process:` entries use, in order."""
-    return [
-        *(
-            (source.provider, Provider, f"sources.{source.id}.provider")
-            for source in config.sources
-        ),
-        *(
-            (entry.processor, Processor, f"process.{index}.processor")
-            for index, entry in enumerate(config.process)
-        ),
+    """The `(name, protocol, config location)` of every object the sources
+    and the workflows' entries use, in order."""
+    referenced = [
+        (source.provider, Provider, f"sources.{source.id}.provider")
+        for source in config.sources
     ]
+    for workflow in config.all_workflows():
+        for index, entry in enumerate(workflow.process):
+            location = entry_location(workflow, "process", index)
+            referenced.append((entry.processor, Processor, f"{location}.processor"))
+        for index, remixer in enumerate(workflow.remix):
+            referenced.append(
+                (remixer, Remixer, entry_location(workflow, "remix", index))
+            )
+        for index, delivery in enumerate(workflow.deliver):
+            location = entry_location(workflow, "deliver", index)
+            referenced.append((delivery.sink, Sink, f"{location}.sink"))
+    return referenced
 
 
 def load_plugins(
@@ -399,7 +465,7 @@ def load_plugins(
             plugins.register(name, services, **options)
         except EntryPointError as e:
             if isinstance(e.__cause__, pydantic.ValidationError):
-                raise plugin_options_error(name, e.__cause__) from e
+                raise options_error(f"plugins.{name}", e.__cause__) from e
             raise
         services.llms = objects_by_name(plugins, LLM)
     loaded = set(sections)
@@ -417,38 +483,88 @@ def load_plugins(
     return plugins
 
 
-def check_provider_options(source: SourceData, provider: Provider) -> None:
-    """Reject, at startup rather than on import, options the provider's
-    `retrieve_items` does not take, or required ones that are missing."""
-    try:
-        inspect.signature(provider.retrieve_items).bind(source, None, **source.options)
-    except TypeError as e:
-        raise ConfigError(f"sources.{source.id}.options: {e}") from None
+def source_options(
+    sources: list[SourceData], providers: dict[str, Provider]
+) -> dict[str, pydantic.BaseModel]:
+    """Each source's provider options, by source id. Reject, at startup
+    rather than on import, sources whose provider is not loaded or does not
+    take their options."""
+    options = {}
+    for source in sources:
+        if (provider := providers.get(source.provider)) is None:
+            raise ConfigError(
+                f"source '{source.id}': provider '{source.provider}' is not loaded"
+            )
+        try:
+            options[source.id] = provider.use_options(source.options)
+        except pydantic.ValidationError as e:
+            raise options_error(f"sources.{source.id}.options", e) from None
+    return options
 
 
 def process_runs(
-    entries: list[ProcessEntry], processors: dict[str, Processor]
-) -> dict[str, ProcessEntry]:
-    """The `process:` entries by the key each writes, in order. Reject, at
-    startup, entries whose processor is not loaded or does not take their
-    options, malformed keys and keys written twice."""
-    runs: dict[str, ProcessEntry] = {}
-    for index, entry in enumerate(entries):
-        location = f"process.{index}"
-        if (processor := processors.get(entry.processor)) is None:
-            raise ConfigError(
-                f"{location}: processor '{entry.processor}' is not loaded"
-            )
-        try:
-            default_key = processor.output_key(**entry.options)
-        except (TypeError, ValueError) as e:
-            raise ConfigError(f"{location}.options: {e}") from None
-        key = entry.key or default_key
-        if not KEY_PATTERN.fullmatch(key):
-            raise ConfigError(f"{location}: invalid key '{key}'")
-        if key in runs:
-            raise ConfigError(f"{location}: key '{key}' is written by another entry")
-        runs[key] = entry
+    workflows: list[Workflow], processors: dict[str, Processor]
+) -> dict[str, Run]:
+    """Every workflow's `process:` entries by the key each writes, in order.
+    Reject, at startup, entries whose processor is not loaded or does not
+    take their options, malformed keys and keys written twice, in any
+    workflow: annotations are shared."""
+    runs: dict[str, Run] = {}
+    for workflow in workflows:
+        for index, entry in enumerate(workflow.process):
+            location = entry_location(workflow, "process", index)
+            if (processor := processors.get(entry.processor)) is None:
+                raise ConfigError(
+                    f"{location}: processor '{entry.processor}' is not loaded"
+                )
+            try:
+                options = processor.use_options(entry.options)
+            except pydantic.ValidationError as e:
+                raise options_error(f"{location}.options", e) from None
+            key = entry.key or processor.output_key(options)
+            if not KEY_PATTERN.fullmatch(key):
+                raise ConfigError(f"{location}: invalid key '{key}'")
+            if key in runs:
+                raise ConfigError(
+                    f"{location}: key '{key}' is written by another entry"
+                )
+            runs[key] = Run(workflow, entry.processor, options)
+    return runs
+
+
+def remix_runs(
+    workflows: list[Workflow], remixers: dict[str, Remixer]
+) -> dict[str, Run]:
+    """Every workflow's `remix:` entries by remixer, in order. Reject, at
+    startup, remixers not loaded or listed twice, in any workflow: their
+    artifacts are shared."""
+    runs: dict[str, Run] = {}
+    for workflow in workflows:
+        for index, name in enumerate(workflow.remix):
+            location = entry_location(workflow, "remix", index)
+            if name not in remixers:
+                raise ConfigError(f"{location}: remixer '{name}' is not loaded")
+            if name in runs:
+                raise ConfigError(f"{location}: remixer '{name}' is listed twice")
+            runs[name] = Run(workflow, name)
+    return runs
+
+
+def delivery_runs(workflows: list[Workflow], sinks: dict[str, Sink]) -> dict[str, Run]:
+    """Every workflow's `deliver:` entries by ledger key, in order. Reject,
+    at startup, entries whose sink is not loaded or does not take their
+    options."""
+    runs: dict[str, Run] = {}
+    for workflow in workflows:
+        for index, entry in enumerate(workflow.deliver):
+            location = entry_location(workflow, "deliver", index)
+            if (sink := sinks.get(entry.sink)) is None:
+                raise ConfigError(f"{location}: sink '{entry.sink}' is not loaded")
+            try:
+                options = sink.use_options(entry.options)
+            except pydantic.ValidationError as e:
+                raise options_error(f"{location}.options", e) from None
+            runs[workflow.ledger_key(entry.name)] = Run(workflow, entry.sink, options)
     return runs
 
 

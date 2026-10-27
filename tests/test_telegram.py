@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
+import pydantic
 import requests
 from pydantic import SecretStr
 
@@ -15,8 +16,7 @@ from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
 from newsmerger.plugins import Services, telegram
 from newsmerger.plugins.telegram import (
     MAX_CAPTION_LENGTH,
-    ArtifactSinkOptions,
-    ItemSinkOptions,
+    Options,
     TelegramArtifactSink,
     TelegramClient,
     TelegramSink,
@@ -41,7 +41,8 @@ class TelegramTestCase(unittest.TestCase):
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
-        self.client = TelegramClient(SecretStr("token"), "chat")
+        self.client = TelegramClient(SecretStr("token"))
+        self.cfg = Options(bot_token="token", chat_id="chat")
 
     def tearDown(self) -> None:
         self.db.close()
@@ -86,32 +87,46 @@ class TelegramTestCase(unittest.TestCase):
 
 @patch("newsmerger.plugins.telegram.requests.post")
 class TelegramSinkTests(TelegramTestCase):
-    def deliver(self, interval: int = 30) -> None:
-        TelegramSink(self.client, ItemSinkOptions(interval=interval)).deliver(self.db)
+    def deliver(self, key: str = "telegram", **options: Any) -> None:
+        sink = TelegramSink(self.client, self.cfg)
+        sink.deliver(self.db, key=key, options=sink.use_options(options))
 
-    def test_posts_the_oldest_item_of_each_source_once(self, post: Mock) -> None:
+    def test_posts_one_item_per_interval_oldest_first_once(self, post: Mock) -> None:
         post.return_value = ok_response()
         self.add_summarized(SOURCE_A, 3, 2, 30)
         self.add_summarized(SOURCE_B, 1)
 
+        self.deliver(interval=30)
+        self.deliver(interval=30)
+        self.assertEqual(
+            self.delivered(), {"h3": {"chat_id": "chat", "message_id": 42}}
+        )
+
         self.deliver()
         self.deliver()
+        self.assertEqual(list(self.delivered()), ["h3", "h2", "h1"])
+        self.assertEqual(post.call_count, 3)
+
+    def test_each_entry_posts_to_its_own_chat(self, post: Mock) -> None:
+        post.return_value = ok_response()
+        self.add_summarized(SOURCE_A, 3)
+
+        self.deliver()
+        self.deliver("other", chat_id="other-chat")
 
         self.assertEqual(
-            self.delivered(), {"h3": {"message_id": 42}, "h1": {"message_id": 42}}
+            [call.kwargs["json"]["chat_id"] for call in post.call_args_list],
+            ["chat", "other-chat"],
         )
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(
+            self.delivered("other"), {"h3": {"chat_id": "other-chat", "message_id": 42}}
+        )
 
-    def test_waits_for_the_interval_of_each_source(self, post: Mock) -> None:
-        post.return_value = ok_response()
-        self.add_summarized(SOURCE_A, 3, 2)
-
-        self.deliver()
-        self.deliver()
-        self.assertEqual(list(self.delivered()), ["h3"])
-
-        self.deliver(interval=0)
-        self.assertEqual(list(self.delivered()), ["h3", "h2"])
+    def test_an_entry_needs_a_chat(self, post: Mock) -> None:
+        sink = TelegramSink(self.client, Options(bot_token="token"))
+        with self.assertRaises(pydantic.ValidationError):
+            sink.use_options({})
+        self.assertEqual(sink.use_options({"chat_id": "c"}).chat_id, "c")
 
     def test_failed_post_stays_failed_without_leaking_the_token(
         self, post: Mock
@@ -161,12 +176,11 @@ class TelegramArtifactSinkTests(TelegramTestCase):
             Artifact("digest", "a/2026-10-01_2026-10-08", "# Week", "text/markdown")
         )
         self.db.save_artifact(Artifact("feedgenerator", "feed", "<rss/>", "text/xml"))
-        sink = TelegramArtifactSink(
-            self.client, ArtifactSinkOptions(artifacts=["digest"])
-        )
+        sink = TelegramArtifactSink(self.client, self.cfg)
+        options = sink.use_options({"artifacts": ["digest"]})
 
-        sink.deliver(self.db)
-        sink.deliver(self.db)
+        sink.deliver(self.db, key="telegram_artifacts", options=options)
+        sink.deliver(self.db, key="telegram_artifacts", options=options)
 
         post.assert_called_once()
         (request_url,) = post.call_args.args
@@ -180,26 +194,17 @@ class TelegramArtifactSinkTests(TelegramTestCase):
             ("digest-a_2026-10-01_2026-10-08.md", b"# Week", "text/markdown"),
         )
         ((row, _),) = self.db.get_artifact_deliveries("telegram_artifacts")
-        self.assertEqual(row.external_ref, {"message_id": 7})
+        self.assertEqual(row.external_ref, {"chat_id": "chat", "message_id": 7})
 
 
 class PluginTests(unittest.TestCase):
-    def test_both_sinks_without_subsections_and_only_the_named_ones_with(
-        self,
-    ) -> None:
-        options = {"bot_token": "t", "chat_id": "c"}
-
-        every = telegram.__newsmerger_plugin__(Services(), **options)
-        only_items = telegram.__newsmerger_plugin__(
-            Services(), **options, telegram={"interval": 5}
-        )
+    def test_provides_both_sinks(self) -> None:
+        objects = telegram.__newsmerger_plugin__(Services(), bot_token="t")
 
         self.assertEqual(
-            [(name, protocol) for name, protocol, _ in every],
+            [(name, protocol) for name, protocol, _ in objects],
             [("telegram", Sink), ("telegram_artifacts", Sink)],
         )
-        ((name, _, sink),) = only_items
-        self.assertEqual((name, sink.interval), ("telegram", timedelta(minutes=5)))
 
 
 class MigrateTelegramStateTests(TelegramTestCase):

@@ -21,9 +21,12 @@ class SourceData(BaseModel):
     name: str
     url: HttpUrl
     provider: str
-    # Passed to the provider's `retrieve_items` as keyword arguments. Config
-    # only: the database does not store them.
+    # Validated by the provider's `use_options` and passed to its
+    # `retrieve_items`. Config only, like `default`: the database stores
+    # neither.
     options: dict[str, JsonCompatible] = Field(default_factory=dict)
+    # Whether the `default` workflow uses it; workflows name it explicitly.
+    default: bool = True
 
     def __hash__(self) -> int:
         # The id is the identity (decision 0001), and the options are a dict.
@@ -114,8 +117,9 @@ class Artifact:
 
 @dataclasses.dataclass(slots=True)
 class Delivery:
-    """A sink's record of delivering one subject, an item or an artifact
-    (decision 0007). `status` is a `db.DeliveryStatus`."""
+    """A record of delivering one subject, an item or an artifact
+    (decision 0007). `status` is a `db.DeliveryStatus`. `sink` holds the
+    ledger key: `<workflow>/<key>`, or the bare key in `default`."""
 
     sink: str
     status: str
@@ -149,6 +153,7 @@ class ProcessingScope:
     combine; an unset field means no restriction on that axis."""
 
     source: str | None = None  # source id
+    sources: tuple[str, ...] | None = None  # source ids: a workflow's
     since: datetime | None = None  # published_at >=
     until: datetime | None = None  # published_at <
     item_ids: tuple[int, ...] | None = None  # database ids

@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -13,7 +13,7 @@ import bs4
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import Provider
-from . import PluginObjects, PluginOptions, Services
+from . import NoOptions, PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 # A named zone, not the import time's UTC offset: sessions span DST changes.
@@ -49,8 +49,11 @@ class PreparseData:
 
 
 class CSJuntasGobiernoProvider:
+    def use_options(self, overrides: Mapping[str, Any]) -> NoOptions:
+        return NoOptions.model_validate(overrides)
+
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
+        self, source: SourceData, fetcher: HTTPClient, options: NoOptions
     ) -> Iterator[SourceItemData]:
         index = fetcher.get(str(source.url))
         for protodata in self._iter_pdf_links(index, str(source.url)):

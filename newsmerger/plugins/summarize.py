@@ -15,11 +15,16 @@ Article:
 """
 
 
-class Options(PluginOptions):
-    llm: str | None = None
+class SummarizeOptions(PluginOptions):
+    """Per `process:` entry; the section sets their defaults."""
+
     model: str | None = None
     # Followed by the article's markdown.
     prompt: str = SUMMARY_PROMPT
+
+
+class Options(SummarizeOptions):
+    llm: str | None = None
     max_retries: int = 3
 
 
@@ -27,24 +32,19 @@ class SummarizeProcessor(BaseProcessor):
     name = "summarize"
     key = "summary"
     requires = "markdown"
+    options_model = SummarizeOptions
 
     def __init__(self, llm: LLM, cfg: Options) -> None:
-        super().__init__(max_retries=cfg.max_retries)
+        super().__init__(cfg, max_retries=cfg.max_retries)
         self.llm = llm
-        self.model = cfg.model
-        self.prompt = cfg.prompt
 
     def process_item(
-        self,
-        db: Database,
-        item: SourceItem,
-        prompt: str | None = None,
-        model: str | None = None,
+        self, db: Database, item: SourceItem, options: SummarizeOptions
     ) -> str:
         markdown = self.require_annotation(db, item, "markdown")
 
         summary = self.llm.prompt(
-            (prompt or self.prompt) + markdown, model=model or self.model
+            options.prompt + markdown, model=options.model
         ).strip()
         if not summary:
             raise ValueError("LLM returned an empty summary")
@@ -58,6 +58,6 @@ def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     try:
         processor = SummarizeProcessor(services.llm(cfg.llm), cfg)
     except LLMUnavailableError as e:
-        unavailable = UnavailableProcessor(name, str(e), SummarizeProcessor.output_key)
+        unavailable = UnavailableProcessor(name, str(e), SummarizeProcessor, cfg)
         return [(name, Processor, unavailable)]
     return [(name, Processor, processor)]

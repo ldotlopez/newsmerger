@@ -19,9 +19,9 @@ from newsmerger.app import (
     objects_by_name,
 )
 from newsmerger.config import Config, ConfigError
-from newsmerger.db import DeliveryStatus
+from newsmerger.db import DeliveryStatus, ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceItem
-from newsmerger.plugins import Services
+from newsmerger.plugins import Services, feedreader
 from newsmerger.plugins.markdownify import MarkdownifyProcessor
 from newsmerger.plugins.ollama import OllamaLLM
 from newsmerger.processors import Processor, RunSummary
@@ -44,6 +44,7 @@ class ApplicationTests(unittest.TestCase):
         self,
         plugins: str = "  markdownify:\n  feedgenerator: {title: Test feed}\n",
         process: str = "process: [markdownify]\n",
+        workflows: str = "remix: [feedgenerator]\n",
     ) -> Application:
         config = Config.from_text(
             f"""
@@ -61,6 +62,7 @@ plugins:
   csjuntasgobierno:
 {plugins}
 {process}
+{workflows}
 db:
   uri: sqlite:///{self.tmp_dir}/data.db
   content_dir: {self.tmp_dir}/content
@@ -94,11 +96,15 @@ cache:
         app.close()
 
         call.assert_called_once_with(
-            app.config.get_source("blog"), app._fetcher, article_selector=".body"
+            app.config.get_source("blog"),
+            app._fetcher,
+            feedreader.Options(article_selector=".body"),
         )
 
     def test_unknown_provider_option_is_a_config_error(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "sources.blog.options"):
+        with self.assertRaisesRegex(
+            ConfigError, r"sources\.blog\.options\.selector: Extra inputs"
+        ):
             self.make_rss_app("{selector: .body}")
 
     def make_rss_app(self, options: str) -> Application:
@@ -183,19 +189,105 @@ cache:
             self.app.process_keys("summarize")
         with self.assertRaisesRegex(ConfigError, "no process entry writes the key"):
             self.app.run_process("summary")
-        with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is not loaded"):
+        with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is in no workflow"):
             self.app.run_remixer("avglink")
-        with self.assertRaisesRegex(ConfigError, "sink 'telegram' is not loaded"):
-            self.app.run_sink("telegram")
+        with self.assertRaisesRegex(ConfigError, "has no delivery 'telegram'"):
+            self.app.run_delivery("telegram")
+        with self.assertRaisesRegex(ConfigError, "workflow 'nope' is not loaded"):
+            self.app.process_keys(workflow="nope")
 
-    def test_loaded_names_follow_configuration_order(self) -> None:
+    def test_remix_entries_follow_configuration_order(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            "  feedgenerator:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n"
+            "  feedgenerator:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n",
+            workflows="remix: [singlelink, feedgenerator]\n",
         )
 
         self.assertEqual(self.app.processors, ["markdownify"])
-        self.assertEqual(self.app.remixers, ["feedgenerator", "avglink", "singlelink"])
+        self.assertEqual(self.app.remixers(), ["singlelink", "feedgenerator"])
+
+    def test_invalid_workflow_entries_are_config_errors(self) -> None:
+        workflow = "workflows:\n  - {name: w, sources: [juntas], %s}\n"
+        for workflows, message in (
+            ("remix: [nope]\n", r"remix\.0: no plugin provides 'nope'"),
+            (
+                "remix: [feedgenerator]\n" + workflow % "remix: [feedgenerator]",
+                r"workflows\.w\.remix\.0: remixer 'feedgenerator' is listed twice",
+            ),
+            (
+                workflow % "process: [markdownify]",
+                r"workflows\.w\.process\.0: key 'markdown' is written by another",
+            ),
+            (
+                workflow % "deliver: [{sink: feedgenerator}]",
+                r"workflows\.w\.deliver\.0: sink 'feedgenerator' is not loaded",
+            ),
+        ):
+            with (
+                self.subTest(workflows=workflows),
+                self.assertRaisesRegex(ConfigError, message),
+            ):
+                self.make_app(workflows=workflows)
+
+    @patch("newsmerger.plugins.telegram.requests.post")
+    def test_workflows_run_on_their_sources_and_deliver_under_their_name(
+        self, post
+    ) -> None:
+        post.return_value.json.return_value = {"ok": True, "result": {"message_id": 1}}
+        self.app.close()
+        self.app = self.make_app(
+            "  markdownify:\n  feedgenerator:\n  telegram: {bot_token: t}\n",
+            process="",
+            workflows="""
+deliver: [{sink: telegram, options: {chat_id: main}}]
+workflows:
+  - name: juntas-channel
+    sources: [juntas]
+    process: [markdownify]
+    deliver:
+      - {sink: telegram, options: {chat_id: juntas, interval: 30, max_per_run: 1}}
+""",
+        )
+        item = self.import_sample()  # a `mediterraneo` item
+        self.app._db.record_result(
+            item, "summarize", "summary", ProcessingStatus.DONE, value="S"
+        )
+
+        self.assertEqual(self.app.process_keys(), [])
+        self.assertEqual(self.app.process_keys(workflow="juntas-channel"), ["markdown"])
+        self.assertEqual(self.app.run_process("markdown").done, 0)
+        self.assertEqual(
+            [source.id for source in self.app.sources("juntas-channel")], ["juntas"]
+        )
+        # The sample is older than the lookback window: name it.
+        scope = ProcessingScope(item_ids=(item.id,))
+        self.assertEqual(
+            self.app.run_delivery(
+                "telegram", workflow="juntas-channel", scope=scope
+            ).done,
+            0,
+        )
+        self.assertEqual(self.app.run_delivery("telegram", scope=scope).done, 1)
+        (row,) = self.app.find_deliveries()
+        self.assertEqual(row.sink, "telegram")
+        self.assertEqual(row.external_ref, {"chat_id": "main", "message_id": 1})
+
+    def test_default_uses_the_sources_not_opted_out(self) -> None:
+        config = Config.from_text(
+            """
+sources:
+  - {id: a, name: A, url: 'https://a.test/', provider: plaza}
+  - {id: b, name: B, url: 'https://b.test/', provider: plaza, default: false}
+workflows:
+  - {name: only-b, sources: [b]}
+"""
+        )
+        self.assertEqual(
+            [(workflow.name, workflow.sources) for workflow in config.all_workflows()],
+            [("default", ["a"]), ("only-b", ["b"])],
+        )
+        self.assertEqual(config.workflows[0].ledger_key("telegram"), "only-b/telegram")
+        self.assertEqual(config.all_workflows()[0].ledger_key("telegram"), "telegram")
 
     def test_process_entries_run_in_order_each_with_its_key(self) -> None:
         self.app.close()
@@ -218,11 +310,11 @@ cache:
             ("process: [grouping]\n", "processor 'grouping' is not loaded"),
             (
                 "process: [{processor: markdownify, options: {model: m}}]\n",
-                r"process\.0\.options: got an unexpected keyword argument 'model'",
+                r"process\.0\.options\.model: Extra inputs are not permitted",
             ),
             (
                 "process: [{processor: markdownify, options: {key: copy}}]\n",
-                r"process\.0\.options: got an unexpected keyword argument 'key'",
+                r"process\.0\.options\.key: Extra inputs are not permitted",
             ),
             (
                 "process: [{processor: markdownify, key: Mark Down}]\n",
@@ -358,7 +450,7 @@ db:
         # Autoloading registers them with no options, by the name they are used with.
         plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
         for module in plugins.discover():
-            if module in ("telegram", "googlechat"):  # sinks: never autoloaded
+            if module == "telegram":  # it needs its bot token
                 continue
             with self.subTest(module=module):
                 plugins.register(module, Services())

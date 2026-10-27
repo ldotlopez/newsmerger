@@ -4,7 +4,7 @@ web preview (https://t.me/s/<channel>), one item per linked article."""
 import dataclasses
 import hashlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -20,7 +20,7 @@ from pydantic import PositiveInt
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import Provider
-from . import PluginObjects, PluginOptions, Services
+from . import PluginObjects, PluginOptions, Services, merge_options
 
 LOGGER = logging.getLogger(__name__)
 
@@ -116,12 +116,17 @@ def parse_article(content: bytes, post: Post | None = None) -> SourceItemData:
 
 
 class TelegramChannelProvider:
-    def __init__(self, pages: int) -> None:
-        self.pages = pages
+    def __init__(self, cfg: Options) -> None:
+        self.cfg = cfg
 
-    def iter_posts(self, source: SourceData, fetcher: HTTPClient) -> Iterator[Post]:
+    def use_options(self, overrides: Mapping[str, Any]) -> Options:
+        return merge_options(Options, self.cfg, overrides)
+
+    def iter_posts(
+        self, source: SourceData, fetcher: HTTPClient, pages: int
+    ) -> Iterator[Post]:
         page_url: str | None = preview_url(source)
-        for _ in range(self.pages):
+        for _ in range(pages):
             if page_url is None:
                 return
             # New posts must show up on every run, not after the cache expires.
@@ -132,9 +137,9 @@ class TelegramChannelProvider:
             yield from posts
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
+        self, source: SourceData, fetcher: HTTPClient, options: Options
     ) -> Iterator[SourceItemData]:
-        for post in self.iter_posts(source, fetcher):
+        for post in self.iter_posts(source, fetcher, options.pages):
             for url in post.links:
                 try:
                     item = parse_article(fetcher.get(url), post)
@@ -148,4 +153,4 @@ class TelegramChannelProvider:
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     cfg = Options.model_validate(options)
-    return [("telegram_channel", Provider, TelegramChannelProvider(cfg.pages))]
+    return [("telegram_channel", Provider, TelegramChannelProvider(cfg))]

@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pymupdf
 
 from newsmerger.models import SourceData, SourceItem
+from newsmerger.plugins import NoOptions
 from newsmerger.plugins.markdownify import MarkdownifyProcessor
 from newsmerger.processors import SkipItem
 
@@ -32,7 +33,7 @@ class MarkdownifyPdfTests(unittest.TestCase):
             uri="https://example.test/acta.pdf",
             mimetype="application/pdf",
         )
-        return MarkdownifyProcessor().process_item(db, item)
+        return MarkdownifyProcessor().process_item(db, item, NoOptions())
 
     def test_extracts_the_text_of_every_page(self) -> None:
         content = make_pdf("Primera pagina", "Segunda pagina")
