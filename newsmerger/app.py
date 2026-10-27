@@ -164,8 +164,8 @@ class Application:
             lookup(self._processors, processor, "processor")
         return [
             key
-            for key, run in self._process.items()
-            if run.workflow.name == workflow and processor in (None, run.name)
+            for (name, key), run in self._process.items()
+            if name == workflow and processor in (None, run.name)
         ]
 
     def remixers(self, workflow: str = DEFAULT_WORKFLOW) -> list[str]:
@@ -196,12 +196,19 @@ class Application:
     # --- Process -----------------------------------------------------------
 
     def run_process(
-        self, key: str, *, scope: ProcessingScope | None = None, force: bool = False
+        self,
+        key: str,
+        *,
+        workflow: str = DEFAULT_WORKFLOW,
+        scope: ProcessingScope | None = None,
+        force: bool = False,
     ) -> RunSummary:
-        """Run the `process:` entry that writes `key` on its workflow's
+        """Run the workflow's `process:` entry that writes `key` on its
         sources. `force` also resets attempts."""
-        if (run := self._process.get(key)) is None:
-            raise ConfigError(f"no process entry writes the key '{key}'")
+        if (run := self._process.get((workflow, key))) is None:
+            raise ConfigError(
+                f"no process entry of workflow '{workflow}' writes the key '{key}'"
+            )
         return self._processors[run.name].process(
             self._db,
             key=key,
@@ -504,12 +511,13 @@ def source_options(
 
 def process_runs(
     workflows: list[Workflow], processors: dict[str, Processor]
-) -> dict[str, Run]:
-    """Every workflow's `process:` entries by the key each writes, in order.
+) -> dict[tuple[str, str], Run]:
+    """Every workflow's `process:` entries by `(workflow, key)`, in order.
     Reject, at startup, entries whose processor is not loaded or does not
-    take their options, malformed keys and keys written twice, in any
-    workflow: annotations are shared."""
-    runs: dict[str, Run] = {}
+    take their options, malformed keys, and keys written twice in a workflow
+    or by workflows that share a source: annotations are per item, so only
+    workflows with disjoint sources may write the same key."""
+    runs: dict[tuple[str, str], Run] = {}
     for workflow in workflows:
         for index, entry in enumerate(workflow.process):
             location = entry_location(workflow, "process", index)
@@ -524,11 +532,14 @@ def process_runs(
             key = entry.key or processor.output_key(options)
             if not KEY_PATTERN.fullmatch(key):
                 raise ConfigError(f"{location}: invalid key '{key}'")
-            if key in runs:
-                raise ConfigError(
-                    f"{location}: key '{key}' is written by another entry"
-                )
-            runs[key] = Run(workflow, entry.processor, options)
+            for (other, other_key), run in runs.items():
+                shared = set(workflow.sources) & set(run.workflow.sources)
+                if other_key == key and (other == workflow.name or shared):
+                    raise ConfigError(
+                        f"{location}: key '{key}' is written by another entry"
+                        f" (workflow '{other}') on the same sources"
+                    )
+            runs[workflow.name, key] = Run(workflow, entry.processor, options)
     return runs
 
 

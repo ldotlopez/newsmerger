@@ -187,7 +187,9 @@ cache:
     def test_only_loaded_plugins_run(self) -> None:
         with self.assertRaisesRegex(ConfigError, "processor 'summarize' is not loaded"):
             self.app.process_keys("summarize")
-        with self.assertRaisesRegex(ConfigError, "no process entry writes the key"):
+        with self.assertRaisesRegex(
+            ConfigError, "no process entry of workflow 'default' writes the key"
+        ):
             self.app.run_process("summary")
         with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is in no workflow"):
             self.app.run_remixer("avglink")
@@ -255,7 +257,10 @@ workflows:
 
         self.assertEqual(self.app.process_keys(), [])
         self.assertEqual(self.app.process_keys(workflow="juntas-channel"), ["markdown"])
-        self.assertEqual(self.app.run_process("markdown").done, 0)
+        # The item is not of the workflow's sources.
+        self.assertEqual(
+            self.app.run_process("markdown", workflow="juntas-channel").done, 0
+        )
         self.assertEqual(
             [source.id for source in self.app.sources("juntas-channel")], ["juntas"]
         )
@@ -271,6 +276,33 @@ workflows:
         (row,) = self.app.find_deliveries()
         self.assertEqual(row.sink, "telegram")
         self.assertEqual(row.external_ref, {"chat_id": "main", "message_id": 1})
+
+    def test_workflows_with_disjoint_sources_may_write_the_same_key(self) -> None:
+        self.app.close()
+        # `default` uses both sources, so it shares `juntas` with `a`.
+        with self.assertRaisesRegex(
+            ConfigError,
+            r"workflows\.a\.process\.0: key 'markdown' is written by another entry"
+            r" \(workflow 'default'\) on the same sources",
+        ):
+            self.make_app(
+                process="process: [markdownify]\n",
+                workflows="workflows:\n"
+                "  - {name: a, sources: [juntas], process: [markdownify]}\n",
+            )
+        self.app = self.make_app(
+            process="",
+            workflows="""
+workflows:
+  - {name: a, sources: [juntas], process: [markdownify]}
+  - {name: b, sources: [mediterraneo], process: [markdownify]}
+""",
+        )
+        item = self.import_sample()  # a `mediterraneo` item
+
+        self.assertEqual(self.app.run_process("markdown", workflow="a").done, 0)
+        self.assertEqual(self.app.run_process("markdown", workflow="b").done, 1)
+        self.assertIn("markdown", self.app.get_annotations(item))
 
     def test_default_uses_the_sources_not_opted_out(self) -> None:
         config = Config.from_text(

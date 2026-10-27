@@ -324,7 +324,9 @@ def process_cmd(
         summaries = run_each(
             progress,
             app.process_keys(processor, workflow=workflow),
-            lambda key: app.run_process(key, scope=scope, force=force),
+            lambda key: app.run_process(
+                key, workflow=workflow, scope=scope, force=force
+            ),
         )
     print_process(summaries)
 
@@ -423,7 +425,9 @@ def run_cmd(ctx: click.Context, workflow: str) -> None:
         (
             "process",
             lambda progress: run_each(
-                progress, app.process_keys(workflow=workflow), app.run_process
+                progress,
+                app.process_keys(workflow=workflow),
+                lambda key: app.run_process(key, workflow=workflow),
             ),
             print_process,
         ),
