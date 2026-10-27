@@ -21,21 +21,22 @@ and reach it only through the `Application` class.
 | Term | Definition |
 | --- | --- |
 | **Source** | An entry of the `sources` configuration section, with `id`, `name`, `provider` and `url`. Its identity is its `id`. |
+| **Workflow** | Which sources to use and the process, remix and deliver entries to run on them. The configuration's root keys are the `default` workflow; `workflows` adds more. |
 | **Plugin** | A bundle enabled by an entry of the `plugins` configuration section. It provides one or more named providers, processors, remixers and sinks. |
 | **Provider** | Object that knows how to handle one kind of site. One implementation serves every URL with the same structure. |
 | **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. It also has a numeric id, a local handle to select it that is never reused but changes if the database is rebuilt. |
 | **uid** | The item's identifier within its source, produced by the provider. It must be deterministic and stable across runs; how it is computed is up to the provider. |
 | **Annotation** | Data derived from an item by a processor run. Key: `(item, key)`; the processor that wrote it is recorded but is not part of the key. |
-| **Processor** | Object that produces annotations for one item at a time. Each entry of the `process` configuration section is a run of a processor with its own options, and writes one key. |
-| **Remixer** | Object that builds artifacts from many items. |
-| **Artifact** | Aggregated output of a remixer (newsletter, RSS, web page...). Key: `(remixer, name)`. |
-| **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). |
-| **Delivery** | A sink's record of delivering one subject, an item or an artifact. Key: `(sink, subject)`. It records an external fact and is never regenerated. |
+| **Processor** | Object that produces annotations for one item at a time. Each `process` entry is a run of a processor with its own options, and writes one key. |
+| **Remixer** | Object that builds artifacts from many items. Each `remix` entry is a run of a remixer with its own options, under its own key. |
+| **Artifact** | Aggregated output of a remix entry (newsletter, RSS, web page...). Key: `(remix key, name)`. |
+| **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). Each `deliver` entry is a use of a sink with its own options (where to deliver, how often), under its own key. |
+| **Delivery** | The record of a deliver entry delivering one subject, an item or an artifact. Key: `(ledger key, subject)`, the ledger key naming who asked for it: `<workflow>/<key>`, or the bare key in `default`. It records an external fact and is never regenerated. |
 
 ## 3. Configuration
 
-A single YAML file with the sections `sources`, `plugins`, `process`, `cache`
-and `db`.
+A single YAML file with the sections `sources`, `plugins`, `process`,
+`remix`, `deliver`, `workflows`, `cache` and `db`.
 All of them are optional. Each source names its provider explicitly:
 
 ```yaml
@@ -45,6 +46,7 @@ sources:
     provider: <provider name>
     url: <url>
     options: {...}         # passed to the provider, overriding its plugin's
+    default: true          # false: only the workflows that name it use it
 plugins:
   <plugin>: {...}          # its options; empty for the plugin's defaults
 process:
@@ -52,6 +54,16 @@ process:
   - processor: <processor>
     key: <annotation key>  # default: the processor's own
     options: {...}         # passed to the processor, overriding its plugin's
+remix:
+  - <remixer>              # or {remixer, key, options}, as process entries
+deliver:
+  - <sink>                 # or {sink, key, options}, as process entries
+workflows:
+  - name: <name>
+    sources: [<source id>, ...]
+    process: [...]         # as the root sections
+    remix: [...]
+    deliver: [...]
 cache:
   expiration: <seconds>    # HTTP cache lifetime
 db:
@@ -64,18 +76,41 @@ the file is loaded; comments and keys are not expanded. Secrets (API keys,
 tokens) are always passed this way.
 
 Plugins with an entry in `plugins` are loaded, in its order. A provider that
-a source names, or a processor that a `process` entry names, that none of
-them provides loads the plugin of the same name with its defaults; a name
-that no plugin provides is a configuration error. Remixers and sinks are
-loaded only from `plugins`. Each plugin validates
-its own options and fills in defaults for the missing ones; invalid options
-are a configuration error that names their path (`plugins.<plugin>.<option>`).
-A plugin decides which of its objects its options enable; the built-in
-bundles enable all of them unless the options name some. Provider,
-processor, remixer and sink names are unique per type across the loaded
-plugins; sources refer to providers, `process` entries to processors, and
-annotations, artifacts and deliveries to processors, remixers and sinks, by
-those names.
+a source names, or a processor, remixer or sink that an entry names, that
+none of them provides loads the plugin of the same name with its defaults;
+a name that no plugin provides is a configuration error. Each plugin
+validates its own options and fills in defaults for the missing ones;
+invalid options are a configuration error that names their path
+(`plugins.<plugin>.<option>`). A plugin decides which of its objects its
+options enable; the built-in bundles enable all of them unless the options
+name some. Provider, processor, remixer and sink names are unique per type
+across the loaded plugins; sources and entries refer to them by those
+names.
+
+A source's or an entry's `options` override, for that use only, the
+options of its plugin section that the object declares per use; anything
+else is a configuration error that names its path
+(`workflows.<name>.deliver.<n>.options.<option>`). All of them are checked
+at start-up, so a bad option fails every command.
+
+### 3.1 Workflows
+
+The root `process`, `remix` and `deliver` are the `default` workflow, which
+uses every source not marked `default: false`. Each entry of `workflows`
+names its sources and its own entries. A command runs one workflow,
+`default` unless another is named, and each phase only touches that
+workflow's sources: their items, and in remix the artifacts built from them.
+
+- A process key is written by one entry within a workflow and across
+  workflows that share a source; workflows with disjoint sources may write
+  the same key, since annotations belong to items.
+- A remix key is unique across all workflows, since artifacts belong to no
+  source.
+- A deliver key is unique within its workflow; its deliveries are recorded
+  under its ledger key, so two workflows delivering the same item each
+  deliver it, and renaming a workflow or a key starts its record anew.
+- Workflow names and remix and deliver keys are lowercase letters, digits,
+  `_` and `-`; `default` is reserved.
 
 A source's `id` is part of its items' key, so it must be stable; its `url`
 and `provider` can change without losing items.
@@ -112,8 +147,8 @@ article.
 Processors create annotations on items. `process` runs the entries of the
 `process` section in order; each run writes one key, by default the
 processor's own, and keeps its own processing state per item under that
-key. A key is written by one entry only. A run's options override those of
-the processor's plugin section for that run.
+key. A key is written by one entry per item (§3.1). A run's options
+override those of the processor's plugin section for that run.
 
 - **Dependencies:** a run declares the key it reads. It only picks up items
   whose run of that key finished successfully on their current content; the
@@ -165,7 +200,7 @@ the CLI.
 Sinks deliver items or artifacts and record every delivery. They run after
 remix, so they see freshly built artifacts.
 
-- **Candidates:** the subjects that have no delivery for the sink yet. By
+- **Candidates:** the subjects that have no delivery for the entry yet. By
   default, those of the last `lookback` hours (24; items by publication,
   artifacts by creation); an explicit date or selection replaces that
   window. An item sink can depend on an annotation key, like processor runs
@@ -177,16 +212,19 @@ remix, so they see freshly built artifacts.
   automatically: it is settled by hand as `done` or `queued`.
 - **Retries:** failures are retried with the processors' backoff and
   `max_retries` (3 by default). Requeuing gives failures fresh attempts.
-- **Order:** items are delivered first in, first out per source. A failure
-  at the head of a source's queue holds the source back until it is
-  delivered or exhausts its attempts.
-- **Rate limits** are the sink's: it chooses which pending deliveries go now.
+- **Order:** items are delivered oldest first. A failure at the head of a
+  source's queue holds the source back until it is delivered or exhausts
+  its attempts.
+- **Pacing** is the entry's: with an `interval`, one delivery once the
+  entry's last one is that old, whatever its source; and never more than
+  `max_per_run` in a run, so a new entry does not flood its destination.
 - **Forced delivery** sends explicitly selected subjects now, whatever their
-  state, with no backoff and no rate limit. It needs an explicit selection.
-- A subject is delivered at most once, unless an interrupted delivery is
-  settled as `queued` or a delivery is forced.
-- `deliver` runs every loaded sink, in the order of the YAML; `run` runs the
-  four phases in turn, and a failure in one does not stop the next.
+  state, with no backoff and no pacing. It needs an explicit selection.
+- A subject is delivered at most once per entry, unless an interrupted
+  delivery is settled as `queued` or a delivery is forced.
+- `deliver` runs the workflow's entries, in the order of the YAML; `run`
+  runs the four phases in turn, and a failure in one does not stop the
+  next.
 
 ## 5. API: the `Application` class
 
@@ -221,8 +259,8 @@ The database is not exposed: every query goes through `Application`.
   returns. Their metadata:
   - Annotation: producer, referenced item, key, `created_at` and
     `updated_at`.
-  - Artifact: producer, name, content type, `created_at` and `updated_at`.
-- **Deliveries:** in the database, per `(sink, subject)`: status, attempts,
+  - Artifact: remix key, name, content type, `created_at` and `updated_at`.
+- **Deliveries:** in the database, per `(ledger key, subject)`: status, attempts,
   last error, the subject's `content_sha256` when delivered, an external
   reference (e.g. a message id) and timestamps. Deleting the subject deletes
   its deliveries.

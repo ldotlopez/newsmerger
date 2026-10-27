@@ -91,7 +91,7 @@ Rules:
 - [x] **5. CLI:** `-w/--workflow` on `run` and the phase commands
   (default `default`); `deliver [KEY]`; `inspect deliveries` and
   `deliveries resolve` by ledger key.
-- [ ] **6. Docs**, each edit approved first: rewrite decisions 0003
+- [x] **6. Docs**, each edit approved first: rewrite decisions 0003
   (per-use options) and 0007 (ledger identity, entries, pacing), a new
   decision for workflows; ARCHITECTURE, README, SPECIFICATION,
   `config.example.yaml`.
