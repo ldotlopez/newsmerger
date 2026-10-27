@@ -1,7 +1,7 @@
-# Graph Report - telegram-item-image  (2026-10-27)
+# Graph Report - telegram-item-url-rename  (2026-10-27)
 
 ## Corpus Check
-- 68 files · ~119,201 words
+- 68 files · ~119,199 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 4 file(s) not represented in the graph (top: (none) 3, .lock 1)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `1b532842`
+- Built from commit: `a7391951`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -298,7 +298,7 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `test_db.py` be split into smaller, more focused modules?**
   _Cohesion score 0.06807017543859649 - nodes in this community are weakly interconnected._
 - **Why does `ProcessingScope` connect `ProcessingScope` to `test_db.py`, `db.py`, `ApplicationTests`, `test_telegram.py`, `Application`, `GroupingTests`, `DeleteCommandTests`, `app_from_context`, `FeedGeneratorRemixer`, `run_cmd`, `app.py`, `BaseSink`, `DeliveryStatus`, `SourceItem`, `Database`, `Any`, `migrate`, `DigestRemixer`, `Artifact`, `delete_items_cmd`, `grouping.py`, `report_user_errors`, `PluginOptions`, `inspect_items_cmd`, `config.py`, `cli.py`?**
-  _High betweenness centrality (0.123) - this node is a cross-community bridge._
+  _High betweenness centrality (0.124) - this node is a cross-community bridge._
 - **Are the 40 inferred relationships involving `ProcessingScope` (e.g. with `Application` and `delete_annotations_cmd()`) actually correct?**
   _`ProcessingScope` has 40 INFERRED edges - model-reasoned connections that need verification._
 - **Should `.close` be split into smaller, more focused modules?**

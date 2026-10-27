@@ -430,8 +430,8 @@ The per-entry options are a `DeliveryOptions` subclass (`interval`,
 delivers is an option. `telegram` bundles two sinks that post through
 `post(bot_token, method, ...)`; each entry's `bot_token` and `chat_id`
 default to the section's, which is optional. `item_image` picks
-`sendPhoto` for items with an image, `original_url_text` and
-`original_url_preview` set the article link's text and whether
+`sendPhoto` for items with an image, `item_url_text` and
+`item_url_preview` set the article link's text and whether
 `sendMessage` shows its preview. `TelegramSink` reads the `summary` annotation and
 `TelegramArtifactSink` sends artifacts with `sendDocument`; both record
 `{"chat_id", "message_id"}`, since a message id is only unique in its chat.

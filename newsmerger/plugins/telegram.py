@@ -64,8 +64,8 @@ class ItemDeliveryOptions(DeliveryOptions):
     bot_token: SecretStr
     chat_id: str
     item_image: bool = True  # post the item's image, when it has one, as a photo
-    original_url_preview: bool = False  # only for text messages
-    original_url_text: str = "original article"
+    item_url_preview: bool = False  # only for text messages
+    item_url_text: str = "original article"
 
 
 class DocumentDeliveryOptions(ArtifactDeliveryOptions):
@@ -111,7 +111,7 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
             subject.title,
             str(summaries[subject.key]),
             subject.uri,
-            options.original_url_text,
+            options.item_url_text,
         )
         image = subject.data.get("image")
         if options.item_image and isinstance(image, str) and image.strip():
@@ -127,9 +127,7 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
                 "chat_id": options.chat_id,
                 "text": caption,
                 "parse_mode": "HTML",
-                "link_preview_options": {
-                    "is_disabled": not options.original_url_preview
-                },
+                "link_preview_options": {"is_disabled": not options.item_url_preview},
             }
             message_id = post(options.bot_token, "sendMessage", json=payload)
         # A message id is only unique within its chat.
