@@ -126,7 +126,10 @@ remix:
 # first; default 0), `max_per_run` (default 5), `max_retries` and `lookback`.
 deliver:
   - sink: telegram                   # summarized items (`summary`)
-    options: {interval: 30}
+    options:
+      interval: 30
+      original_url_text: original article  # the link to the article
+      original_url_preview: false    # Telegram's link preview, text posts only
   - sink: telegram_artifacts         # artifacts, as documents
     options: {artifacts: [digest]}
   - googlechat

@@ -180,6 +180,20 @@ class TelegramSinkTests(TelegramTestCase):
         (request_url,) = post.call_args.args
         self.assertTrue(request_url.endswith("/sendMessage"))
         self.assertIn("Summary h3", post.call_args.kwargs["json"]["text"])
+        self.assertIn(">original article</a>", post.call_args.kwargs["json"]["text"])
+        self.assertEqual(
+            post.call_args.kwargs["json"]["link_preview_options"], {"is_disabled": True}
+        )
+
+    def test_link_text_and_preview_are_configurable(self, post: Mock) -> None:
+        post.return_value = ok_response()
+        self.add_summarized(SOURCE_A, 3)
+
+        self.deliver(original_url_preview=True, original_url_text="Leer <más>")
+
+        payload = post.call_args.kwargs["json"]
+        self.assertIn(">Leer &lt;más&gt;</a>", payload["text"])
+        self.assertEqual(payload["link_preview_options"], {"is_disabled": False})
 
 
 @patch("newsmerger.plugins.telegram.requests.post")
@@ -263,7 +277,7 @@ class BuildCaptionTests(unittest.TestCase):
         caption = build_caption("Title", "A" * 2000, "https://example.test/article")
 
         self.assertLessEqual(len(caption), MAX_CAPTION_LENGTH)
-        self.assertIn("Original article", caption)
+        self.assertIn("original article", caption)
         self.assertIn("https://example.test/article", caption)
 
 
