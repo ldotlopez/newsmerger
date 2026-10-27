@@ -515,8 +515,9 @@ def process_runs(
     """Every workflow's `process:` entries by `(workflow, key)`, in order.
     Reject, at startup, entries whose processor is not loaded or does not
     take their options, malformed keys, and keys written twice in a workflow
-    or by workflows that share a source: annotations are per item, so only
-    workflows with disjoint sources may write the same key."""
+    or differently by workflows that share a source: annotations are per
+    item, so workflows that share a source may write the same key only with
+    the same processor and options, the same run."""
     runs: dict[tuple[str, str], Run] = {}
     for workflow in workflows:
         for index, entry in enumerate(workflow.process):
@@ -533,11 +534,19 @@ def process_runs(
             if not KEY_PATTERN.fullmatch(key):
                 raise ConfigError(f"{location}: invalid key '{key}'")
             for (other, other_key), run in runs.items():
-                shared = set(workflow.sources) & set(run.workflow.sources)
-                if other_key == key and (other == workflow.name or shared):
+                if other_key != key:
+                    continue
+                if other == workflow.name:
                     raise ConfigError(
                         f"{location}: key '{key}' is written by another entry"
-                        f" (workflow '{other}') on the same sources"
+                        f" (workflow '{other}')"
+                    )
+                same_run = run.name == entry.processor and run.options == options
+                if set(workflow.sources) & set(run.workflow.sources) and not same_run:
+                    raise ConfigError(
+                        f"{location}: key '{key}' is written differently by"
+                        f" another entry (workflow '{other}') on the same"
+                        " sources; give one a `key`"
                     )
             runs[workflow.name, key] = Run(workflow, entry.processor, options)
     return runs
