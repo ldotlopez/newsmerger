@@ -26,33 +26,31 @@ class Options(PluginOptions):
 
 
 class FeedGeneratorRemixer(BaseRemixer):
-    name = "feedgenerator"
+    """Every option is per `remix:` entry; the section sets their defaults."""
 
-    def __init__(self, cfg: Options) -> None:
-        self.title = cfg.title
-        self.link = cfg.link
-        self.description = cfg.description or cfg.title
-        self.max_items = cfg.max_items
+    name = "feedgenerator"
+    options_model = Options
 
     def produce(
-        self, db: Database, scope: ProcessingScope
+        self, db: Database, scope: ProcessingScope, options: Options
     ) -> Iterator[tuple[str, str, str]]:
         if scope.limit is None:
-            scope = dataclasses.replace(scope, limit=self.max_items)
+            scope = dataclasses.replace(scope, limit=options.max_items)
         yield (
             "feed",
-            self._build_feed(db.get_items(scope, newest_first=True)),
+            self._build_feed(db.get_items(scope, newest_first=True), options),
             "application/rss+xml",
         )
 
-    def _build_feed(self, items: list[SourceItem]) -> str:
+    def _build_feed(self, items: list[SourceItem], options: Options) -> str:
         entries = "\n".join(self._build_entry(item) for item in items)
+        description = options.description or options.title
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<rss version="2.0"><channel>\n'
-            f"<title>{escape(self.title)}</title>\n"
-            + (f"<link>{escape(self.link)}</link>\n" if self.link else "")
-            + f"<description>{escape(self.description)}</description>\n"
+            f"<title>{escape(options.title)}</title>\n"
+            + (f"<link>{escape(options.link)}</link>\n" if options.link else "")
+            + f"<description>{escape(description)}</description>\n"
             + f"<lastBuildDate>{datetime.now(UTC).strftime(RFC822)}</lastBuildDate>\n"
             + f"{entries}\n"
             + "</channel></rss>\n"

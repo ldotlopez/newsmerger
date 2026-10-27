@@ -43,9 +43,12 @@ Rules:
 - **Process keys** are unique within a workflow and across workflows that
   share a source (annotations are per item); workflows with disjoint
   sources may write the same key, so a `default: false` source gets its
-  own `markdown` and `summary` (revised 2026-10-27). **Remixer names** are
-  unique across all workflows (artifacts are global). Remix entry keys (one
-  remixer in two workflows) are not needed yet (backlog).
+  own `markdown` and `summary` (revised 2026-10-27).
+- **Remix entries** are `{remixer, key, options}` like the other phases;
+  `key` defaults to the remixer's name and is unique across all workflows
+  (artifacts are not per source). No schema change: the `artifacts.remixer`
+  column holds the key, so existing artifacts stay valid (revised
+  2026-10-27).
 - **Delivery identity** is `(workflow, key, subject)`. `key` is optional,
   defaults to the sink name and is unique within its workflow. No schema
   change: the `sink` column holds `workflow/key`, and `default` writes the
@@ -71,13 +74,12 @@ Rules:
   (`interval`, `max_per_run`, `lookback`, `max_retries`) in a
   `DeliveryOptions` in `sinks.py`; sink-specific ones (`chat_id`,
   `artifacts`, the webhook) in subclasses; `requires` stays a class
-  attribute. Remixers take none (one entry each, so the section is their
-  only use). Tests.
+  attribute. Remixers too (`feedgenerator`, `digest`, `grouping`). Tests.
 - [x] **2. Config:** `Workflow` (`name`, `sources`, `process`, `remix`,
-  `deliver`), `remix` as names, `DeliveryEntry` (`sink`, `key`, `options`),
-  `SourceData.default`; the root keys build `default`. Startup checks:
-  names, source ids, process keys per shared source, global remixer names, delivery keys
-  per workflow, no `/`.
+  `deliver`), `RemixEntry` and `DeliveryEntry` (`<plugin>`, `key`,
+  `options`), `SourceData.default`; the root keys build `default`. Startup
+  checks: names, source ids, process keys per shared source, global remix
+  keys, delivery keys per workflow, no `/`.
 - [x] **3. Sinks as entries:** objects built once from `plugins:` (the
   `telegram` bundle subsections go); `deliver` takes the entry's ledger
   key and options. `interval` per entry and `max_per_run` in the base
@@ -485,8 +487,6 @@ Risks:
 - **Ledger columns `workflow`, `key`, `sink`** instead of `workflow/key`
   in `sink`: when querying by workflow or knowing the plugin per row
   matters. Needs a migration.
-- **Remix entry keys**: one remixer (e.g. `digest`) in two workflows needs
-  artifacts keyed by entry, like process keys.
 - **Configurable input keys for consumers**: `summarize`/`tagger` read
   `markdown`, `telegram` `summary`, `grouping` `tags`; an option naming
   another key when a run writes, e.g., `summary/es`.

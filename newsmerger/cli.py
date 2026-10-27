@@ -207,7 +207,7 @@ artifact_ids_option = click.option(
     "artifact_ids",
     multiple=True,
     callback=parse_artifact_ids,
-    help="Artifact as <remixer>/<name> (repeatable)",
+    help="Artifact as <remix key>/<name> (repeatable)",
 )
 
 
@@ -270,7 +270,7 @@ def print_remix(produced: dict[str, list[str]]) -> int:
     """Print the remix summary; remixers report no failures."""
     print_table(
         "Remix",
-        ["Remixer", "Artifacts"],
+        ["Remix", "Artifacts"],
         [[name, ", ".join(names) or "-"] for name, names in produced.items()],
     )
     return 0
@@ -332,21 +332,21 @@ def process_cmd(
 
 
 @cli.command("remix")
-@click.argument("remixer", required=False)
+@click.argument("key", required=False)
 @workflow_option
 @scope_options
 @click.pass_context
 @report_user_errors
 def remix_cmd(
-    ctx: click.Context, remixer: str | None, workflow: str, scope: ProcessingScope
+    ctx: click.Context, key: str | None, workflow: str, scope: ProcessingScope
 ) -> None:
-    """Run one remixer, or every `remix:` entry of the workflow in order."""
+    """Run the `remix:` entry KEY, or every one of the workflow in order."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         produced = run_each(
             progress,
-            [remixer] if remixer else app.remixers(workflow),
-            lambda name: app.run_remixer(name, scope=scope),
+            [key] if key else app.remix_keys(workflow),
+            lambda name: app.run_remix(name, scope=scope),
         )
     print_remix(produced)
 
@@ -434,7 +434,7 @@ def run_cmd(ctx: click.Context, workflow: str) -> None:
         (
             "remix",
             lambda progress: run_each(
-                progress, app.remixers(workflow), app.run_remixer
+                progress, app.remix_keys(workflow), app.run_remix
             ),
             print_remix,
         ),
@@ -605,7 +605,7 @@ def artifact_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     )(command)
     command = artifact_ids_option(command)
     return click.option(
-        "--remixer", default=None, help="Only this remixer's artifacts"
+        "--remixer", default=None, help="Only this remix key's artifacts"
     )(command)
 
 

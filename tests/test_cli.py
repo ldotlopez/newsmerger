@@ -94,14 +94,14 @@ class CommandTests(unittest.TestCase):
 
     def test_remix_runs_one_or_every_remixer(self) -> None:
         app = Mock()
-        app.remixers.return_value = ["feedgenerator", "digest"]
-        app.run_remixer.return_value = ["feed"]
+        app.remix_keys.return_value = ["feedgenerator", "digest"]
+        app.run_remix.return_value = ["feed"]
 
         self.assertEqual(invoke(app, "remix", "feedgenerator").exit_code, 0)
         self.assertEqual(invoke(app, "remix").exit_code, 0)
 
         self.assertEqual(
-            app.run_remixer.call_args_list,
+            app.run_remix.call_args_list,
             [
                 call("feedgenerator", scope=ProcessingScope()),
                 call("feedgenerator", scope=ProcessingScope()),
@@ -111,7 +111,7 @@ class CommandTests(unittest.TestCase):
 
     def test_writing_commands_take_the_write_lock(self) -> None:
         app = Mock()
-        app.remixers.return_value = []
+        app.remix_keys.return_value = []
 
         with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(cli, ["remix"])
@@ -168,8 +168,8 @@ class CommandTests(unittest.TestCase):
         app.sources.return_value = []
         app.process_keys.return_value = ["summary"]
         app.run_process.side_effect = RuntimeError("llm down")
-        app.remixers.return_value = ["feedgenerator"]
-        app.run_remixer.return_value = ["feed"]
+        app.remix_keys.return_value = ["feedgenerator"]
+        app.run_remix.return_value = ["feed"]
         app.delivery_keys.return_value = ["telegram"]
         app.run_delivery.return_value = RunSummary(done=1)
 
@@ -177,7 +177,7 @@ class CommandTests(unittest.TestCase):
             result = invoke(app, "run")
 
         self.assertEqual(result.exit_code, 1)
-        app.run_remixer.assert_called_once_with("feedgenerator")
+        app.run_remix.assert_called_once_with("feedgenerator")
         app.run_delivery.assert_called_once_with("telegram", workflow="default")
         self.assertIn("1 failure(s)", result.output)
         # Summaries are results: stdout only, after the progress rows.
@@ -190,7 +190,7 @@ class CommandTests(unittest.TestCase):
         app.sources.return_value = [SOURCE]
         app.import_source.return_value = []
         app.process_keys.return_value = []
-        app.remixers.return_value = []
+        app.remix_keys.return_value = []
         app.delivery_keys.return_value = []
 
         result = invoke(app, "run", "--workflow", "juntas")
@@ -198,7 +198,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         app.sources.assert_called_once_with("juntas")
         app.process_keys.assert_called_once_with(workflow="juntas")
-        app.remixers.assert_called_once_with("juntas")
+        app.remix_keys.assert_called_once_with("juntas")
         app.delivery_keys.assert_called_once_with("juntas")
 
     def test_resolve_settles_interrupted_deliveries(self) -> None:
@@ -277,7 +277,7 @@ class LogLevelTests(unittest.TestCase):
         config_path = self.config_dir / "config.yaml"
         config_path.write_text(config)
         app = Mock()
-        app.remixers.return_value = []
+        app.remix_keys.return_value = []
         with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(
                 cli,

@@ -98,7 +98,9 @@ class SourceItem:
 class Artifact:
     """A remixer output derived from many items (an RSS feed, a newsletter).
 
-    Unique per (remixer, name); the timestamps are set by the database.
+    Unique per (remixer, name), where `remixer` holds the `remix:` entry's
+    key (by default the remixer's name); the timestamps are set by the
+    database.
     """
 
     remixer: str
