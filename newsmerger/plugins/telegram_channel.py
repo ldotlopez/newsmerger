@@ -4,6 +4,7 @@ web preview (https://t.me/s/<channel>), one item per linked article."""
 import dataclasses
 import hashlib
 import logging
+import re
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Any
@@ -25,6 +26,8 @@ from . import PluginObjects, PluginOptions, Services, merge_options
 LOGGER = logging.getLogger(__name__)
 
 TELEGRAM_HOSTS = {"t.me", "telegram.me", "telegram.org"}
+# The preview shows a post's photo as the CSS background of its wrapper.
+BACKGROUND_IMAGE_RE = re.compile(r"background-image:url\('(.+?)'\)")
 
 
 class Options(PluginOptions):
@@ -37,6 +40,7 @@ class Post:
     published_at: datetime
     text: str
     links: list[str]
+    image: str | None = None
 
 
 def preview_url(source: SourceData) -> str:
@@ -65,12 +69,15 @@ def parse_preview(content: bytes, page_url: str) -> tuple[list[Post], str | None
             if urlparse(href).scheme in ("http", "https")
             and urlparse(href).hostname not in TELEGRAM_HOSTS
         ]
+        photo = message.select_one(".tgme_widget_message_photo_wrap[style]")
+        image = BACKGROUND_IMAGE_RE.search(str(photo["style"])) if photo else None
         posts.append(
             Post(
                 id=str(message["data-post"]),
                 published_at=datetime.fromisoformat(str(time_tag["datetime"])),
                 text=text_tag.get_text("\n", strip=True) if text_tag else "",
                 links=links,
+                image=image.group(1) if image else None,
             )
         )
 
@@ -111,7 +118,9 @@ def parse_article(content: bytes, post: Post | None = None) -> SourceItemData:
         content=content,
         mimetype="text/html",
         published_at=post.published_at if post else None,
-        data={"telegram_post": post.id, "message": post.text} if post else {},
+        data={"telegram_post": post.id, "message": post.text, "image": post.image}
+        if post
+        else {},
     )
 
 

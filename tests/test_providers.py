@@ -358,6 +358,8 @@ class TestTelegramChannel(unittest.TestCase):
             datetime.datetime(2026, 10, 22, 7, 34, 7, tzinfo=datetime.UTC),
         )
         self.assertTrue(first.text.startswith("Amenaza con un machete"))
+        self.assertTrue(first.image.startswith("https://cdn4.telesco.pe/file/g1cDYUR3"))
+        self.assertTrue(all(post.image for post in posts))
         for post in posts:
             self.assertFalse(any("t.me/" in link for link in post.links))
 
@@ -392,6 +394,7 @@ class TestTelegramChannel(unittest.TestCase):
 
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].data["telegram_post"], "mediterraneoelperiodico/5154")
+        self.assertTrue(items[0].data["image"].startswith("https://cdn4.telesco.pe/"))
         self.assertEqual(items[0].published_at.hour, 7)
         # One uncached preview page plus one cached fetch per linked article.
         self.assertEqual(fetcher.get.call_count, 21)
