@@ -158,18 +158,38 @@ class TelegramSinkTests(TelegramTestCase):
         self.assertEqual(row.last_error, "ConnectionError")
         self.assertNotIn("s3cr3t", "\n".join(logs.output))
 
-    def test_sends_photo_with_escaped_caption(self, post: Mock) -> None:
+    @patch("newsmerger.plugins.telegram.requests.get")
+    def test_uploads_photo_with_escaped_caption(self, get: Mock, post: Mock) -> None:
+        get.return_value.content = b"JPEG"
+        get.return_value.headers = {"Content-Type": "image/jpeg"}
         post.return_value = ok_response()
         self.add_summarized(SOURCE_A, 3, image="https://a.test/image.jpg")
 
         self.deliver()
 
+        get.assert_called_once_with("https://a.test/image.jpg", timeout=30)
         (request_url,) = post.call_args.args
-        payload = post.call_args.kwargs["json"]
+        payload = post.call_args.kwargs["data"]
         self.assertTrue(request_url.endswith("/sendPhoto"))
-        self.assertEqual(payload["photo"], "https://a.test/image.jpg")
+        self.assertEqual(
+            post.call_args.kwargs["files"],
+            {"photo": ("image.jpg", b"JPEG", "image/jpeg")},
+        )
         self.assertIn("Hour &lt;3&gt;", payload["caption"])
         self.assertIn('href="https://a.test/3?a=1&amp;b=2"', payload["caption"])
+
+    @patch("newsmerger.plugins.telegram.requests.get")
+    def test_image_download_failure_is_a_failed_delivery(
+        self, get: Mock, post: Mock
+    ) -> None:
+        get.return_value.raise_for_status.side_effect = requests.HTTPError("404")
+        self.add_summarized(SOURCE_A, 3, image="https://a.test/image.jpg")
+
+        self.deliver()
+
+        post.assert_not_called()
+        ((row, _),) = self.db.get_item_deliveries("telegram")
+        self.assertEqual(row.status, DeliveryStatus.ERROR)
 
     def test_item_image_off_sends_text(self, post: Mock) -> None:
         post.return_value = ok_response()
