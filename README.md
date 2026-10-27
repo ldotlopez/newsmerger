@@ -338,7 +338,7 @@ Each provider is a plugin of the same name, without options except
 
 `telegram_channel` reads the channel's web preview, which only public
 channels have, and imports one item per linked article, keyed by its
-canonical URL; the post id and text go into the item's `data`. Links that
+canonical URL; the post id, text and photo go into the item's `data`. Links that
 resolve to the site's front page, such as a daily front-page post, are
 skipped. Its `pages`
 option (default 1, 20 posts each) reads further back. The preview is always
