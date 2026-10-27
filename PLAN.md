@@ -40,10 +40,12 @@ Rules:
   override their options (two option sets for one item would flip its
   `content_sha256` and break change detection, decision 0001). `default`
   uses every source except those with `default: false`.
-- **Process keys** and **remixer names** are unique across all workflows
-  (annotations and artifacts are global); another workflow's output is
-  read through `requires`. Remix entry keys (one remixer in two
-  workflows) are not needed yet (backlog).
+- **Process keys** are unique within a workflow and across workflows that
+  share a source (annotations are per item); workflows with disjoint
+  sources may write the same key, so a `default: false` source gets its
+  own `markdown` and `summary` (revised 2026-10-27). **Remixer names** are
+  unique across all workflows (artifacts are global). Remix entry keys (one
+  remixer in two workflows) are not needed yet (backlog).
 - **Delivery identity** is `(workflow, key, subject)`. `key` is optional,
   defaults to the sink name and is unique within its workflow. No schema
   change: the `sink` column holds `workflow/key`, and `default` writes the
@@ -74,7 +76,7 @@ Rules:
 - [x] **2. Config:** `Workflow` (`name`, `sources`, `process`, `remix`,
   `deliver`), `remix` as names, `DeliveryEntry` (`sink`, `key`, `options`),
   `SourceData.default`; the root keys build `default`. Startup checks:
-  names, source ids, global process keys and remixer names, delivery keys
+  names, source ids, process keys per shared source, global remixer names, delivery keys
   per workflow, no `/`.
 - [x] **3. Sinks as entries:** objects built once from `plugins:` (the
   `telegram` bundle subsections go); `deliver` takes the entry's ledger

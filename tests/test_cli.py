@@ -73,8 +73,8 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(
             app.run_process.call_args_list,
             [
-                call("summary/es", scope=scope, force=True),
-                call("summary/en", scope=scope, force=True),
+                call("summary/es", workflow="default", scope=scope, force=True),
+                call("summary/en", workflow="default", scope=scope, force=True),
             ],
         )
 
@@ -88,7 +88,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         app.process_keys.assert_called_once_with(None, workflow="default")
         app.run_process.assert_called_once_with(
-            "markdown", scope=ProcessingScope(), force=False
+            "markdown", workflow="default", scope=ProcessingScope(), force=False
         )
         self.assertIn("markdown", result.output)
 
