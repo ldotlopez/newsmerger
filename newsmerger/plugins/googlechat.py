@@ -1,4 +1,5 @@
-"""The `googlechat` sink posts summarized items (title, summary and link) to a
+"""The `googlechat` sink posts summarized items (title, summary, link and
+image, see `WebhookOptions`) to a
 Google Chat space through an incoming webhook, given either as its `url` or
 as its `channel` (space id) and `token`, in the section (the default) or in
 each `deliver:` entry. What was delivered is in the ledger
@@ -26,13 +27,27 @@ class GoogleChatError(Exception):
     """A message could not be posted."""
 
 
-def build_text(title: str, summary: str, uri: str) -> str:
+def build_text(
+    title: str, summary: str, uri: str, link_text: str = "original article"
+) -> str:
     # Chat parses `<url|label>` links and `*bold*`, so the text must escape `<>&`.
     return (
         f"*{html.escape(title, quote=False)}*\n\n"
         f"{html.escape(summary, quote=False)}\n\n"
-        f"<{uri}|Original article>"
+        f"<{uri}|{html.escape(link_text, quote=False)}>"
     )
+
+
+def image_card(image_url: str, alt_text: str) -> dict[str, Any]:
+    """A card holding only the image, shown below the message text."""
+    return {
+        "cardId": "image",
+        "card": {
+            "sections": [
+                {"widgets": [{"image": {"imageUrl": image_url, "altText": alt_text}}]}
+            ]
+        },
+    }
 
 
 class Options(PluginOptions):
@@ -47,6 +62,8 @@ class WebhookOptions(DeliveryOptions):
     url: SecretStr | None = None
     channel: str | None = None
     token: SecretStr | None = None
+    item_image: bool = True  # the item's image, when it has one, as a card
+    item_url_text: str = "original article"
 
     @pydantic.model_validator(mode="after")
     def url_or_channel_and_token(self) -> Self:
@@ -76,11 +93,21 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
         self, db: Database, subject: SourceItem, options: WebhookOptions
     ) -> dict[str, str]:
         summaries = db.get_annotation_values([subject], key="summary")
-        text = build_text(subject.title, str(summaries[subject.key]), subject.uri)
+        message: dict[str, Any] = {
+            "text": build_text(
+                subject.title,
+                str(summaries[subject.key]),
+                subject.uri,
+                options.item_url_text,
+            )
+        }
+        image = subject.data.get("image")
+        if options.item_image and isinstance(image, str) and image.strip():
+            message["cardsV2"] = [image_card(image, subject.title)]
         try:
             response = requests.post(
                 options.webhook_url().get_secret_value(),
-                json={"text": text},
+                json=message,
                 timeout=30,
             )
             result = response.json()

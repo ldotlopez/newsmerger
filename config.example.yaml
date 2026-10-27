@@ -133,7 +133,10 @@ deliver:
       item_url_preview: false        # Telegram's link preview, text posts only
   - sink: telegram_artifacts         # artifacts, as documents
     options: {artifacts: [digest]}
-  - googlechat
+  - sink: googlechat
+    options:
+      item_image: true               # the item's image as a card, if any
+      item_url_text: original article # the link to the article
 
 # More workflows, run with `-w NAME` (one cron line each). A workflow sees only
 # its sources; two workflows may write the same process key only if they

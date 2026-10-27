@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pydantic
@@ -67,22 +68,29 @@ class GoogleChatSinkTests(unittest.TestCase):
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
+        self.add_summarized("h1")
+        self.sink = GoogleChatSink(Options(channel="AAAA", token="secret"))
+
+    def add_summarized(self, uid: str, **data: Any) -> None:
         item = SourceItem(
             source=SOURCE,
-            uid="h1",
+            uid=uid,
             title="A <b> & c",
             uri="https://a.test/1?a=1&b=2",
             content=b"<p>1</p>",
             mimetype="text/html",
+            data=data,
             published_at=datetime.now(UTC),
         )
         self.db.upsert_source_items([item])
         self.db.record_result(
             item, "summarize", "summary", ProcessingStatus.DONE, value="S"
         )
-        sink = GoogleChatSink(Options(channel="AAAA", token="secret"))
-        options = sink.use_options({})
-        self.deliver = lambda: sink.deliver(self.db, key="googlechat", options=options)
+
+    def deliver(self, **options: Any) -> None:
+        self.sink.deliver(
+            self.db, key="googlechat", options=self.sink.use_options(options)
+        )
 
     def tearDown(self) -> None:
         self.db.close()
@@ -100,12 +108,39 @@ class GoogleChatSinkTests(unittest.TestCase):
             post.call_args.kwargs["json"],
             {
                 "text": "*A &lt;b&gt; &amp; c*\n\nS\n\n"
-                "<https://a.test/1?a=1&b=2|Original article>"
+                "<https://a.test/1?a=1&b=2|original article>"
             },
         )
         ((row, _),) = self.db.get_item_deliveries("googlechat")
         self.assertEqual(row.status, DeliveryStatus.DONE)
         self.assertEqual(row.external_ref, {"message": "spaces/AAAA/messages/m1"})
+
+    def test_image_card_and_link_text(self, post: Mock) -> None:
+        post.return_value = Mock(ok=True)
+        post.return_value.json.return_value = {"name": "spaces/AAAA/messages/m1"}
+        self.add_summarized("h2", image="https://a.test/image.jpg")
+
+        self.deliver(item_url_text="Leer <más>")
+
+        messages = [call.kwargs["json"] for call in post.call_args_list]
+        self.assertEqual([("cardsV2" in m) for m in messages], [False, True])
+        self.assertTrue(messages[1]["text"].endswith("|Leer &lt;más&gt;>"))
+        ((widget,),) = (
+            section["widgets"]
+            for section in messages[1]["cardsV2"][0]["card"]["sections"]
+        )
+        self.assertEqual(widget["image"]["imageUrl"], "https://a.test/image.jpg")
+
+    def test_item_image_off_sends_text_only(self, post: Mock) -> None:
+        post.return_value = Mock(ok=True)
+        post.return_value.json.return_value = {"name": "spaces/AAAA/messages/m1"}
+        self.add_summarized("h2", image="https://a.test/image.jpg")
+
+        self.deliver(item_image=False)
+
+        self.assertFalse(
+            any("cardsV2" in call.kwargs["json"] for call in post.call_args_list)
+        )
 
     def test_failed_post_stays_failed_without_leaking_the_token(
         self, post: Mock
