@@ -4,6 +4,92 @@ Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 Ideas and plans not scheduled yet go to the backlog at the end.
 
+## Workflows, delivery entries and per-use options as pydantic models
+
+Agreed 2026-10-27. A workflow selects sources and runs its own `process`,
+`remix` and `deliver` entries; the root keys are the `default` workflow.
+A delivery is marked by what it delivers and who asked for it (the
+workflow), so one sink (e.g. `telegram`) serves several instances, each with
+its own chat and pacing.
+
+```yaml
+sources:
+  - id: x
+    provider: feedreader
+    url: ...
+  - id: y
+    provider: plaza
+    url: ...
+    default: false             # only workflows use it
+process: [markdownify, summarize]
+deliver:
+  - sink: telegram             # key: telegram
+workflows:
+  - name: channel-y
+    sources: [y]
+    process: [...]
+    deliver:
+      - sink: telegram
+        key: channel-y
+        options: {chat_id: "-100…", requires: summary, interval: 30, max_per_run: 1}
+```
+
+Rules:
+
+- **Sources** stay global and are referenced by id; workflows cannot
+  override their options (two option sets for one item would flip its
+  `content_sha256` and break change detection, decision 0001). `default`
+  uses every source except those with `default: false`.
+- **Process keys** and **remixer names** are unique across all workflows
+  (annotations and artifacts are global); another workflow's output is
+  read through `requires`. Remix entry keys (one remixer in two
+  workflows) are not needed yet (backlog).
+- **Delivery identity** is `(workflow, key, subject)`. `key` is optional,
+  defaults to the sink name and is unique within its workflow. No schema
+  change: the `sink` column holds `workflow/key`, and `default` writes the
+  bare `key`, so existing rows stay valid with no migration. `/` is
+  forbidden in workflow names and keys. Renaming a workflow or key is a new
+  requester: it delivers its `lookback` again.
+- **Workflows** are a list with `name` (YAML mappings drop duplicate keys
+  silently); `default` is reserved.
+- **Pacing** per delivery entry, in `BaseSink`/`BaseItemSink`: `interval`
+  is one item per interval for the whole entry, oldest first across its
+  sources (the per-source mode goes); `max_per_run` caps every run against
+  flooding (a new key starts with an empty ledger). `--force` needs an
+  explicit selection and skips both.
+- **CLI:** `run` and every phase command run `default` without `-w NAME`;
+  `deliver KEY --force --item N` resends.
+
+- [ ] **1. Per-use options as pydantic models** for providers, processors
+  and sinks (was a backlog item): each plugin splits its `Options` by
+  inheritance, a model with the per-use options and `Options(<it>)` adding
+  the instance-only ones; the core validates each use at startup and merges
+  it over the section defaults (`model_copy(update=...model_dump(
+  exclude_unset=True))`) instead of `inspect.signature(...).bind`. Shared
+  delivery options (`requires`, `interval`, `max_per_run`, `lookback`,
+  `max_retries`) in a `DeliveryOptions` in `sinks.py`; sink-specific ones
+  (`chat_id`, `artifacts`) in subclasses. Tests.
+- [ ] **2. Config:** `Workflow` (`name`, `sources`, `process`, `remix`,
+  `deliver`), `RemixEntry`, `DeliveryEntry` (`sink`, `key`, `options`),
+  `SourceData.default`; the root keys build `default`. Startup checks:
+  names, source ids, global process keys and remixer names, delivery keys
+  per workflow, no `/`.
+- [ ] **3. Sinks as entries:** objects built once from `plugins:` (the
+  `telegram` bundle subsections go); `deliver` takes the entry's ledger
+  key and options. `interval` per entry and `max_per_run` in the base
+  classes; `TelegramSink.select` and `last_delivery_by_source` go or
+  become per key. `external_ref` records the destination
+  (`{"chat_id", "message_id"}`).
+- [ ] **4. Application and phases** scoped to a workflow: import, process
+  and remix over its sources; remixers listed per workflow.
+- [ ] **5. CLI:** `-w/--workflow` on `run` and the phase commands
+  (default `default`); `deliver [KEY]`; `inspect deliveries` and
+  `deliveries resolve` by ledger key.
+- [ ] **6. Docs**, each edit approved first: rewrite decisions 0003
+  (per-use options) and 0007 (ledger identity, entries, pacing), a new
+  decision for workflows; ARCHITECTURE, README, SPECIFICATION,
+  `config.example.yaml`.
+
 ## `enrich` section: processor runs keyed by annotation key
 
 Agreed 2026-10-26 (decision 0002). `enrich:` lists processor runs in order;
@@ -386,8 +472,17 @@ Risks:
   section exists (see the plan above); per-source runs or options are next.
   Proposed shape (2026-10-27, not agreed): the same list format as `process`; an entry
   whose key matches a default entry replaces it, a new key adds a run.
-- **Remix and deliver sections** with per-use options, like `process`
-  (`digest` has a prompt too).
+- **Workflow cleanup in the CLI** (2026-10-27, undefined yet): candidates
+  are `inspect/delete orphans` (ledger rows, annotations and artifacts of
+  keys or remixers no longer configured) or deleting what one workflow
+  produced.
+- **`deliveries rename OLD NEW`**: renaming a workflow or delivery key
+  redelivers its `lookback`; a rename keeps the ledger.
+- **Ledger columns `workflow`, `key`, `sink`** instead of `workflow/key`
+  in `sink`: when querying by workflow or knowing the plugin per row
+  matters. Needs a migration.
+- **Remix entry keys**: one remixer (e.g. `digest`) in two workflows needs
+  artifacts keyed by entry, like process keys.
 - **Configurable input keys for consumers**: `summarize`/`tagger` read
   `markdown`, `telegram` `summary`, `grouping` `tags`; an option naming
   another key when a run writes, e.g., `summary/es`.
@@ -400,23 +495,7 @@ Risks:
   `digest` `context_length`); `json_mode`/`context_length` stay explicit in
   the `LLM` protocol. Review decision 0006 first; migrate when a
   backend-specific option needs a per-use override.
-- **Per-use options as pydantic models instead of signature binding.**
-  Each plugin splits its `Options` by inheritance: a model with the
-  per-use options (e.g. `FeedOptions`) and `Options(FeedOptions)` adding
-  the instance-only ones. The provider validates a source's
-  `provider_options` against it and merges them over its section defaults
-  (`model_copy(update=...model_dump(exclude_unset=True))`); the core calls
-  that at startup instead of `inspect.signature(...).bind`. Gains: each
-  option declared once (today twice: `Options` and the `retrieve_items`
-  keyword), types checked at startup, one fallback rule instead of each
-  provider's `x or self.x` (which cannot unset a section default). Costs:
-  `Provider` protocol change (typing the options argument needs a generic
-  protocol or provider-side validation; generic `ParametrosCompletos` /
-  `ParametrosDeVerbo` models in the core were rejected), rewrite decision
-  0003's per-use options. Not worth it for one provider with one option
-  (2026-10-26); propose it when more per-use options appear, in providers
-  or in other verbs (see *LLM options per use*).
 
 ---
 
-*Last updated: 2026-10-26*
+*Last updated: 2026-10-27*
