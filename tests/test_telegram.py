@@ -199,7 +199,7 @@ class TelegramSinkTests(TelegramTestCase):
         post.return_value = ok_response()
         self.add_summarized(SOURCE_A, 3)
 
-        self.deliver(original_url_preview=True, original_url_text="Leer <más>")
+        self.deliver(item_url_preview=True, item_url_text="Leer <más>")
 
         payload = post.call_args.kwargs["json"]
         self.assertIn(">Leer &lt;más&gt;</a>", payload["text"])

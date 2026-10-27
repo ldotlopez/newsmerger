@@ -437,9 +437,9 @@ Every deliver entry takes `interval` (minutes between its deliveries,
 default 0: no pacing), `max_per_run` (deliveries per run at most, default
 5), `max_retries` (default 3) and `lookback` (hours, default 24).
 `telegram` adds `item_image` (post the item's image, when it has one, as a
-photo with the text as its caption; default true), `original_url_text` (the
+photo with the text as its caption; default true), `item_url_text` (the
 text of the link to the article, default `original article`) and
-`original_url_preview` (let Telegram show the link's preview on messages
+`item_url_preview` (let Telegram show the link's preview on messages
 without an image, default false).
 `telegram_artifacts` adds `artifacts` (remix keys, default none).
 
