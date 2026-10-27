@@ -244,8 +244,8 @@ remix:
                 ),
             ),
             (
-                workflow % "process: [markdownify]",
-                r"workflows\.w\.process\.0: key 'markdown' is written by another",
+                workflow % "process: [{processor: summarize, key: markdown}]",
+                r"workflows\.w\.process\.0: key 'markdown' is written differently",
             ),
             (
                 workflow % "deliver: [{sink: feedgenerator}]",
@@ -309,13 +309,13 @@ workflows:
         # `default` uses both sources, so it shares `juntas` with `a`.
         with self.assertRaisesRegex(
             ConfigError,
-            r"workflows\.a\.process\.0: key 'markdown' is written by another entry"
-            r" \(workflow 'default'\) on the same sources",
+            r"workflows\.a\.process\.0: key 'markdown' is written differently by"
+            r" another entry \(workflow 'default'\) on the same sources",
         ):
             self.make_app(
                 process="process: [markdownify]\n",
-                workflows="workflows:\n"
-                "  - {name: a, sources: [juntas], process: [markdownify]}\n",
+                workflows="workflows:\n  - {name: a, sources: [juntas], process:"
+                " [{processor: summarize, key: markdown}]}\n",
             )
         self.app = self.make_app(
             process="",
@@ -329,6 +329,20 @@ workflows:
 
         self.assertEqual(self.app.run_process("markdown", workflow="a").done, 0)
         self.assertEqual(self.app.run_process("markdown", workflow="b").done, 1)
+        self.assertIn("markdown", self.app.get_annotations(item))
+
+    def test_workflows_sharing_a_source_share_identical_entries(self) -> None:
+        self.app.close()
+        self.app = self.make_app(
+            process="process: [markdownify]\n",
+            workflows="workflows:\n"
+            "  - {name: a, sources: [mediterraneo], process: [markdownify]}\n",
+        )
+        item = self.import_sample()  # a `mediterraneo` item
+
+        self.assertEqual(self.app.run_process("markdown", workflow="a").done, 1)
+        # The same run: `default` finds it done.
+        self.assertEqual(self.app.run_process("markdown").done, 0)
         self.assertIn("markdown", self.app.get_annotations(item))
 
     def test_default_uses_the_sources_not_opted_out(self) -> None:
