@@ -31,13 +31,18 @@ Articles:
 """
 
 
-class Options(PluginOptions):
-    llm: str | None = None
+class DigestOptions(PluginOptions):
+    """Per `remix:` entry; the section sets their defaults."""
+
     model: str | None = None
     days: int = 7  # scope when it sets no `since`
     max_items: int = 50  # newest items per source
     max_article_chars: int = 3000  # each article's markdown is cut to this
     context_length: int = 32768  # the model's context window, in tokens
+
+
+class Options(DigestOptions):
+    llm: str | None = None
 
 
 class DigestRemixer(BaseRemixer):
@@ -48,20 +53,17 @@ class DigestRemixer(BaseRemixer):
     `markdownify.markdown` are left out."""
 
     name = "digest"
+    options_model = DigestOptions
 
     def __init__(self, llm: LLM, cfg: Options) -> None:
+        super().__init__(cfg)
         self.llm = llm
-        self.model = cfg.model
-        self.days = cfg.days
-        self.max_items = cfg.max_items
-        self.max_article_chars = cfg.max_article_chars
-        self.context_length = cfg.context_length
 
     def produce(
-        self, db: Database, scope: ProcessingScope
+        self, db: Database, scope: ProcessingScope, options: DigestOptions
     ) -> Iterator[tuple[str, str, str]]:
         now = datetime.now(UTC)
-        since = scope.since or now - timedelta(days=self.days)
+        since = scope.since or now - timedelta(days=options.days)
         until = scope.until or now
         items = db.get_items(dataclasses.replace(scope, since=since), newest_first=True)
         markdowns = db.get_annotation_values(items, key="markdown")
@@ -76,9 +78,11 @@ class DigestRemixer(BaseRemixer):
         for source_id, source_items in items_by_source.items():
             articles = [
                 (item, markdowns[item.key])
-                for item in reversed(source_items[: self.max_items])
+                for item in reversed(source_items[: options.max_items])
             ]
-            digest = self._write(source_items[0].source, articles, since, until)
+            digest = self._write(
+                source_items[0].source, articles, since, until, options
+            )
             name = f"{source_id}/{since:%Y-%m-%d}_{until:%Y-%m-%d}"
             yield name, digest, "text/markdown"
 
@@ -88,13 +92,14 @@ class DigestRemixer(BaseRemixer):
         articles: list[tuple[SourceItem, str]],
         since: datetime,
         until: datetime,
+        options: DigestOptions,
     ) -> str:
         prompt = DIGEST_PROMPT + "\n\n".join(
-            self._article_text(number, item, markdown)
+            self._article_text(number, item, markdown, options.max_article_chars)
             for number, (item, markdown) in enumerate(articles, start=1)
         )
         response = self.llm.prompt(
-            prompt, model=self.model, context_length=self.context_length
+            prompt, model=options.model, context_length=options.context_length
         )
         body = strip_code_fence(response)
         if not body:
@@ -102,13 +107,15 @@ class DigestRemixer(BaseRemixer):
 
         return f"# {source.name}: {since:%Y-%m-%d} – {until:%Y-%m-%d}\n\n{body}\n"
 
-    def _article_text(self, number: int, item: SourceItem, markdown: str) -> str:
+    def _article_text(
+        self, number: int, item: SourceItem, markdown: str, max_chars: int
+    ) -> str:
         published = f"{item.published_at:%Y-%m-%d}" if item.published_at else "-"
         return (
             f"### {number}. {item.title}\n"
             f"Date: {published}\n"
             f"Link: {item.uri}\n\n"
-            f"{markdown[: self.max_article_chars].strip()}"
+            f"{markdown[:max_chars].strip()}"
         )
 
 
@@ -118,5 +125,6 @@ def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     try:
         remixer = DigestRemixer(services.llm(cfg.llm), cfg)
     except LLMUnavailableError as e:
-        return [(name, Remixer, UnavailableRemixer(name, str(e)))]
+        unavailable = UnavailableRemixer(name, str(e), DigestRemixer, cfg)
+        return [(name, Remixer, unavailable)]
     return [(name, Remixer, remixer)]

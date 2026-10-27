@@ -73,6 +73,27 @@ class ProcessEntry(pydantic.BaseModel):
         return {"processor": value} if isinstance(value, str) else value
 
 
+class RemixEntry(pydantic.BaseModel):
+    """One remix of a workflow: `remixer` run with `options` (passed to it),
+    its artifacts under `key` (default: the remixer's name), which is unique
+    across workflows, since artifacts are not per source."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+    remixer: str
+    key: str | None = None
+    options: dict[str, JsonCompatible] = {}
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def from_name(cls, value: Any) -> Any:
+        """A bare remixer name runs it with its defaults."""
+        return {"remixer": value} if isinstance(value, str) else value
+
+    @property
+    def name(self) -> str:
+        return self.key or self.remixer
+
+
 class DeliveryEntry(pydantic.BaseModel):
     """One delivery of a workflow: `sink` run with `options` (passed to it),
     its ledger rows under `key` (default: the sink's name), which is unique
@@ -102,13 +123,18 @@ class Workflow(pydantic.BaseModel):
     name: str
     sources: list[str]  # source ids
     process: list[ProcessEntry] = []
-    remix: list[str] = []  # remixer names
+    remix: list[RemixEntry] = []
     deliver: list[DeliveryEntry] = []
 
     @pydantic.model_validator(mode="after")
     def names_are_valid(self) -> Workflow:
         if not NAME_PATTERN.fullmatch(self.name):
             raise ValueError(f"invalid workflow name '{self.name}'")
+        for entry in self.remix:
+            if not NAME_PATTERN.fullmatch(entry.name):
+                raise ValueError(
+                    f"workflow '{self.name}': invalid remix key '{entry.name}'"
+                )
         keys = [entry.name for entry in self.deliver]
         for key in keys:
             if not NAME_PATTERN.fullmatch(key):
@@ -139,7 +165,7 @@ class Config(pydantic.BaseModel):
     plugins: dict[str, dict[str, Any] | None] = {}
     # The default workflow's runs, in order; what is not listed never runs.
     process: list[ProcessEntry] = []
-    remix: list[str] = []
+    remix: list[RemixEntry] = []
     deliver: list[DeliveryEntry] = []
     # More workflows, run by name; a list, since YAML drops duplicate keys.
     workflows: list[Workflow] = []

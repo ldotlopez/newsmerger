@@ -48,7 +48,8 @@ class RemixerTestCase(unittest.TestCase):
 class FeedGeneratorTests(RemixerTestCase):
     def feed(self, **params) -> ET.Element:
         remixer = feedgenerator.FeedGeneratorRemixer(feedgenerator.Options(**params))
-        (artifact,) = remixer.produce(self.db, ProcessingScope())
+        options = remixer.use_options({})
+        (artifact,) = remixer.produce(self.db, ProcessingScope(), options)
         name, content, content_type = artifact
         self.assertEqual((name, content_type), ("feed", "application/rss+xml"))
         return ET.fromstring(content)
@@ -81,7 +82,7 @@ class GroupingTests(RemixerTestCase):
 
     def groups(self, remixer_class) -> list[list[str]]:
         cfg = grouping.GroupingOptions(tau_hours=None, days=10_000)
-        ((_, content, _),) = remixer_class(cfg).produce(self.db, ProcessingScope())
+        ((_, content, _),) = remixer_class(cfg).produce(self.db, ProcessingScope(), cfg)
         return [
             sorted(member["uid"] for member in group["members"])
             for group in json.loads(content)["groups"]
@@ -110,9 +111,10 @@ class GroupingTests(RemixerTestCase):
 
     def test_nothing_to_group_produces_no_artifact(self) -> None:
         self.add_items(1)
-        remixer = grouping.SingleLinkRemixer(grouping.GroupingOptions())
+        cfg = grouping.GroupingOptions()
+        remixer = grouping.SingleLinkRemixer(cfg)
 
-        self.assertEqual(list(remixer.produce(self.db, ProcessingScope())), [])
+        self.assertEqual(list(remixer.produce(self.db, ProcessingScope(), cfg)), [])
 
 
 class EmbeddingGroupingTests(RemixerTestCase):
@@ -141,7 +143,7 @@ class EmbeddingGroupingTests(RemixerTestCase):
     def groups_of(self, **options) -> tuple[list[list[str]], dict]:
         cfg = grouping.EmbeddingsOptions(tau_hours=None, days=10_000, **options)
         ((_, content, _),) = grouping.EmbeddingsRemixer(cfg).produce(
-            self.db, ProcessingScope()
+            self.db, ProcessingScope(), cfg
         )
         payload = json.loads(content)
         groups = [
@@ -185,7 +187,9 @@ class GroupingPluginTests(unittest.TestCase):
         )
 
         self.assertEqual((name, protocol), ("avglink", Remixer))
-        self.assertEqual((remixer.min_score, remixer.days), (0.5, 7))
+        options = remixer.use_options({})
+        self.assertEqual((options.min_score, options.days), (0.5, 7))
+        self.assertEqual(remixer.use_options({"days": 3}).days, 3)
         self.assertEqual(self.names(embeddings=None), ["embeddings"])
 
 

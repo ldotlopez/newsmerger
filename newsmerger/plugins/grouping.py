@@ -236,20 +236,17 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class GroupingRemixer(BaseRemixer):
-    """Groups the tagged items of the last `days` into events."""
+    """Groups the tagged items of the last `days` into events. Every option
+    is per `remix:` entry; the plugin's subsection sets their defaults."""
 
-    def __init__(self, cfg: GroupingOptions) -> None:
-        self.cfg = cfg
-        self.min_score = cfg.min_score
-        self.tau_hours = cfg.tau_hours
-        self.days = cfg.days
+    options_model = GroupingOptions
 
     def produce(
-        self, db: Database, scope: ProcessingScope
+        self, db: Database, scope: ProcessingScope, options: GroupingOptions
     ) -> Iterator[tuple[str, str, str]]:
         if scope.since is None:
             scope = dataclasses.replace(
-                scope, since=datetime.now(UTC) - timedelta(days=self.days)
+                scope, since=datetime.now(UTC) - timedelta(days=options.days)
             )
 
         items = db.get_items(scope)
@@ -261,30 +258,36 @@ class GroupingRemixer(BaseRemixer):
 
         payload = {
             "generated_at": datetime.now(UTC).isoformat(),
-            "params": {"algorithm": self.name, **self.cfg.model_dump()},
-            "groups": self.group(db, scored),
+            "params": {"algorithm": self.name, **options.model_dump()},
+            "groups": self.group(db, scored, options),
         }
         yield ARTIFACT_NAME, json.dumps(payload, indent=2), "application/json"
 
     @abstractmethod
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+    def group(
+        self, db: Database, items: list[ScoredItem], options: GroupingOptions
+    ) -> list[dict[str, Any]]:
         """Cluster the items; return one payload dict per group, largest first."""
 
 
 class SingleLinkRemixer(GroupingRemixer):
     name = "singlelink"
 
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
-        scores = build_score_matrix(items, self.tau_hours)
-        return single_link_groups(items, scores, self.min_score)
+    def group(
+        self, db: Database, items: list[ScoredItem], options: GroupingOptions
+    ) -> list[dict[str, Any]]:
+        scores = build_score_matrix(items, options.tau_hours)
+        return single_link_groups(items, scores, options.min_score)
 
 
 class AverageLinkRemixer(GroupingRemixer):
     name = "avglink"
 
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
-        matrix = build_score_matrix(items, self.tau_hours)
-        clusters = average_link_cluster(matrix, min_score=self.min_score)
+    def group(
+        self, db: Database, items: list[ScoredItem], options: GroupingOptions
+    ) -> list[dict[str, Any]]:
+        matrix = build_score_matrix(items, options.tau_hours)
+        clusters = average_link_cluster(matrix, min_score=options.min_score)
 
         return [
             {
@@ -305,46 +308,43 @@ class AverageLinkRemixer(GroupingRemixer):
 
 class EmbeddingsRemixer(GroupingRemixer):
     name = "embeddings"
+    options_model = EmbeddingsOptions
 
-    def __init__(self, cfg: EmbeddingsOptions) -> None:
-        super().__init__(cfg)
-        self.embedding_key = f"{cfg.embedding}_embedding"
-        self.embedding_weight = cfg.embedding_weight
-
+    @staticmethod
     def score(
-        self,
         a: ScoredItem,
         b: ScoredItem,
         embedding_a: list[float],
         embedding_b: list[float],
+        options: EmbeddingsOptions,
     ) -> float:
         cosine = max(cosine_similarity(embedding_a, embedding_b), 0.0)
-        blended = self.embedding_weight * cosine + (
-            1 - self.embedding_weight
-        ) * jaccard(a.tags, b.tags)
-        if self.tau_hours is None:
+        weight = options.embedding_weight
+        blended = weight * cosine + (1 - weight) * jaccard(a.tags, b.tags)
+        if options.tau_hours is None:
             return blended
         return blended * time_decay(
-            a.item.published_at, b.item.published_at, self.tau_hours
+            a.item.published_at, b.item.published_at, options.tau_hours
         )
 
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+    def group(
+        self, db: Database, items: list[ScoredItem], options: EmbeddingsOptions
+    ) -> list[dict[str, Any]]:
+        embedding_key = f"{options.embedding}_embedding"
         vectors = db.get_annotation_values(
-            [scored.item for scored in items], key=self.embedding_key
+            [scored.item for scored in items], key=embedding_key
         )
         embedded = [scored for scored in items if scored.item.key in vectors]
         if skipped := len(items) - len(embedded):
-            LOGGER.info(
-                f"{self.name}: {skipped} item(s) without embed.{self.embedding_key}"
-            )
+            LOGGER.info(f"{self.name}: {skipped} item(s) without {embedding_key}")
         embeddings = [vectors[scored.item.key] for scored in embedded]
 
         scores = [[0.0] * len(embedded) for _ in embedded]
         for i, j in combinations(range(len(embedded)), 2):
             scores[i][j] = scores[j][i] = self.score(
-                embedded[i], embedded[j], embeddings[i], embeddings[j]
+                embedded[i], embedded[j], embeddings[i], embeddings[j], options
             )
-        return single_link_groups(embedded, scores, self.min_score)
+        return single_link_groups(embedded, scores, options.min_score)
 
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:

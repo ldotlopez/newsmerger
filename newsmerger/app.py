@@ -168,9 +168,9 @@ class Application:
             if name == workflow and processor in (None, run.name)
         ]
 
-    def remixers(self, workflow: str = DEFAULT_WORKFLOW) -> list[str]:
-        """The workflow's `remix:` entries, in order."""
-        return list(self.workflow(workflow).remix)
+    def remix_keys(self, workflow: str = DEFAULT_WORKFLOW) -> list[str]:
+        """The keys of the workflow's `remix:` entries, in order."""
+        return [entry.name for entry in self.workflow(workflow).remix]
 
     def delivery_keys(self, workflow: str = DEFAULT_WORKFLOW) -> list[str]:
         """The keys of the workflow's `deliver:` entries, in order."""
@@ -219,15 +219,16 @@ class Application:
 
     # --- Remix -------------------------------------------------------------
 
-    def run_remixer(
-        self, name: str, *, scope: ProcessingScope | None = None
-    ) -> list[str]:
-        """Run a `remix:` entry on its workflow's sources; return the names
-        of the artifacts saved."""
-        if (run := self._remix.get(name)) is None:
-            raise ConfigError(f"remixer '{name}' is in no workflow's `remix:`")
-        return self._remixers[name].remix(
-            self._db, scope=workflow_scope(run.workflow, scope)
+    def run_remix(self, key: str, *, scope: ProcessingScope | None = None) -> list[str]:
+        """Run the `remix:` entry `key` on its workflow's sources; return the
+        names of the artifacts saved under `key`."""
+        if (run := self._remix.get(key)) is None:
+            raise ConfigError(f"no workflow has a remix entry '{key}'")
+        return self._remixers[run.name].remix(
+            self._db,
+            key=key,
+            options=run.options,
+            scope=workflow_scope(run.workflow, scope),
         )
 
     # --- Deliver -----------------------------------------------------------
@@ -441,10 +442,9 @@ def referenced_plugins(config: Config) -> list[tuple[str, type, str]]:
         for index, entry in enumerate(workflow.process):
             location = entry_location(workflow, "process", index)
             referenced.append((entry.processor, Processor, f"{location}.processor"))
-        for index, remixer in enumerate(workflow.remix):
-            referenced.append(
-                (remixer, Remixer, entry_location(workflow, "remix", index))
-            )
+        for index, remix in enumerate(workflow.remix):
+            location = entry_location(workflow, "remix", index)
+            referenced.append((remix.remixer, Remixer, f"{location}.remixer"))
         for index, delivery in enumerate(workflow.deliver):
             location = entry_location(workflow, "deliver", index)
             referenced.append((delivery.sink, Sink, f"{location}.sink"))
@@ -546,18 +546,27 @@ def process_runs(
 def remix_runs(
     workflows: list[Workflow], remixers: dict[str, Remixer]
 ) -> dict[str, Run]:
-    """Every workflow's `remix:` entries by remixer, in order. Reject, at
-    startup, remixers not loaded or listed twice, in any workflow: their
-    artifacts are shared."""
+    """Every workflow's `remix:` entries by key, in order. Reject, at
+    startup, entries whose remixer is not loaded or does not take their
+    options, and keys used twice, in any workflow: artifacts are shared."""
     runs: dict[str, Run] = {}
     for workflow in workflows:
-        for index, name in enumerate(workflow.remix):
+        for index, entry in enumerate(workflow.remix):
             location = entry_location(workflow, "remix", index)
-            if name not in remixers:
-                raise ConfigError(f"{location}: remixer '{name}' is not loaded")
-            if name in runs:
-                raise ConfigError(f"{location}: remixer '{name}' is listed twice")
-            runs[name] = Run(workflow, name)
+            if (remixer := remixers.get(entry.remixer)) is None:
+                raise ConfigError(
+                    f"{location}: remixer '{entry.remixer}' is not loaded"
+                )
+            try:
+                options = remixer.use_options(entry.options)
+            except pydantic.ValidationError as e:
+                raise options_error(f"{location}.options", e) from None
+            if entry.name in runs:
+                raise ConfigError(
+                    f"{location}: key '{entry.name}' is used by another remix"
+                    " entry; give one a `key`"
+                )
+            runs[entry.name] = Run(workflow, entry.remixer, options)
     return runs
 
 

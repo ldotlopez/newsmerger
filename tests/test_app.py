@@ -140,7 +140,7 @@ cache:
         markdown = self.app.get_annotations(item)["markdown"]
         self.assertIn("asedio carlista", markdown)
 
-        self.assertEqual(self.app.run_remixer("feedgenerator"), ["feed"])
+        self.assertEqual(self.app.run_remix("feedgenerator"), ["feed"])
         feed = self.app.get_artifact("feedgenerator", "feed")
         self.assertIn("<title>Test feed</title>", feed.content)
         self.assertIn(f"mediterraneo/{SAMPLE_UID}", feed.content)
@@ -191,8 +191,10 @@ cache:
             ConfigError, "no process entry of workflow 'default' writes the key"
         ):
             self.app.run_process("summary")
-        with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is in no workflow"):
-            self.app.run_remixer("avglink")
+        with self.assertRaisesRegex(
+            ConfigError, "no workflow has a remix entry 'avglink'"
+        ):
+            self.app.run_remix("avglink")
         with self.assertRaisesRegex(ConfigError, "has no delivery 'telegram'"):
             self.app.run_delivery("telegram")
         with self.assertRaisesRegex(ConfigError, "workflow 'nope' is not loaded"):
@@ -206,15 +208,40 @@ cache:
         )
 
         self.assertEqual(self.app.processors, ["markdownify"])
-        self.assertEqual(self.app.remixers(), ["singlelink", "feedgenerator"])
+        self.assertEqual(self.app.remix_keys(), ["singlelink", "feedgenerator"])
+
+    def test_remix_entries_save_their_artifacts_under_their_key(self) -> None:
+        self.app.close()
+        self.app = self.make_app(
+            workflows="""
+remix:
+  - feedgenerator
+  - {remixer: feedgenerator, key: short, options: {title: Short, max_items: 1}}
+"""
+        )
+        self.import_sample()
+
+        self.assertEqual(self.app.remix_keys(), ["feedgenerator", "short"])
+        self.assertEqual(self.app.run_remix("short"), ["feed"])
+        self.assertIn(
+            "<title>Short</title>", self.app.get_artifact("short", "feed").content
+        )
+        self.assertIsNone(self.app.get_artifact("feedgenerator", "feed"))
 
     def test_invalid_workflow_entries_are_config_errors(self) -> None:
         workflow = "workflows:\n  - {name: w, sources: [juntas], %s}\n"
         for workflows, message in (
-            ("remix: [nope]\n", r"remix\.0: no plugin provides 'nope'"),
+            ("remix: [nope]\n", r"remix\.0\.remixer: no plugin provides 'nope'"),
+            (
+                "remix: [{remixer: feedgenerator, options: {color: red}}]\n",
+                r"remix\.0\.options\.color: Extra inputs are not permitted",
+            ),
             (
                 "remix: [feedgenerator]\n" + workflow % "remix: [feedgenerator]",
-                r"workflows\.w\.remix\.0: remixer 'feedgenerator' is listed twice",
+                (
+                    r"workflows\.w\.remix\.0: key 'feedgenerator' is used by"
+                    r" another remix entry; give one a `key`"
+                ),
             ),
             (
                 workflow % "process: [markdownify]",
