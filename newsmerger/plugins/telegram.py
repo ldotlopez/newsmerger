@@ -115,13 +115,23 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
         )
         image = subject.data.get("image")
         if options.item_image and isinstance(image, str) and image.strip():
+            # Uploaded, not by URL: Telegram cannot fetch some URLs, such as
+            # its own CDN's (cdn*.telesco.pe) from `telegram_channel`.
+            response = requests.get(image, timeout=30)
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "image/jpeg")
+            extension = mimetypes.guess_extension(content_type) or ".jpg"
             payload = {
                 "chat_id": options.chat_id,
-                "photo": image,
                 "caption": caption,
                 "parse_mode": "HTML",
             }
-            message_id = post(options.bot_token, "sendPhoto", json=payload)
+            message_id = post(
+                options.bot_token,
+                "sendPhoto",
+                data=payload,
+                files={"photo": (f"image{extension}", response.content, content_type)},
+            )
         else:
             payload = {
                 "chat_id": options.chat_id,
