@@ -82,8 +82,8 @@ plugins:
 
   # Sinks: the defaults of their `deliver` entries.
   telegram:                          # the telegram and telegram_artifacts sinks
-    bot_token: ${TELEGRAM_BOT_TOKEN}
-    chat_id: ${TELEGRAM_CHAT_ID}     # entries may name their own
+    bot_token: ${TELEGRAM_BOT_TOKEN} # optional, like the section: entries
+    chat_id: ${TELEGRAM_CHAT_ID}     # may name their own bot and chat
   googlechat:                        # summarized items, by incoming webhook
     url: ${GOOGLECHAT_WEBHOOK_URL}   # or `channel` (space id) and `token`
 

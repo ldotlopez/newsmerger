@@ -4,7 +4,8 @@
 - **Date:** 2026-10-20
 - **Supersedes:** 0005
 - **Amends:** 0003 (a fourth plugin type and phase)
-- **Revised:** 2026-10-23, by 0008; 2026-10-27, by 0009 (see *Revisions*)
+- **Revised:** 2026-10-23, by 0008; 2026-10-27, by 0009; 2026-10-27, the
+  bot per entry (see *Revisions*)
 
 ## Context
 
@@ -97,8 +98,9 @@ What matters is not item versus collection but derived versus recorded:
 - **Scheduling.** External (cron, jobs); there is no long-running process.
   Commands that write take an exclusive lock on a file next to the
   database and fail at once if another holds it.
-- **`telegram`.** A bundle of two sinks sharing `bot_token`; `chat_id` is
-  an entry option, whose default is the section's:
+- **`telegram`.** A bundle of two sinks; `bot_token` and `chat_id` are
+  entry options, whose defaults are the section's (optional), so entries
+  can post with different bots:
   - `telegram` (items): `requires = "summary"` (an annotation key,
     decision 0002), no redelivery. Its state artifact is no longer
     produced.
@@ -180,6 +182,9 @@ What matters is not item versus collection but derived versus recorded:
 
 ## Revisions
 
+- **2026-10-27.** Discarded: one bot per configuration, its token required
+  in the `telegram` section. Remains: the section, now optional, as the
+  entries' defaults.
 - **2026-10-27 (0009).** Discarded: the ledger keyed by the sink's name,
   `telegram`'s per-source `interval`, the chat and webhook fixed in the
   plugin section, the `telegram` subsections, sinks enabled by their
