@@ -427,9 +427,9 @@ sends them whatever their state, without pacing.
 The per-entry options are a `DeliveryOptions` subclass (`interval`,
 `max_per_run`, `max_retries`, `lookback`; `ArtifactDeliveryOptions` adds
 `artifacts`, remix keys), so one sink object serves every entry: where it
-delivers is an option. `telegram` bundles two sinks sharing a
-`TelegramClient` (the bot token); each entry's `chat_id` defaults to the
-section's. `TelegramSink` reads the `summary` annotation and
+delivers is an option. `telegram` bundles two sinks that post through
+`post(bot_token, method, ...)`; each entry's `bot_token` and `chat_id`
+default to the section's, which is optional. `TelegramSink` reads the `summary` annotation and
 `TelegramArtifactSink` sends artifacts with `sendDocument`; both record
 `{"chat_id", "message_id"}`, since a message id is only unique in its chat.
 `googlechat` posts summarized items to the webhook of its entry. Request

@@ -438,8 +438,10 @@ default 0: no pacing), `max_per_run` (deliveries per run at most, default
 5), `max_retries` (default 3) and `lookback` (hours, default 24).
 `telegram_artifacts` adds `artifacts` (remix keys, default none).
 
-The `telegram` section holds `bot_token` (required) and `chat_id`, the
-default chat of its entries, which may name their own `chat_id`. The
+Every `telegram` and `telegram_artifacts` entry needs a `bot_token` and a
+`chat_id`, its own or the `telegram` section's, which holds their defaults
+and is optional: entries can post with different bots, and a workflow can
+give its entries both with no section at all. The
 `googlechat` section or entry gives the webhook as `url`, or as `channel`
 (the space id) and `token`.
 
