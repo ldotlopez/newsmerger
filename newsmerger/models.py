@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+from collections.abc import Callable
 from datetime import datetime
 from typing import Self
 
@@ -60,6 +61,16 @@ class SourceItemData(BaseModel):
             except UnicodeDecodeError as e:
                 raise ValueError(f"{self.mimetype} content is not UTF-8") from e
         return self
+
+
+@dataclasses.dataclass(slots=True)
+class LazySourceItemData:
+    """An item whose content is fetched only when needed: the core skips the
+    uids its source already stored without calling `load`. For sources whose
+    items never change once published."""
+
+    uid: str
+    load: Callable[[], SourceItemData]
 
 
 @dataclasses.dataclass

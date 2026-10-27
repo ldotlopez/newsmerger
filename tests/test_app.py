@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from foundation.plugin import PluginError, ProtocolConformanceError
 
@@ -19,7 +19,12 @@ from newsmerger.app import (
 )
 from newsmerger.config import Config, ConfigError
 from newsmerger.db import ProcessingStatus
-from newsmerger.models import ProcessingScope, SourceItem
+from newsmerger.models import (
+    LazySourceItemData,
+    ProcessingScope,
+    SourceItem,
+    SourceItemData,
+)
 from newsmerger.plugins import ClassRegister, Services, feedreader, markdownify
 from newsmerger.plugins.markdownify import MarkdownifyProcessor
 from newsmerger.plugins.ollama import OllamaLLM
@@ -89,6 +94,30 @@ cache:
         self.assertEqual(self.app.get_content(stored), item.content)
         self.assertEqual(item.key, stored.key)
         self.assertEqual(item.id, stored.id)
+
+    def test_lazy_items_already_stored_are_not_loaded(self) -> None:
+        def lazy(uid: str) -> LazySourceItemData:
+            item_data = SourceItemData(
+                uid=uid,
+                title=uid,
+                uri=f"https://x.test/{uid}.pdf",
+                content=b"%PDF",
+                mimetype="application/pdf",
+            )
+            return LazySourceItemData(uid=uid, load=Mock(return_value=item_data))
+
+        provider = self.app._object(self.app._catalog.sources["juntas"])
+        first = [lazy("new")]
+        with patch.object(provider, "retrieve_items", return_value=iter(first)):
+            self.app.import_source("juntas")
+        # A late upload of an older session lands behind the stored one.
+        second = [lazy("new"), lazy("late")]
+        with patch.object(provider, "retrieve_items", return_value=iter(second)):
+            (imported,) = self.app.import_source("juntas")
+
+        self.assertEqual(imported.uid, "late")
+        second[0].load.assert_not_called()
+        self.assertEqual({item.uid for item in self.app.get_items()}, {"new", "late"})
 
     def test_source_options_over_the_section_build_its_provider(self) -> None:
         for options, expected in (

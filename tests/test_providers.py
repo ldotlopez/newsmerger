@@ -41,6 +41,23 @@ class TestCSJuntasGobierno(unittest.TestCase):
         self.assertEqual(summer, datetime.timedelta(hours=2))
         self.assertEqual(winter, datetime.timedelta(hours=1))
 
+    def test_pdfs_are_downloaded_only_when_loaded(self) -> None:
+        index = b"""<ul><li>Sesi\xc3\xb3n del d\xc3\xada 28 de mayo de 2026
+            <a href="/a.pdf/1">Descargar extracto</a></li></ul>"""
+        pages = {"https://x.test/": index, "https://x.test/a.pdf/1": b"%PDF"}
+        fetched: list[str] = []
+        fetcher = Mock(get=lambda url: fetched.append(url) or pages[url])
+        source = Mock(id="src", url="https://x.test/")
+
+        (lazy,) = CSJuntasGobiernoProvider(NoOptions(), Services()).retrieve_items(
+            source, fetcher
+        )
+        self.assertEqual(fetched, ["https://x.test/"])
+
+        item = lazy.load()
+        self.assertEqual((item.uid, item.content), (lazy.uid, b"%PDF"))
+        self.assertEqual(fetched, ["https://x.test/", "https://x.test/a.pdf/1"])
+
 
 ARTICLE_PAGE = (
     b'<html><body><article><div class="body"><p>full</p></div></article></body></html>'

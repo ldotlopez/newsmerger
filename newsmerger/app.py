@@ -27,6 +27,7 @@ from .models import (
     Artifact,
     Delivery,
     ItemKey,
+    LazySourceItemData,
     ProcessingScope,
     SourceData,
     SourceItem,
@@ -162,11 +163,17 @@ class Application:
     # --- Import ------------------------------------------------------------
 
     def import_source(self, source_id: str) -> list[SourceItem]:
-        """Fetch every item of a configured source and store it."""
+        """Fetch every item of a configured source and store it, except lazy
+        items already stored."""
         source = self.config.get_source(source_id)
         provider = self._object(self._catalog.sources[source.id])
+        stored_uids = self._db.get_item_uids(source.id)
         items = []
         for item_data in provider.retrieve_items(source, self._fetcher):
+            if isinstance(item_data, LazySourceItemData):
+                if item_data.uid in stored_uids:
+                    continue
+                item_data = item_data.load()
             item = SourceItem.from_data(source, item_data)
             LOGGER.info(f"{source.id}: {item.uri}")
             items.append(item)

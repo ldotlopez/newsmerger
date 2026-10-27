@@ -681,6 +681,14 @@ class Database:
                 query = query.limit(scope.limit)
             return [db_item.to_dto() for db_item in query]
 
+    def get_item_uids(self, source_id: str) -> set[str]:
+        """The uids stored for a source."""
+        with self.session_scope() as sess:
+            query = sess.query(DBSourceItem.uid).filter(
+                DBSourceItem.source_id == source_id
+            )
+            return {uid for (uid,) in query}
+
     @staticmethod
     def _apply_scope(query: Query, scope: ProcessingScope) -> Query:
         if scope.source:

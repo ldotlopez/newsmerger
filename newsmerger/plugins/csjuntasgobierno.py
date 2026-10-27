@@ -4,13 +4,14 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 import bs4
 
 from ..httpclient import HTTPClient
-from ..models import SourceData, SourceItemData
+from ..models import LazySourceItemData, SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
 from . import PluginTypes
 
@@ -50,21 +51,31 @@ class PreparseData:
 class CSJuntasGobiernoProvider(BaseProvider):
     def retrieve_items(
         self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]:
+    ) -> Iterator[LazySourceItemData]:
+        # The index lists every session since 2006 and published PDFs never
+        # change: lazy items let the core skip the stored ones undownloaded.
         index = fetcher.get(str(source.url))
         for protodata in self._iter_pdf_links(index, str(source.url)):
-            yield SourceItemData(
-                uid=hashlib.sha256(protodata.uri.encode("utf-8")).hexdigest(),
-                uri=protodata.uri,
-                title=protodata.title,
-                published_at=protodata.dt,
-                modified_at=protodata.dt,
-                content=fetcher.get(protodata.uri),
-                mimetype="application/pdf",
-                data={
-                    "type": protodata.type_,
-                },
+            uid = hashlib.sha256(protodata.uri.encode("utf-8")).hexdigest()
+            yield LazySourceItemData(
+                uid=uid, load=partial(self._load_item, uid, protodata, fetcher)
             )
+
+    def _load_item(
+        self, uid: str, protodata: PreparseData, fetcher: HTTPClient
+    ) -> SourceItemData:
+        return SourceItemData(
+            uid=uid,
+            uri=protodata.uri,
+            title=protodata.title,
+            published_at=protodata.dt,
+            modified_at=protodata.dt,
+            content=fetcher.get(protodata.uri),
+            mimetype="application/pdf",
+            data={
+                "type": protodata.type_,
+            },
+        )
 
     def _iter_pdf_links(self, content: bytes, base_url: str) -> Iterator[PreparseData]:
 

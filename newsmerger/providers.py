@@ -8,7 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 import pydantic
 
 from .httpclient import HTTPClient
-from .models import SourceData, SourceItemData
+from .models import LazySourceItemData, SourceData, SourceItemData
 from .plugins import NoOptions, Services
 
 LOGGER = logging.getLogger(__name__)
@@ -18,11 +18,12 @@ type URI = str
 
 @runtime_checkable
 class Provider(Protocol):
-    """Retrieves a source's items."""
+    """Retrieves a source's items. Items it yields as `LazySourceItemData` are
+    loaded only if their uid is not stored yet."""
 
     def retrieve_items(
         self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]: ...
+    ) -> Iterator[SourceItemData | LazySourceItemData]: ...
 
 
 @runtime_checkable
@@ -46,7 +47,7 @@ class BaseProvider:
     @abstractmethod
     def retrieve_items(
         self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]: ...
+    ) -> Iterator[SourceItemData | LazySourceItemData]: ...
 
 
 class IndexSiteProvider(BaseProvider):
