@@ -677,18 +677,28 @@ class DeliveryTests(DatabaseTestCase):
         self.assertEqual([item.uid for _, item in in_scope], ["d3"])
         self.assertEqual(self.db.get_item_deliveries("other"), [])
 
-    def test_last_delivery_by_source_counts_done_rows_only(self):
+    def test_last_delivered_at_counts_done_rows_of_the_key_only(self):
+        self.assertIsNone(self.db.last_delivered_at("telegram"))
         self.db.queue_item_deliveries("telegram", ProcessingScope())
+        self.db.queue_item_deliveries("other", ProcessingScope())
         rows = self.db.get_item_deliveries("telegram")
         rows[0][0].status = DeliveryStatus.DONE
         self.db.save_delivery(rows[0][0])
         rows[1][0].status = DeliveryStatus.ERROR
         self.db.save_delivery(rows[1][0])
 
-        last = self.db.last_delivery_by_source("telegram")
+        last = self.db.last_delivered_at("telegram")
 
-        self.assertEqual(last, {"example": rows[0][0].updated_at})
-        self.assertIsNotNone(last["example"].tzinfo)
+        self.assertEqual(last, rows[0][0].updated_at)
+        self.assertIsNotNone(last.tzinfo)
+        self.assertIsNone(self.db.last_delivered_at("other"))
+
+    def test_scope_sources_keep_the_items_of_those_sources(self):
+        self.assertEqual(self.db.get_items(ProcessingScope(sources=())), [])
+        self.assertEqual(
+            len(self.db.get_items(ProcessingScope(sources=("example",)))),
+            len(self.db.get_items()),
+        )
 
     def test_queue_artifacts_of_the_listed_remixers(self):
         for remixer, name in (

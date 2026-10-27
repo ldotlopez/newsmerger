@@ -343,7 +343,7 @@ class DeliveryStatus(enum.StrEnum):
 
 
 class DBDelivery(Base):
-    """The delivery ledger: one row per (sink, subject), the record of an
+    """The delivery ledger: one row per (ledger key, subject), the record of an
     external fact, never regenerated (decision 0007)."""
 
     __tablename__ = "deliveries"
@@ -685,6 +685,8 @@ class Database:
     def _apply_scope(query: Query, scope: ProcessingScope) -> Query:
         if scope.source:
             query = query.filter(DBSourceItem.source_id == scope.source)
+        if scope.sources is not None:
+            query = query.filter(DBSourceItem.source_id.in_(scope.sources))
         if scope.since:
             query = query.filter(DBSourceItem.published_at >= scope.since)
         if scope.until:
@@ -1296,24 +1298,20 @@ class Database:
         with self.session_scope() as sess:
             sess.get_one(DBDelivery, delivery.id).update(delivery)
 
-    def last_delivery_by_source(self, sink: str) -> dict[str, datetime]:
-        """When `sink` last delivered an item of each source."""
+    def last_delivered_at(self, sink: str) -> datetime | None:
+        """When the ledger key `sink` last delivered anything, if ever."""
         with self.session_scope() as sess:
-            rows = (
-                sess.query(DBSourceItem.source_id, DBDelivery.updated_at)
-                .join(DBSourceItem, DBDelivery.source_item_id == DBSourceItem.id)
+            # order_by, not func.max(), which would bypass UTCDateTime.
+            row = (
+                sess.query(DBDelivery.updated_at)
                 .filter(
                     DBDelivery.sink == sink,
                     DBDelivery.status == DeliveryStatus.DONE,
                 )
-                .all()
+                .order_by(DBDelivery.updated_at.desc())
+                .first()
             )
-        # The latest per source in Python: func.max() would bypass UTCDateTime.
-        last: dict[str, datetime] = {}
-        for source_id, delivered_at in rows:
-            if source_id not in last or delivered_at > last[source_id]:
-                last[source_id] = delivered_at
-        return last
+        return None if row is None else row[0]
 
     def find_deliveries(
         self,

@@ -1,28 +1,32 @@
-"""Two sinks sharing one Telegram bot and chat (decision 0007):
+"""Two sinks sharing one Telegram bot (decision 0007):
 
-- `telegram` posts summarized items (title, summary and link), oldest first,
-  at most one per source every `interval` minutes.
+- `telegram` posts summarized items (title, summary and link), oldest first.
 - `telegram_artifacts` sends every artifact of the remixers listed in
   `artifacts` (e.g. `[digest]`) as a document.
 
-Each has an optional subsection of options. With none, both are enabled with
-their defaults; with some, only those. What was delivered is in the ledger
-(`inspect deliveries`), so nothing is ever posted twice unless forced.
+The section holds the bot token and, optionally, a default `chat_id`; each
+`deliver:` entry may name its own chat, so one bot posts to many. What was
+delivered is in the ledger (`inspect deliveries`), so nothing is ever posted
+twice unless forced.
 """
 
 import html
 import logging
 import mimetypes
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pydantic
 import requests
 from pydantic import SecretStr
 
 from ..db import Database
-from ..models import Artifact, Delivery, SourceItem
-from ..sinks import BaseArtifactSink, BaseItemSink, Sink
+from ..models import Artifact, SourceItem
+from ..sinks import (
+    ArtifactDeliveryOptions,
+    BaseArtifactSink,
+    BaseItemSink,
+    DeliveryOptions,
+    Sink,
+)
 from . import PluginObjects, PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
@@ -54,37 +58,24 @@ def build_caption(title: str, summary: str, uri: str) -> str:
     return heading + escaped_summary + footer
 
 
-class ItemSinkOptions(PluginOptions):
-    interval: int = 30  # minutes between posts of the same source
-    max_retries: int = 3
-    lookback: int = 24  # hours: the candidates without --since or --item
+class ItemDeliveryOptions(DeliveryOptions):
+    chat_id: str
 
 
-class ArtifactSinkOptions(PluginOptions):
-    # Remixers whose artifacts are sent.
-    artifacts: list[str] = pydantic.Field(default_factory=list)
-    max_retries: int = 3
-    lookback: int = 24  # hours: the candidates without --since or --artifact
+class DocumentDeliveryOptions(ArtifactDeliveryOptions):
+    chat_id: str
 
 
 class Options(PluginOptions):
     bot_token: SecretStr
-    chat_id: str
-    telegram: ItemSinkOptions = ItemSinkOptions()
-    telegram_artifacts: ArtifactSinkOptions = ArtifactSinkOptions()
-
-    @pydantic.field_validator("telegram", "telegram_artifacts", mode="before")
-    @classmethod
-    def empty_section_takes_defaults(cls, value: Any) -> Any:
-        return {} if value is None else value
+    chat_id: str | None = None  # the default for every entry
 
 
 class TelegramClient:
-    """Bot API calls to one chat."""
+    """Bot API calls."""
 
-    def __init__(self, bot_token: SecretStr, chat_id: str) -> None:
+    def __init__(self, bot_token: SecretStr) -> None:
         self.bot_token = bot_token
-        self.chat_id = chat_id
 
     def post(self, method: str, **request: Any) -> int:
         """Call `method` with `requests.post` keyword arguments; return the
@@ -104,39 +95,24 @@ class TelegramClient:
         return result["result"]["message_id"]
 
 
-class TelegramSink(BaseItemSink):
+class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
     name = "telegram"
     requires = "summary"
+    options_model = ItemDeliveryOptions
 
-    def __init__(self, client: TelegramClient, cfg: ItemSinkOptions) -> None:
-        super().__init__(max_retries=cfg.max_retries, lookback=cfg.lookback)
+    def __init__(self, client: TelegramClient, cfg: Options) -> None:
+        super().__init__(cfg)
         self.client = client
-        self.interval = timedelta(minutes=cfg.interval)
 
-    def select(
-        self, db: Database, pending: list[tuple[Delivery, SourceItem]], now: datetime
-    ) -> list[tuple[Delivery, SourceItem]]:
-        """The head of each source's queue, once it is due and the source's
-        last delivery is `interval` old."""
-        last_delivery = db.last_delivery_by_source(self.name)
-        heads: dict[str, tuple[Delivery, SourceItem]] = {}
-        for delivery, item in pending:
-            heads.setdefault(item.source.id, (delivery, item))
-        never = datetime.min.replace(tzinfo=UTC)
-        return [
-            (delivery, item)
-            for source_id, (delivery, item) in heads.items()
-            if self.is_due(delivery, now)
-            and now - last_delivery.get(source_id, never) >= self.interval
-        ]
-
-    def send(self, db: Database, subject: SourceItem) -> dict[str, int]:
+    def send(
+        self, db: Database, subject: SourceItem, options: ItemDeliveryOptions
+    ) -> dict[str, Any]:
         summaries = db.get_annotation_values([subject], key="summary")
         caption = build_caption(subject.title, str(summaries[subject.key]), subject.uri)
         image = subject.data.get("image")
         if isinstance(image, str) and image.strip():
             payload = {
-                "chat_id": self.client.chat_id,
+                "chat_id": options.chat_id,
                 "photo": image,
                 "caption": caption,
                 "parse_mode": "HTML",
@@ -144,27 +120,29 @@ class TelegramSink(BaseItemSink):
             message_id = self.client.post("sendPhoto", json=payload)
         else:
             payload = {
-                "chat_id": self.client.chat_id,
+                "chat_id": options.chat_id,
                 "text": caption,
                 "parse_mode": "HTML",
             }
             message_id = self.client.post("sendMessage", json=payload)
-        return {"message_id": message_id}
+        # A message id is only unique within its chat.
+        return {"chat_id": options.chat_id, "message_id": message_id}
 
 
-class TelegramArtifactSink(BaseArtifactSink):
+class TelegramArtifactSink(BaseArtifactSink[DocumentDeliveryOptions]):
     """Sends artifacts as documents, which avoids the 4096-character limit
     of messages."""
 
     name = "telegram_artifacts"
+    options_model = DocumentDeliveryOptions
 
-    def __init__(self, client: TelegramClient, cfg: ArtifactSinkOptions) -> None:
-        super().__init__(
-            cfg.artifacts, max_retries=cfg.max_retries, lookback=cfg.lookback
-        )
+    def __init__(self, client: TelegramClient, cfg: Options) -> None:
+        super().__init__(cfg)
         self.client = client
 
-    def send(self, db: Database, subject: Artifact) -> dict[str, int]:
+    def send(
+        self, db: Database, subject: Artifact, options: DocumentDeliveryOptions
+    ) -> dict[str, Any]:
         artifact = db.get_artifact(subject.remixer, subject.name)
         if artifact is None or artifact.content is None:
             raise LookupError(f"artifact {subject.remixer}/{subject.name} is gone")
@@ -173,7 +151,7 @@ class TelegramArtifactSink(BaseArtifactSink):
         message_id = self.client.post(
             "sendDocument",
             data={
-                "chat_id": self.client.chat_id,
+                "chat_id": options.chat_id,
                 "caption": f"{artifact.remixer}/{artifact.name}",
             },
             files={
@@ -184,18 +162,11 @@ class TelegramArtifactSink(BaseArtifactSink):
                 )
             },
         )
-        return {"message_id": message_id}
+        return {"chat_id": options.chat_id, "message_id": message_id}
 
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     cfg = Options.model_validate(options)
-    client = TelegramClient(cfg.bot_token, cfg.chat_id)
-    builders = {
-        "telegram": lambda: TelegramSink(client, cfg.telegram),
-        "telegram_artifacts": lambda: TelegramArtifactSink(
-            client, cfg.telegram_artifacts
-        ),
-    }
-    enabled = [name for name in options if name in builders] or list(builders)
-    sinks = [builders[name]() for name in enabled]
+    client = TelegramClient(cfg.bot_token)
+    sinks = [TelegramSink(client, cfg), TelegramArtifactSink(client, cfg)]
     return [(sink.name, Sink, sink) for sink in sinks]

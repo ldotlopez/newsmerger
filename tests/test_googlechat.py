@@ -11,7 +11,12 @@ import requests
 from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
 from newsmerger.models import SourceData, SourceItem
 from newsmerger.plugins import Services, googlechat
-from newsmerger.plugins.googlechat import WEBHOOK_KEY, GoogleChatSink, Options
+from newsmerger.plugins.googlechat import (
+    WEBHOOK_KEY,
+    GoogleChatSink,
+    Options,
+    WebhookOptions,
+)
 from newsmerger.sinks import Sink
 
 SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
@@ -19,7 +24,7 @@ SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
 
 class OptionsTests(unittest.TestCase):
     def test_builds_the_url_from_channel_and_token(self) -> None:
-        cfg = Options(channel="AAAA", token="t0k=")
+        cfg = WebhookOptions(channel="AAAA", token="t0k=")
         self.assertEqual(
             cfg.webhook_url().get_secret_value(),
             "https://chat.googleapis.com/v1/spaces/AAAA/messages"
@@ -27,7 +32,7 @@ class OptionsTests(unittest.TestCase):
         )
 
     def test_takes_the_url_as_given(self) -> None:
-        cfg = Options(url="https://chat.test/hook")
+        cfg = WebhookOptions(url="https://chat.test/hook")
         self.assertEqual(cfg.webhook_url().get_secret_value(), "https://chat.test/hook")
 
     def test_needs_exactly_one_form(self) -> None:
@@ -38,7 +43,14 @@ class OptionsTests(unittest.TestCase):
             {"url": "https://chat.test/hook", "channel": "AAAA", "token": "t"},
         ):
             with self.subTest(options), self.assertRaises(pydantic.ValidationError):
-                Options.model_validate(options)
+                WebhookOptions.model_validate(options)
+
+    def test_an_entry_overrides_the_section(self) -> None:
+        sink = GoogleChatSink(Options(channel="AAAA", token="t"))
+        self.assertEqual(sink.use_options({}).channel, "AAAA")
+        self.assertEqual(sink.use_options({"channel": "BBBB"}).channel, "BBBB")
+        with self.assertRaises(pydantic.ValidationError):
+            GoogleChatSink(Options()).use_options({})
 
     def test_entry_point_registers_the_sink(self) -> None:
         ((name, protocol, sink),) = googlechat.__newsmerger_plugin__(
@@ -68,7 +80,9 @@ class GoogleChatSinkTests(unittest.TestCase):
         self.db.record_result(
             item, "summarize", "summary", ProcessingStatus.DONE, value="S"
         )
-        self.sink = GoogleChatSink(Options(channel="AAAA", token="secret"))
+        sink = GoogleChatSink(Options(channel="AAAA", token="secret"))
+        options = sink.use_options({})
+        self.deliver = lambda: sink.deliver(self.db, key="googlechat", options=options)
 
     def tearDown(self) -> None:
         self.db.close()
@@ -78,8 +92,8 @@ class GoogleChatSinkTests(unittest.TestCase):
         post.return_value = Mock(ok=True)
         post.return_value.json.return_value = {"name": "spaces/AAAA/messages/m1"}
 
-        self.sink.deliver(self.db)
-        self.sink.deliver(self.db)
+        self.deliver()
+        self.deliver()
 
         post.assert_called_once()
         self.assertEqual(
@@ -99,7 +113,7 @@ class GoogleChatSinkTests(unittest.TestCase):
         post.side_effect = requests.ConnectionError("url: ...&token=secret")
 
         with self.assertLogs("newsmerger.sinks", "ERROR") as logs:
-            self.sink.deliver(self.db)
+            self.deliver()
 
         ((row, _),) = self.db.get_item_deliveries("googlechat")
         self.assertEqual(
@@ -112,7 +126,7 @@ class GoogleChatSinkTests(unittest.TestCase):
         post.return_value.json.return_value = {"error": {"message": "bad space"}}
 
         with self.assertLogs("newsmerger.sinks", "ERROR"):
-            self.sink.deliver(self.db)
+            self.deliver()
 
         ((row, _),) = self.db.get_item_deliveries("googlechat")
         self.assertEqual(row.last_error, "bad space")

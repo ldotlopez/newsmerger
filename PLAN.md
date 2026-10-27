@@ -60,29 +60,31 @@ Rules:
 - **CLI:** `run` and every phase command run `default` without `-w NAME`;
   `deliver KEY --force --item N` resends.
 
-- [ ] **1. Per-use options as pydantic models** for providers, processors
+- [x] **1. Per-use options as pydantic models** for providers, processors
   and sinks (was a backlog item): each plugin splits its `Options` by
   inheritance, a model with the per-use options and `Options(<it>)` adding
   the instance-only ones; the core validates each use at startup and merges
-  it over the section defaults (`model_copy(update=...model_dump(
-  exclude_unset=True))`) instead of `inspect.signature(...).bind`. Shared
-  delivery options (`requires`, `interval`, `max_per_run`, `lookback`,
-  `max_retries`) in a `DeliveryOptions` in `sinks.py`; sink-specific ones
-  (`chat_id`, `artifacts`) in subclasses. Tests.
-- [ ] **2. Config:** `Workflow` (`name`, `sources`, `process`, `remix`,
-  `deliver`), `RemixEntry`, `DeliveryEntry` (`sink`, `key`, `options`),
+  it over the section defaults (`merge_options` in `plugins/__init__`)
+  instead of `inspect.signature(...).bind`. Shared delivery options
+  (`interval`, `max_per_run`, `lookback`, `max_retries`) in a
+  `DeliveryOptions` in `sinks.py`; sink-specific ones (`chat_id`,
+  `artifacts`, the webhook) in subclasses; `requires` stays a class
+  attribute. Remixers take none (one entry each, so the section is their
+  only use). Tests.
+- [x] **2. Config:** `Workflow` (`name`, `sources`, `process`, `remix`,
+  `deliver`), `remix` as names, `DeliveryEntry` (`sink`, `key`, `options`),
   `SourceData.default`; the root keys build `default`. Startup checks:
   names, source ids, global process keys and remixer names, delivery keys
   per workflow, no `/`.
-- [ ] **3. Sinks as entries:** objects built once from `plugins:` (the
+- [x] **3. Sinks as entries:** objects built once from `plugins:` (the
   `telegram` bundle subsections go); `deliver` takes the entry's ledger
   key and options. `interval` per entry and `max_per_run` in the base
   classes; `TelegramSink.select` and `last_delivery_by_source` go or
   become per key. `external_ref` records the destination
   (`{"chat_id", "message_id"}`).
-- [ ] **4. Application and phases** scoped to a workflow: import, process
+- [x] **4. Application and phases** scoped to a workflow: import, process
   and remix over its sources; remixers listed per workflow.
-- [ ] **5. CLI:** `-w/--workflow` on `run` and the phase commands
+- [x] **5. CLI:** `-w/--workflow` on `run` and the phase commands
   (default `default`); `deliver [KEY]`; `inspect deliveries` and
   `deliveries resolve` by ledger key.
 - [ ] **6. Docs**, each edit approved first: rewrite decisions 0003

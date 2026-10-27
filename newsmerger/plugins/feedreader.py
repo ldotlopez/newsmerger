@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urljoin
@@ -12,7 +12,7 @@ from foundation.scrapelib import soupify
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import Provider
-from . import PluginObjects, PluginOptions, Services
+from . import PluginObjects, PluginOptions, Services, merge_options
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,17 +25,17 @@ class Options(PluginOptions):
 
 
 class FeedReaderProvider:
-    def __init__(self, article_selector: str | None) -> None:
-        self.article_selector = article_selector
+    def __init__(self, cfg: Options) -> None:
+        self.cfg = cfg
+
+    def use_options(self, overrides: Mapping[str, Any]) -> Options:
+        return merge_options(Options, self.cfg, overrides)
 
     def retrieve_items(
-        self,
-        source: SourceData,
-        fetcher: HTTPClient,
-        article_selector: str | None = None,
+        self, source: SourceData, fetcher: HTTPClient, options: Options
     ) -> Iterator[SourceItemData]:
         feed = fetch_feed(str(source.url), fetcher)
-        selector = article_selector or self.article_selector
+        selector = options.article_selector
         for entry in feed["entries"]:
             try:
                 item = parse_entry(entry)
@@ -130,5 +130,6 @@ def fetch_article(url: str, selector: str, fetcher: HTTPClient) -> bytes:
 
 
 def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    return [("feedreader", Provider, FeedReaderProvider(cfg.article_selector))]
+    return [
+        ("feedreader", Provider, FeedReaderProvider(Options.model_validate(options)))
+    ]

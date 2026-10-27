@@ -9,7 +9,7 @@ import trafilatura
 from ..db import Database
 from ..models import SourceItem
 from ..processors import BaseProcessor, Processor, SkipItem
-from . import PluginObjects, PluginOptions, Services
+from . import NoOptions, PluginObjects, PluginOptions, Services
 
 
 class Options(PluginOptions):
@@ -20,7 +20,7 @@ class MarkdownifyProcessor(BaseProcessor):
     name = "markdownify"
     key = "markdown"
 
-    def process_item(self, db: Database, item: SourceItem) -> str:
+    def process_item(self, db: Database, item: SourceItem, options: NoOptions) -> str:
         match item.mimetype:
             case "text/html":
                 markdown = self.extract_html(db.get_content(item))

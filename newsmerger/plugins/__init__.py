@@ -5,6 +5,7 @@ and returns the objects the bundle provides.
 """
 
 import dataclasses
+from collections.abc import Mapping
 from typing import Any
 
 import pydantic
@@ -19,6 +20,20 @@ class PluginOptions(pydantic.BaseModel):
     """Base for a plugin's options: unknown keys are errors."""
 
     model_config = pydantic.ConfigDict(extra="forbid")
+
+
+class NoOptions(PluginOptions):
+    """The per-use options of an object that takes none."""
+
+
+def merge_options[M: pydantic.BaseModel](
+    model: type[M], defaults: pydantic.BaseModel, overrides: Mapping[str, Any]
+) -> M:
+    """One use's options: `overrides` over the values `defaults` (a plugin
+    section) sets for `model`'s fields, validated as `model`. A section holds
+    defaults; each use overrides only what its verb declares."""
+    inherited = defaults.model_dump(include=set(model.model_fields), exclude_unset=True)
+    return model.model_validate({**inherited, **overrides})
 
 
 @dataclasses.dataclass(slots=True)

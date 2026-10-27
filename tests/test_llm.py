@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
+import pydantic
+
 from newsmerger.db import Database, ProcessingStatus
 from newsmerger.llms import LLM, LLMUnavailableError
 from newsmerger.models import SourceData, SourceItem
@@ -86,7 +88,9 @@ class ProcessorTestCase(unittest.TestCase):
 
     def annotation(self, processor: Processor, key: str, **options) -> object:
         """Run `processor` with `options`, writing `key`; return its value."""
-        summary = processor.process(self.db, key=key, force=True, **options)
+        summary = processor.process(
+            self.db, key=key, options=processor.use_options(options), force=True
+        )
         self.assertEqual(summary.done, 1)
         return self.db.get_annotations(self.item, key=key)[key]
 
@@ -99,8 +103,7 @@ class SummarizeTests(ProcessorTestCase):
         self.assertEqual(self.annotation(processor, "summary"), "A summary.")
         self.assertEqual(llm.calls[0][2], {"model": None, "json_mode": False})
 
-        processor.model = "small"
-        self.annotation(processor, "summary")
+        self.annotation(processor, "summary", model="small")
         self.assertEqual(llm.calls[1][2]["model"], "small")
 
     def test_run_options_override_the_section_and_write_their_own_key(
@@ -123,10 +126,13 @@ class SummarizeTests(ProcessorTestCase):
             {"summary", "summary/es"},
         )
 
-    def test_output_key_rejects_options_the_processor_does_not_take(self) -> None:
-        self.assertEqual(summarize.SummarizeProcessor.output_key(), "summary")
-        with self.assertRaises(TypeError):
-            summarize.SummarizeProcessor.output_key(temperature=1)
+    def test_rejects_options_the_processor_does_not_take(self) -> None:
+        processor = summarize.SummarizeProcessor(StubLLM(), summarize.Options())
+        options = processor.use_options({})
+        self.assertEqual(processor.output_key(options), "summary")
+        for invalid in ({"temperature": 1}, {"llm": "other"}):
+            with self.subTest(invalid), self.assertRaises(pydantic.ValidationError):
+                processor.use_options(invalid)
 
 
 class TaggerTests(ProcessorTestCase):
@@ -153,15 +159,19 @@ class EmbedTests(ProcessorTestCase):
         self.annotation(processor, "markdown_embedding", input="markdown")
 
         self.assertEqual(llm.calls, [("embed", ["# T\n\nBody"], {"model": None})])
-        self.assertEqual(processor.required_key(input="markdown"), "markdown")
+        options = processor.use_options({"input": "markdown"})
+        self.assertEqual(processor.required_key(options), "markdown")
 
     def test_output_key_follows_the_input(self) -> None:
-        self.assertEqual(embed.EmbedProcessor.output_key(), "tags_embedding")
-        self.assertEqual(
-            embed.EmbedProcessor.output_key(input="markdown"), "markdown_embedding"
-        )
-        with self.assertRaisesRegex(ValueError, "input must be one of"):
-            embed.EmbedProcessor.output_key(input="title")
+        processor = embed.EmbedProcessor(StubLLM(), embed.Options())
+        for overrides, key in (
+            ({}, "tags_embedding"),
+            ({"input": "markdown"}, "markdown_embedding"),
+        ):
+            options = processor.use_options(overrides)
+            self.assertEqual(processor.output_key(options), key)
+        with self.assertRaises(pydantic.ValidationError):
+            processor.use_options({"input": "title"})
 
 
 class ConsumerPluginTests(unittest.TestCase):
@@ -194,6 +204,9 @@ class ConsumerPluginTests(unittest.TestCase):
                 self.assertEqual(object_name, name)
                 self.assertIsInstance(processor, UnavailableProcessor)
                 self.assertIn("llm 'missing' is not loaded", processor.reason)
+                # Its entries are still checked like the real processor's.
+                with self.assertRaises(pydantic.ValidationError):
+                    processor.use_options({"temperature": 1})
 
 
 class OllamaTests(unittest.TestCase):

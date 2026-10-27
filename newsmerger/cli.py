@@ -29,7 +29,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from .app import Application, LockedError
-from .config import Config, ConfigError
+from .config import DEFAULT_WORKFLOW, Config, ConfigError
 from .consts import PACKAGE_NAME
 from .db import (
     ANNOTATION_SORTS,
@@ -194,6 +194,14 @@ def parse_artifact_ids(
     return tuple(pairs)
 
 
+workflow_option = click.option(
+    "-w",
+    "--workflow",
+    default=DEFAULT_WORKFLOW,
+    show_default=True,
+    help="The workflow to run",
+)
+
 artifact_ids_option = click.option(
     "--artifact",
     "artifact_ids",
@@ -223,9 +231,11 @@ def cli(
     }
 
 
-def import_sources(app: Application, progress: Progress) -> list[list[Any]]:
-    """Import every configured source, a row each; return the summary rows
-    (source, items, error)."""
+def import_sources(
+    app: Application, progress: Progress, workflow: str
+) -> list[list[Any]]:
+    """Import every source of the workflow, a row each; return the summary
+    rows (source, items, error)."""
 
     def import_one(source_id: str) -> list[Any]:
         try:
@@ -236,7 +246,7 @@ def import_sources(app: Application, progress: Progress) -> list[list[Any]]:
             return [source_id, "-", f"{type(e).__name__}: {e}"]
         return [source_id, len(items), ""]
 
-    sources = [source.id for source in app.sources]
+    sources = [source.id for source in app.sources(workflow)]
     return list(run_each(progress, sources, import_one).values())
 
 
@@ -270,26 +280,28 @@ def print_deliver(summaries: dict[str, RunSummary]) -> int:
     """Print the deliver summary; return how many deliveries failed."""
     print_table(
         "Deliver",
-        ["Sink", "Delivered", "Failed"],
+        ["Delivery", "Delivered", "Failed"],
         [[name, s.done, s.failed] for name, s in summaries.items()],
     )
     return sum(s.failed for s in summaries.values())
 
 
 @cli.command("import")
+@workflow_option
 @click.pass_context
 @report_user_errors
-def import_cmd(ctx: click.Context) -> None:
-    """Import every configured source."""
+def import_cmd(ctx: click.Context, workflow: str) -> None:
+    """Import every source of the workflow."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
-        rows = import_sources(app, progress)
+        rows = import_sources(app, progress, workflow)
     if failed := print_import(rows):
         raise click.ClickException(f"{failed} source(s) failed")
 
 
 @cli.command("process")
 @click.argument("processor", required=False)
+@workflow_option
 @scope_options
 @click.option(
     "--force",
@@ -299,14 +311,19 @@ def import_cmd(ctx: click.Context) -> None:
 @click.pass_context
 @report_user_errors
 def process_cmd(
-    ctx: click.Context, processor: str | None, scope: ProcessingScope, force: bool
+    ctx: click.Context,
+    processor: str | None,
+    workflow: str,
+    scope: ProcessingScope,
+    force: bool,
 ) -> None:
-    """Run every `process:` entry in order, or only PROCESSOR's."""
+    """Run every `process:` entry of the workflow in order, or only
+    PROCESSOR's."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         summaries = run_each(
             progress,
-            app.process_keys(processor),
+            app.process_keys(processor, workflow=workflow),
             lambda key: app.run_process(key, scope=scope, force=force),
         )
     print_process(summaries)
@@ -314,23 +331,27 @@ def process_cmd(
 
 @cli.command("remix")
 @click.argument("remixer", required=False)
+@workflow_option
 @scope_options
 @click.pass_context
 @report_user_errors
-def remix_cmd(ctx: click.Context, remixer: str | None, scope: ProcessingScope) -> None:
-    """Run one remixer, or every configured one in order."""
+def remix_cmd(
+    ctx: click.Context, remixer: str | None, workflow: str, scope: ProcessingScope
+) -> None:
+    """Run one remixer, or every `remix:` entry of the workflow in order."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         produced = run_each(
             progress,
-            [remixer] if remixer else app.remixers,
+            [remixer] if remixer else app.remixers(workflow),
             lambda name: app.run_remixer(name, scope=scope),
         )
     print_remix(produced)
 
 
 @cli.command("deliver")
-@click.argument("sink", required=False)
+@click.argument("key", required=False)
+@workflow_option
 @scope_options
 @artifact_ids_option
 @click.option(
@@ -341,43 +362,50 @@ def remix_cmd(ctx: click.Context, remixer: str | None, scope: ProcessingScope) -
 @click.option(
     "--force",
     is_flag=True,
-    help="Send the selected subjects now, whatever their state (needs SINK and"
+    help="Send the selected subjects now, whatever their state (needs KEY and"
     " --item or --artifact)",
 )
 @click.pass_context
 @report_user_errors
 def deliver_cmd(
     ctx: click.Context,
-    sink: str | None,
+    key: str | None,
+    workflow: str,
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
     requeue: bool,
     force: bool,
 ) -> None:
-    """Run one sink, or every configured one in order.
+    """Run the workflow's `deliver:` entry KEY, or every one in order.
 
-    Without --since or --item, a sink queues what is new in its lookback
+    Without --since or --item, an entry queues what is new in its lookback
     window, then delivers what is due.
     """
-    if force and sink is None:
-        raise click.UsageError("--force needs a SINK")
+    if force and key is None:
+        raise click.UsageError("--force needs a KEY")
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         summaries = run_each(
             progress,
-            [sink] if sink else app.sinks,
-            lambda name: app.run_sink(
-                name, scope=scope, artifacts=artifact_ids, requeue=requeue, force=force
+            [key] if key else app.delivery_keys(workflow),
+            lambda name: app.run_delivery(
+                name,
+                workflow=workflow,
+                scope=scope,
+                artifacts=artifact_ids,
+                requeue=requeue,
+                force=force,
             ),
         )
     print_deliver(summaries)
 
 
 @cli.command("run")
+@workflow_option
 @click.pass_context
 @report_user_errors
-def run_cmd(ctx: click.Context) -> None:
-    """Run import, process, remix and deliver in turn.
+def run_cmd(ctx: click.Context, workflow: str) -> None:
+    """Run the workflow's import, process, remix and deliver in turn.
 
     A failure is logged and the next phase still runs; the exit status is
     non-zero if anything failed.
@@ -387,20 +415,32 @@ def run_cmd(ctx: click.Context) -> None:
 
     # (phase, run under the progress rows, print its summary and count failures)
     phases: list[tuple[str, Callable[[Progress], Any], Callable[[Any], int]]] = [
-        ("import", lambda progress: import_sources(app, progress), print_import),
+        (
+            "import",
+            lambda progress: import_sources(app, progress, workflow),
+            print_import,
+        ),
         (
             "process",
-            lambda progress: run_each(progress, app.process_keys(), app.run_process),
+            lambda progress: run_each(
+                progress, app.process_keys(workflow=workflow), app.run_process
+            ),
             print_process,
         ),
         (
             "remix",
-            lambda progress: run_each(progress, app.remixers, app.run_remixer),
+            lambda progress: run_each(
+                progress, app.remixers(workflow), app.run_remixer
+            ),
             print_remix,
         ),
         (
             "deliver",
-            lambda progress: run_each(progress, app.sinks, app.run_sink),
+            lambda progress: run_each(
+                progress,
+                app.delivery_keys(workflow),
+                lambda key: app.run_delivery(key, workflow=workflow),
+            ),
             print_deliver,
         ),
     ]
@@ -460,7 +500,7 @@ def deliveries_group() -> None:
 
 
 @deliveries_group.command("resolve")
-@click.argument("sink")
+@click.argument("sink", metavar="LEDGER_KEY")
 @click.option(
     "--as",
     "status",
@@ -479,7 +519,8 @@ def resolve_cmd(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
 ) -> None:
-    """Settle a sink's interrupted (`sending`) deliveries in the selection."""
+    """Settle the interrupted (`sending`) deliveries of LEDGER_KEY (as
+    `inspect deliveries` shows it) in the selection."""
     resolved = app_from_context(ctx, write=True).resolve_deliveries(
         sink,
         DeliveryStatus(status),
@@ -837,7 +878,7 @@ def inspect_content_cmd(ctx: click.Context, sha256: str) -> None:
 @inspect_group.command("deliveries")
 @scope_options
 @artifact_ids_option
-@click.option("--sink", default=None, help="Only this sink's deliveries")
+@click.option("--sink", default=None, help="Only this ledger key's deliveries")
 @click.option(
     "--status",
     type=click.Choice([status.value for status in DeliveryStatus]),

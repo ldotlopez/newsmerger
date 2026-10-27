@@ -9,8 +9,9 @@ import pydantic
 
 from newsmerger.models import SourceData, SourceItemData
 from newsmerger.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
-from newsmerger.plugins.feedreader import FeedReaderProvider
+from newsmerger.plugins.feedreader import FeedReaderProvider, Options
 from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
+from newsmerger.plugins.telegram_channel import Options as ChannelOptions
 from newsmerger.plugins.telegram_channel import (
     TelegramChannelProvider,
     parse_article,
@@ -45,9 +46,10 @@ class TestFeedReader(unittest.TestCase):
     ) -> list[SourceItemData]:
         pages = {"https://x.test/feed": feed, "https://x.test/1": ARTICLE_PAGE}
         source = Mock(id="src", url="https://x.test/feed")
-        provider = FeedReaderProvider(default_selector)
+        provider = FeedReaderProvider(Options(article_selector=default_selector))
         fetcher = Mock(get=lambda url: pages[url])
-        return list(provider.retrieve_items(source, fetcher, **provider_options))
+        options = provider.use_options(provider_options)
+        return list(provider.retrieve_items(source, fetcher, options))
 
     def test_rss_with_encoded_content(self) -> None:
         feed = b"""<?xml version="1.0"?>
@@ -151,7 +153,9 @@ class TestFeedReader(unittest.TestCase):
         source = Mock(id="src", url="https://x.test/")
         fetcher = Mock(get=lambda url: pages[url])
 
-        (item,) = FeedReaderProvider(None).retrieve_items(source, fetcher)
+        (item,) = FeedReaderProvider(Options()).retrieve_items(
+            source, fetcher, Options()
+        )
 
         self.assertEqual(item.content, b"hi")
 
@@ -381,7 +385,9 @@ class TestTelegramChannel(unittest.TestCase):
 
         with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
             items = list(
-                TelegramChannelProvider(pages=1).retrieve_items(self.source(), fetcher)
+                TelegramChannelProvider(ChannelOptions()).retrieve_items(
+                    self.source(), fetcher, ChannelOptions()
+                )
             )
 
         self.assertEqual(len(items), 1)
@@ -409,7 +415,9 @@ class TestTelegramChannel(unittest.TestCase):
 
         with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
             items = list(
-                TelegramChannelProvider(pages=1).retrieve_items(self.source(), fetcher)
+                TelegramChannelProvider(ChannelOptions()).retrieve_items(
+                    self.source(), fetcher, ChannelOptions()
+                )
             )
 
         self.assertEqual(
@@ -421,7 +429,9 @@ class TestTelegramChannel(unittest.TestCase):
         fetcher.get.return_value = b"<html><head></head><body></body></html>"
         with self.assertRaises(ValueError):
             list(
-                TelegramChannelProvider(pages=1).retrieve_items(self.source(), fetcher)
+                TelegramChannelProvider(ChannelOptions()).retrieve_items(
+                    self.source(), fetcher, ChannelOptions()
+                )
             )
 
 

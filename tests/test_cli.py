@@ -36,7 +36,7 @@ def invoke(app: Mock, *args: str):
 class CommandTests(unittest.TestCase):
     def test_import_reports_failed_sources_and_exits_with_error(self) -> None:
         app = Mock()
-        app.sources = [SOURCE]
+        app.sources.return_value = [SOURCE]
         app.import_source.side_effect = RuntimeError("site down")
 
         result = invoke(app, "import")
@@ -68,7 +68,7 @@ class CommandTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.process_keys.assert_called_once_with("summarize")
+        app.process_keys.assert_called_once_with("summarize", workflow="default")
         scope = ProcessingScope(source="plaza", item_ids=(3, 4), limit=5)
         self.assertEqual(
             app.run_process.call_args_list,
@@ -86,7 +86,7 @@ class CommandTests(unittest.TestCase):
         result = invoke(app, "process")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.process_keys.assert_called_once_with(None)
+        app.process_keys.assert_called_once_with(None, workflow="default")
         app.run_process.assert_called_once_with(
             "markdown", scope=ProcessingScope(), force=False
         )
@@ -94,7 +94,7 @@ class CommandTests(unittest.TestCase):
 
     def test_remix_runs_one_or_every_remixer(self) -> None:
         app = Mock()
-        app.remixers = ["feedgenerator", "digest"]
+        app.remixers.return_value = ["feedgenerator", "digest"]
         app.run_remixer.return_value = ["feed"]
 
         self.assertEqual(invoke(app, "remix", "feedgenerator").exit_code, 0)
@@ -111,7 +111,7 @@ class CommandTests(unittest.TestCase):
 
     def test_writing_commands_take_the_write_lock(self) -> None:
         app = Mock()
-        app.remixers = []
+        app.remixers.return_value = []
 
         with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(cli, ["remix"])
@@ -121,7 +121,7 @@ class CommandTests(unittest.TestCase):
 
     def test_deliver_runs_one_sink_with_selection_requeue_and_force(self) -> None:
         app = Mock()
-        app.run_sink.return_value = RunSummary(done=1)
+        app.run_delivery.return_value = RunSummary(done=1)
 
         result = invoke(
             app,
@@ -133,50 +133,73 @@ class CommandTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.run_sink.assert_called_once_with(
+        app.run_delivery.assert_called_once_with(
             "telegram_artifacts",
+            workflow="default",
             scope=ProcessingScope(),
             artifacts=(("digest", "a/2026-10-01_2026-10-08"),),
             requeue=False,
             force=True,
         )
 
-    def test_deliver_without_sink_runs_every_one_but_cannot_force(self) -> None:
+    def test_deliver_without_key_runs_every_one_but_cannot_force(self) -> None:
         app = Mock()
-        app.sinks = ["telegram"]
-        app.run_sink.return_value = RunSummary(done=2, failed=1)
+        app.delivery_keys.return_value = ["telegram"]
+        app.run_delivery.return_value = RunSummary(done=2, failed=1)
 
-        result = invoke(app, "deliver", "--requeue")
+        result = invoke(app, "deliver", "-w", "juntas", "--requeue")
         forced = invoke(app, "deliver", "--force", "--item", "1")
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.run_sink.assert_called_once_with(
-            "telegram", scope=ProcessingScope(), artifacts=(), requeue=True, force=False
+        app.delivery_keys.assert_called_once_with("juntas")
+        app.run_delivery.assert_called_once_with(
+            "telegram",
+            workflow="juntas",
+            scope=ProcessingScope(),
+            artifacts=(),
+            requeue=True,
+            force=False,
         )
         self.assertEqual(forced.exit_code, 2)
-        self.assertIn("--force needs a SINK", forced.output)
+        self.assertIn("--force needs a KEY", forced.output)
 
     def test_run_goes_on_after_a_failed_phase_and_exits_with_error(self) -> None:
         app = Mock()
-        app.sources = []
+        app.sources.return_value = []
         app.process_keys.return_value = ["summary"]
         app.run_process.side_effect = RuntimeError("llm down")
-        app.remixers = ["feedgenerator"]
+        app.remixers.return_value = ["feedgenerator"]
         app.run_remixer.return_value = ["feed"]
-        app.sinks = ["telegram"]
-        app.run_sink.return_value = RunSummary(done=1)
+        app.delivery_keys.return_value = ["telegram"]
+        app.run_delivery.return_value = RunSummary(done=1)
 
         with self.assertLogs("newsmerger", "ERROR"):
             result = invoke(app, "run")
 
         self.assertEqual(result.exit_code, 1)
         app.run_remixer.assert_called_once_with("feedgenerator")
-        app.run_sink.assert_called_once_with("telegram")
+        app.run_delivery.assert_called_once_with("telegram", workflow="default")
         self.assertIn("1 failure(s)", result.output)
         # Summaries are results: stdout only, after the progress rows.
         self.assertIn("Remix", result.stdout)
         self.assertIn("Deliver", result.stdout)
         self.assertNotIn("Remix", result.stderr)
+
+    def test_run_runs_the_named_workflow(self) -> None:
+        app = Mock()
+        app.sources.return_value = [SOURCE]
+        app.import_source.return_value = []
+        app.process_keys.return_value = []
+        app.remixers.return_value = []
+        app.delivery_keys.return_value = []
+
+        result = invoke(app, "run", "--workflow", "juntas")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.sources.assert_called_once_with("juntas")
+        app.process_keys.assert_called_once_with(workflow="juntas")
+        app.remixers.assert_called_once_with("juntas")
+        app.delivery_keys.assert_called_once_with("juntas")
 
     def test_resolve_settles_interrupted_deliveries(self) -> None:
         app = Mock()
@@ -254,7 +277,7 @@ class LogLevelTests(unittest.TestCase):
         config_path = self.config_dir / "config.yaml"
         config_path.write_text(config)
         app = Mock()
-        app.remixers = []
+        app.remixers.return_value = []
         with patch("newsmerger.cli.Application", return_value=app):
             result = CliRunner().invoke(
                 cli,

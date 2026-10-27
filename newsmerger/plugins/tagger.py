@@ -53,9 +53,14 @@ You are an expert entity extraction and content tagging assistant. Your sole tas
 """
 
 
-class Options(PluginOptions):
-    llm: str | None = None
+class TaggerOptions(PluginOptions):
+    """Per `process:` entry; the section sets their defaults."""
+
     model: str | None = None
+
+
+class Options(TaggerOptions):
+    llm: str | None = None
     max_retries: int = 3
 
 
@@ -63,19 +68,19 @@ class TaggerProcessor(BaseProcessor):
     name = "tagger"
     key = "tags"
     requires = "markdown"
+    options_model = TaggerOptions
 
     def __init__(self, llm: LLM, cfg: Options) -> None:
-        super().__init__(max_retries=cfg.max_retries)
+        super().__init__(cfg, max_retries=cfg.max_retries)
         self.llm = llm
-        self.model = cfg.model
 
     def process_item(
-        self, db: Database, item: SourceItem, model: str | None = None
+        self, db: Database, item: SourceItem, options: TaggerOptions
     ) -> list[str]:
         markdown = self.require_annotation(db, item, "markdown")
 
         response = self.llm.prompt(
-            TAGS_PROMPT + markdown, model=model or self.model, json_mode=True
+            TAGS_PROMPT + markdown, model=options.model, json_mode=True
         )
 
         try:
@@ -111,6 +116,6 @@ def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
     try:
         processor = TaggerProcessor(services.llm(cfg.llm), cfg)
     except LLMUnavailableError as e:
-        unavailable = UnavailableProcessor(name, str(e), TaggerProcessor.output_key)
+        unavailable = UnavailableProcessor(name, str(e), TaggerProcessor, cfg)
         return [(name, Processor, unavailable)]
     return [(name, Processor, processor)]
