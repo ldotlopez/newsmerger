@@ -16,7 +16,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
                                            ├─ content ─► DiskStorage (content_dir)
                                            └─ row ─────► SQLite (source_items)
                                                        │
-                     enrich                            ▼
+                     process                           ▼
                      Processor ◄── Database.get_unprocessed_items / get_content
                         └─► annotations + processing state
                      remix
@@ -31,9 +31,9 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 
 | Module | Responsibility |
 | :--- | :--- |
-| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the phases one unit at a time (`import_source`, `run_enrich`, `run_remixer`, `run_sink`; `sources`, `enrich_keys()`, `remixers` and `sinks` list them in configuration order, and `processors` the loaded processors), checks the `enrich:` entries at start-up, answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
-| `cli.py` | Click commands only: the phases (`import`, `enrich`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
-| `config.py` | Pydantic models for `config.yaml` (log level, sources, plugins, the `enrich` runs, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
+| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the phases one unit at a time (`import_source`, `run_process`, `run_remixer`, `run_sink`; `sources`, `process_keys()`, `remixers` and `sinks` list them in configuration order, and `processors` the loaded processors), checks the `process:` entries at start-up, answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
+| `cli.py` | Click commands only: the phases (`import`, `process`, `remix`, `deliver`, and `run` for all four), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
+| `config.py` | Pydantic models for `config.yaml` (log level, sources, plugins, the `process` runs, cache, database), `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of plugin option errors. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope`. |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
@@ -54,16 +54,22 @@ models:
 
 1. `Application.__init__` calls `register(name, services, **section)` for
    every entry of `plugins:`, in order, on the `newsmerger.plugins`
-   namespace. A plugin without a section is never imported. An empty
-   section is `{}`.
+   namespace. An empty section is `{}`. Then, for every source's
+   `provider` and every `process:` entry's `processor` that no registered
+   plugin provides yet, it registers the plugin of the same name with
+   `register(name, services)`, its defaults (`load_plugins`, with the names
+   from `referenced_plugins`); a missing module is a `ConfigError` with the
+   config path. Remixers and sinks are never loaded this way, and a plugin
+   that nothing names and has no section is never imported.
 2. The module's `__newsmerger_plugin__(services, **options)` validates the options
    with its own pydantic model (a `PluginOptions` subclass, so unknown keys
    are errors), builds its objects with the validated model and returns
    `[(name, Protocol, object), ...]`: one triple per object, declared under
-   `Provider`, `Processor`, `Remixer`, `Sink` or `LLM`.
+   `Provider`, `Processor`, `Remixer`, `Sink` or `LLM`. Objects are
+   instances: a class is a `PluginError`.
 3. `Application` indexes the objects by name per protocol, with
    `get_by_protocol`, and checks that names are unique per protocol, that
-   every source's `provider` is loaded and that its `provider_options` bind
+   every source's `provider` is loaded and that its `options` bind
    to that provider's `retrieve_items` (see *Providers*).
 
 Everything fails at construction, before the database is opened, so a broken
@@ -75,9 +81,9 @@ cannot be options, because they are `register()`'s own parameters.
 
 The objects are built once and receive what each task needs as method
 arguments: providers get the source, the `HTTPClient` and the source's
-`provider_options`, processors the `Database`, the scope, the key and the
-`enrich:` entry's options, remixers and sinks the `Database` and the scope.
-Each protocol has its own method (`retrieve_items`, `enrich`, `remix`,
+`options`, processors the `Database`, the scope, the key and the
+`process:` entry's options, remixers and sinks the `Database` and the scope.
+Each protocol has its own method (`retrieve_items`, `process`, `remix`,
 `deliver`) and none declares `name` (decision 0003 explains why).
 Processors, remixers and sinks own their name, a class attribute that
 records who wrote an annotation and keys artifacts or deliveries; entry
@@ -90,7 +96,7 @@ LLMs of the plugins registered so far, by name, in configuration order.
 `services.llm(name)` returns the named one, or the first for `None`, and
 raises `LLMUnavailableError` if it is not loaded. An LLM consumer catches it
 and returns an `UnavailableProcessor` (or `UnavailableRemixer`) under its
-name, whose `enrich` (or `remix`) logs the reason as an error and does
+name, whose `process` (or `remix`) logs the reason as an error and does
 nothing.
 
 Bundles (`grouping`, `telegram`) give each object a subsection of their
@@ -105,12 +111,12 @@ grouping remixer reads `tags`.
 
 ## Providers
 
-`Provider.retrieve_items(source, fetcher, **provider_options)` yields
+`Provider.retrieve_items(source, fetcher, **options)` yields
 `SourceItemData`. Most sites are `IndexSiteProvider`s: fetch
 `index_url(source)` (the source's URL unless the provider overrides it),
 `parse_index` it into article URLs, fetch each article and `parse_item` it.
 
-A source's `provider_options` are passed as keyword arguments (decision
+A source's `options` are passed as keyword arguments (decision
 0003). A provider that takes options declares each one as a parameter of
 `retrieve_items`, never `**kwargs`, and falls back to the value in its
 plugin section, so the source's value wins:
@@ -119,13 +125,13 @@ plugin section, so the source's value wins:
 sources:
   - id: some-blog
     provider: feedreader
-    provider_options:
+    options:
       article_selector: .article   # overrides plugins.feedreader.article_selector
 ```
 
 `Application` binds every source's options to that signature when it is
 built, so an unknown or missing option fails every command at start-up as a
-configuration error (`sources.<id>.provider_options`). The options live in
+configuration error (`sources.<id>.options`). The options live in
 the configuration only; the database does not store them.
 
 HTML providers keep the article's cleaned HTML rather than converting it:
@@ -141,7 +147,9 @@ always UTF-8 and no charset is stored.
 
 A plugin is a module in `newsmerger/plugins/` that exposes
 `__newsmerger_plugin__(**options) -> PluginObjects`; the module name is its
-key under `plugins:`. A provider for a site with an index page (a section,
+key under `plugins:`, and the name sources and `process:` entries load it by
+when it has no section, so a provider or processor is named after its
+module and builds with no options. A provider for a site with an index page (a section,
 an RSS feed) that links to one article per item:
 
 ```python
@@ -288,18 +296,19 @@ touch `modified_at` (spec §4.1).
 
 The eligibility and retry rules are in spec §4.2; this is where they live:
 
-- `config.enrich` lists the runs: a processor and its options. At start-up
-  `app.enrich_runs` takes `key` out of the options, asks the processor for
-  its `output_key(**options)` (which rejects options it does not take) and
-  rejects malformed keys and keys written twice. `run_enrich(key)` calls
-  `processor.enrich(db, key=key, scope=..., force=..., **options)`.
+- `config.process` lists the runs: a processor, an optional `key` and its
+  options. At start-up `app.process_runs` asks the processor for its
+  `output_key(**options)` (which rejects options it does not take), the key
+  when the entry names none, and rejects malformed keys and keys written
+  twice. `run_process(key)` calls
+  `processor.process(db, key=key, scope=..., force=..., **options)`.
 - `BaseProcessor.process_item(db, item, **options)` returns the value of
   one annotation for one item; each run option is a declared keyword
   argument that falls back to the plugin section's value.
   `Database.get_unprocessed_items(key, ...)` selects the eligible items
   (backoff in `backoff_seconds`, `max_retries` from the plugin's options,
   version in `version`). Raising `SkipItem` marks the item `ignored`; any
-  other exception marks it `error`. `enrich()` returns a `RunSummary`
+  other exception marks it `error`. `process()` returns a `RunSummary`
   (done, ignored, failed).
 - `Database.record_result` saves a run's state and, when `done`, its
   annotation in one transaction, recording the item's `content_sha256`.

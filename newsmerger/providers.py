@@ -14,12 +14,12 @@ type URI = str
 @runtime_checkable
 class Provider(Protocol):
     """Retrieves a source's items. Sources name it in `provider:` and pass it
-    their `provider_options` as keyword arguments, which an implementation
+    their `options` as keyword arguments, which an implementation
     declares one by one (never `**kwargs`: the core checks them against its
     signature)."""
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient, **provider_options: Any
+        self, source: SourceData, fetcher: HTTPClient, **options: Any
     ) -> Iterator[SourceItemData]: ...
 
 

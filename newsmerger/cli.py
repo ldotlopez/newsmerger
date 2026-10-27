@@ -246,10 +246,10 @@ def print_import(rows: list[list[Any]]) -> int:
     return sum(1 for _, _, error in rows if error)
 
 
-def print_enrich(summaries: dict[str, RunSummary]) -> int:
-    """Print the enrich summary; return how many items failed."""
+def print_process(summaries: dict[str, RunSummary]) -> int:
+    """Print the process summary; return how many items failed."""
     print_table(
-        "Enrich",
+        "Process",
         ["Key", "Done", "Ignored", "Failed"],
         [[name, s.done, s.ignored, s.failed] for name, s in summaries.items()],
     )
@@ -288,7 +288,7 @@ def import_cmd(ctx: click.Context) -> None:
         raise click.ClickException(f"{failed} source(s) failed")
 
 
-@cli.command("enrich")
+@cli.command("process")
 @click.argument("processor", required=False)
 @scope_options
 @click.option(
@@ -298,18 +298,18 @@ def import_cmd(ctx: click.Context) -> None:
 )
 @click.pass_context
 @report_user_errors
-def enrich_cmd(
+def process_cmd(
     ctx: click.Context, processor: str | None, scope: ProcessingScope, force: bool
 ) -> None:
-    """Run every `enrich:` entry in order, or only PROCESSOR's."""
+    """Run every `process:` entry in order, or only PROCESSOR's."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         summaries = run_each(
             progress,
-            app.enrich_keys(processor),
-            lambda key: app.run_enrich(key, scope=scope, force=force),
+            app.process_keys(processor),
+            lambda key: app.run_process(key, scope=scope, force=force),
         )
-    print_enrich(summaries)
+    print_process(summaries)
 
 
 @cli.command("remix")
@@ -377,7 +377,7 @@ def deliver_cmd(
 @click.pass_context
 @report_user_errors
 def run_cmd(ctx: click.Context) -> None:
-    """Run import, enrich, remix and deliver in turn.
+    """Run import, process, remix and deliver in turn.
 
     A failure is logged and the next phase still runs; the exit status is
     non-zero if anything failed.
@@ -389,9 +389,9 @@ def run_cmd(ctx: click.Context) -> None:
     phases: list[tuple[str, Callable[[Progress], Any], Callable[[Any], int]]] = [
         ("import", lambda progress: import_sources(app, progress), print_import),
         (
-            "enrich",
-            lambda progress: run_each(progress, app.enrich_keys(), app.run_enrich),
-            print_enrich,
+            "process",
+            lambda progress: run_each(progress, app.process_keys(), app.run_process),
+            print_process,
         ),
         (
             "remix",

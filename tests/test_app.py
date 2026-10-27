@@ -9,14 +9,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from foundation.plugin import PluginNotFoundError
+from foundation.plugin import PluginError, PluginNotFoundError, Register
 
-from newsmerger.app import Application, LockedError
+from newsmerger.app import (
+    PLUGIN_ENTRY_POINT,
+    PLUGINS_NAMESPACE,
+    Application,
+    LockedError,
+    objects_by_name,
+)
 from newsmerger.config import Config, ConfigError
 from newsmerger.db import DeliveryStatus
 from newsmerger.models import ProcessingScope, SourceItem
+from newsmerger.plugins import Services
+from newsmerger.plugins.markdownify import MarkdownifyProcessor
 from newsmerger.plugins.ollama import OllamaLLM
-from newsmerger.processors import RunSummary
+from newsmerger.processors import Processor, RunSummary
+from newsmerger.providers import Provider
 
 SAMPLE = Path(__file__).parent / "samples" / "prensaiberica-item-132310503.html"
 SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
@@ -34,7 +43,7 @@ class ApplicationTests(unittest.TestCase):
     def make_app(
         self,
         plugins: str = "  markdownify:\n  feedgenerator: {title: Test feed}\n",
-        enrich: str = "enrich: [markdownify]\n",
+        process: str = "process: [markdownify]\n",
     ) -> Application:
         config = Config.from_text(
             f"""
@@ -51,7 +60,7 @@ plugins:
   prensaiberica:
   csjuntasgobierno:
 {plugins}
-{enrich}
+{process}
 db:
   uri: sqlite:///{self.tmp_dir}/data.db
   content_dir: {self.tmp_dir}/content
@@ -89,10 +98,10 @@ cache:
         )
 
     def test_unknown_provider_option_is_a_config_error(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "sources.blog.provider_options"):
+        with self.assertRaisesRegex(ConfigError, "sources.blog.options"):
             self.make_rss_app("{selector: .body}")
 
-    def make_rss_app(self, provider_options: str) -> Application:
+    def make_rss_app(self, options: str) -> Application:
         return Application(
             Config.from_text(
                 f"""
@@ -101,7 +110,7 @@ sources:
     name: Blog
     provider: feedreader
     url: https://blog.test/feed
-    provider_options: {provider_options}
+    options: {options}
 plugins:
   feedreader:
 db:
@@ -117,11 +126,11 @@ cache:
         with self.assertRaises(ConfigError):
             self.app.import_source("missing")
 
-    def test_enrich_then_remix(self) -> None:
+    def test_process_then_remix(self) -> None:
         item = self.import_sample()
 
-        self.assertEqual(self.app.run_enrich("markdown").done, 1)
-        self.assertEqual(self.app.run_enrich("markdown").done, 0)
+        self.assertEqual(self.app.run_process("markdown").done, 1)
+        self.assertEqual(self.app.run_process("markdown").done, 0)
         markdown = self.app.get_annotations(item)["markdown"]
         self.assertIn("asedio carlista", markdown)
 
@@ -132,7 +141,7 @@ cache:
 
     def test_delete_annotations_makes_the_item_pending_again(self) -> None:
         item = self.import_sample()
-        self.app.run_enrich("markdown")
+        self.app.run_process("markdown")
 
         self.assertEqual(
             self.app.delete_annotations(processor="markdownify", item_id=item.id), 1
@@ -140,7 +149,7 @@ cache:
 
         self.assertEqual(self.app.get_annotations(item), {})
         scope = ProcessingScope(source="mediterraneo")
-        self.assertEqual(self.app.run_enrich("markdown", scope=scope).done, 1)
+        self.assertEqual(self.app.run_process("markdown", scope=scope).done, 1)
 
     def test_write_lock_is_exclusive_until_close(self) -> None:
         self.app.lock()
@@ -171,9 +180,9 @@ cache:
 
     def test_only_loaded_plugins_run(self) -> None:
         with self.assertRaisesRegex(ConfigError, "processor 'summarize' is not loaded"):
-            self.app.enrich_keys("summarize")
-        with self.assertRaisesRegex(ConfigError, "no enrich entry writes the key"):
-            self.app.run_enrich("summary")
+            self.app.process_keys("summarize")
+        with self.assertRaisesRegex(ConfigError, "no process entry writes the key"):
+            self.app.run_process("summary")
         with self.assertRaisesRegex(ConfigError, "remixer 'avglink' is not loaded"):
             self.app.run_remixer("avglink")
         with self.assertRaisesRegex(ConfigError, "sink 'telegram' is not loaded"):
@@ -188,50 +197,54 @@ cache:
         self.assertEqual(self.app.processors, ["markdownify"])
         self.assertEqual(self.app.remixers, ["feedgenerator", "avglink", "singlelink"])
 
-    def test_enrich_entries_run_in_order_each_with_its_key(self) -> None:
+    def test_process_entries_run_in_order_each_with_its_key(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            enrich="enrich:\n  - markdownify\n"
-            "  - {processor: markdownify, options: {key: markdown/copy}}\n"
+            process="process:\n  - markdownify\n"
+            "  - {processor: markdownify, key: markdown/copy}\n"
         )
         item = self.import_sample()
 
-        self.assertEqual(self.app.enrich_keys(), ["markdown", "markdown/copy"])
-        self.assertEqual(self.app.enrich_keys("markdownify"), self.app.enrich_keys())
-        self.assertEqual(self.app.run_enrich("markdown").done, 1)
+        self.assertEqual(self.app.process_keys(), ["markdown", "markdown/copy"])
+        self.assertEqual(self.app.process_keys("markdownify"), self.app.process_keys())
+        self.assertEqual(self.app.run_process("markdown").done, 1)
         # Its own state: the first run being done does not skip it.
-        self.assertEqual(self.app.run_enrich("markdown/copy").done, 1)
+        self.assertEqual(self.app.run_process("markdown/copy").done, 1)
         annotations = self.app.get_annotations(item)
         self.assertEqual(annotations["markdown"], annotations["markdown/copy"])
 
-    def test_invalid_enrich_entries_are_config_errors(self) -> None:
-        for enrich, message in (
-            ("enrich: [summarize]\n", "processor 'summarize' is not loaded"),
+    def test_invalid_process_entries_are_config_errors(self) -> None:
+        for process, message in (
+            ("process: [grouping]\n", "processor 'grouping' is not loaded"),
             (
-                "enrich: [{processor: markdownify, options: {model: m}}]\n",
-                r"enrich\.0\.options: got an unexpected keyword argument 'model'",
+                "process: [{processor: markdownify, options: {model: m}}]\n",
+                r"process\.0\.options: got an unexpected keyword argument 'model'",
             ),
             (
-                "enrich: [{processor: markdownify, options: {key: Mark Down}}]\n",
-                r"enrich\.0: invalid key 'Mark Down'",
+                "process: [{processor: markdownify, options: {key: copy}}]\n",
+                r"process\.0\.options: got an unexpected keyword argument 'key'",
             ),
             (
-                "enrich: [markdownify, markdownify]\n",
-                r"enrich\.1: key 'markdown' is written by another entry",
+                "process: [{processor: markdownify, key: Mark Down}]\n",
+                r"process\.0: invalid key 'Mark Down'",
+            ),
+            (
+                "process: [markdownify, markdownify]\n",
+                r"process\.1: key 'markdown' is written by another entry",
             ),
         ):
             with (
-                self.subTest(enrich=enrich),
+                self.subTest(process=process),
                 self.assertRaisesRegex(ConfigError, message),
             ):
-                self.make_app(enrich=enrich)
+                self.make_app(process=process)
 
     def test_unlisted_processors_load_but_never_run(self) -> None:
         self.app.close()
-        self.app = self.make_app(enrich="")
+        self.app = self.make_app(process="")
 
         self.assertEqual(self.app.processors, ["markdownify"])
-        self.assertEqual(self.app.enrich_keys(), [])
+        self.assertEqual(self.app.process_keys(), [])
 
     def test_invalid_plugin_options_report_their_config_path(self) -> None:
         with self.assertRaisesRegex(
@@ -254,7 +267,7 @@ cache:
     def test_llm_consumers_get_the_llm_of_a_plugin_listed_before(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            "  ollama:\n  summarize:\n  embed: {llm: ollama}\n", enrich=""
+            "  ollama:\n  summarize:\n  embed: {llm: ollama}\n", process=""
         )
 
         llm = self.app._processors["summarize"].llm
@@ -265,12 +278,12 @@ cache:
         self.app.close()
         self.app = self.make_app(
             "  markdownify:\n  tagger:\n  ollama:\n",
-            enrich="enrich: [markdownify, tagger]\n",
+            process="process: [markdownify, tagger]\n",
         )
         self.import_sample()
 
         with self.assertLogs("newsmerger.processors", "ERROR") as logs:
-            summaries = {key: self.app.run_enrich(key) for key in ("markdown", "tags")}
+            summaries = {key: self.app.run_process(key) for key in ("markdown", "tags")}
 
         self.assertEqual(summaries["markdown"].done, 1)
         self.assertEqual(summaries["tags"], RunSummary())
@@ -283,12 +296,79 @@ cache:
         with self.assertRaises(PluginNotFoundError):
             self.make_app("  nonexistent:\n")
 
-    def test_sources_need_a_loaded_provider(self) -> None:
+    def test_unprovided_providers_and_processors_load_their_plugin(self) -> None:
         config = Config.from_text(
-            "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: plaza}\n"
+            f"""
+sources:
+  - {{id: a, name: A, url: 'https://a.test/', provider: plaza}}
+process: [markdownify, tagger]
+db:
+  uri: sqlite:///{self.tmp_dir}/auto.db
+  content_dir: {self.tmp_dir}/auto-content
+"""
         )
-        with self.assertRaisesRegex(ConfigError, "provider 'plaza' is not loaded"):
+        with Application(config) as app:
+            self.assertEqual(list(app._providers), ["plaza"])
+            self.assertEqual(app.processors, ["markdownify", "tagger"])
+            self.assertEqual(app.process_keys(), ["markdown", "tags"])
+
+    def test_autoloaded_plugins_come_after_the_listed_ones(self) -> None:
+        self.app.close()
+        self.app = self.make_app("  ollama:\n", process="process: [summarize]\n")
+
+        self.assertIsInstance(self.app._processors["summarize"].llm, OllamaLLM)
+
+    def test_a_name_no_plugin_provides_is_a_config_error(self) -> None:
+        for config, message in (
+            (
+                "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: nope}\n",
+                r"sources\.a\.provider: no plugin provides 'nope'",
+            ),
+            ("process: [nope]\n", r"process\.0\.processor: no plugin provides 'nope'"),
+        ):
+            with (
+                self.subTest(config=config),
+                self.assertRaisesRegex(ConfigError, message),
+            ):
+                Application(Config.from_text(config))
+
+    def test_a_listed_plugin_without_the_object_is_not_loaded_again(self) -> None:
+        config = Config.from_text(
+            "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: grouping}\n"
+            "plugins:\n  grouping:\n"
+        )
+        with self.assertRaisesRegex(ConfigError, "provider 'grouping' is not loaded"):
             Application(config)
+
+    def test_entry_points_must_return_instances(self) -> None:
+        plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
+        with (
+            patch.object(
+                plugins,
+                "get_by_protocol",
+                return_value=[("markdownify", "markdownify", MarkdownifyProcessor)],
+            ),
+            self.assertRaisesRegex(PluginError, "the class of Processor 'markdownify'"),
+        ):
+            objects_by_name(plugins, Processor)
+
+    def test_providers_and_processors_load_with_defaults_under_their_module_name(
+        self,
+    ) -> None:
+        # Autoloading registers them with no options, by the name they are used with.
+        plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
+        for module in plugins.discover():
+            if module in ("telegram", "googlechat"):  # sinks: never autoloaded
+                continue
+            with self.subTest(module=module):
+                plugins.register(module, Services())
+                names = {
+                    name
+                    for protocol in (Provider, Processor)
+                    for plugin, name, _ in plugins.get_by_protocol(protocol)
+                    if plugin == module
+                }
+                self.assertIn(names, (set(), {module}))
 
 
 if __name__ == "__main__":

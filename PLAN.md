@@ -370,7 +370,7 @@ Risks:
   pty), in foundation. Only if P2's TTY detection gets in the way.
 - **Per-item progress** inside processors, sinks and imports. P2 left it
   out to keep the plugin contracts as they are (a callback would change
-  `Processor.enrich` and `Sink.deliver`); revisit if unit rows fall short.
+  `Processor.process` and `Sink.deliver`); revisit if unit rows fall short.
 - **Concurrent imports.** Releasing replaced contents can race with another
   process starting to reference the same content. Add a lock if imports ever
   run in parallel.
@@ -382,17 +382,17 @@ Risks:
   wait for a second concrete use case.
 - **Save annotations and artifacts as soon as possible**: they stay in
   memory until the loop finishes.
-- **Per-source `enrich` overrides** (`sources>enrich`): the `enrich`
+- **Per-source `process` overrides** (`sources>process`): the `process`
   section exists (see the plan above); per-source runs or options are next.
-- **Remix and deliver sections** with per-use options, like `enrich`
+  Proposed shape (2026-10-27, not agreed): the same list format as `process`; an entry
+  whose key matches a default entry replaces it, a new key adds a run.
+- **Remix and deliver sections** with per-use options, like `process`
   (`digest` has a prompt too).
 - **Configurable input keys for consumers**: `summarize`/`tagger` read
   `markdown`, `telegram` `summary`, `grouping` `tags`; an option naming
   another key when a run writes, e.g., `summary/es`.
-- **Automatic plugin loading**. Use definition of sources and enrich
-  to detect which plugins to load
 - **summary plugin: per-source prompt**: the prompt is configurable
-  globally and per `enrich` entry; per source is pending.
+  globally and per `process` entry; per source is pending.
 - **google chat deliver plugin**
 - **LLM options per use (`llm` + `llm_options`)**, following the provider
   convention agreed on 2026-10-26: a plugin section holds defaults, each use

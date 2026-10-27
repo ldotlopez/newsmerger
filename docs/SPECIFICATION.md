@@ -26,7 +26,7 @@ and reach it only through the `Application` class.
 | **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. It also has a numeric id, a local handle to select it that is never reused but changes if the database is rebuilt. |
 | **uid** | The item's identifier within its source, produced by the provider. It must be deterministic and stable across runs; how it is computed is up to the provider. |
 | **Annotation** | Data derived from an item by a processor run. Key: `(item, key)`; the processor that wrote it is recorded but is not part of the key. |
-| **Processor** | Object that produces annotations for one item at a time. Each entry of the `enrich` configuration section is a run of a processor with its own options, and writes one key. |
+| **Processor** | Object that produces annotations for one item at a time. Each entry of the `process` configuration section is a run of a processor with its own options, and writes one key. |
 | **Remixer** | Object that builds artifacts from many items. |
 | **Artifact** | Aggregated output of a remixer (newsletter, RSS, web page...). Key: `(remixer, name)`. |
 | **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). |
@@ -34,7 +34,8 @@ and reach it only through the `Application` class.
 
 ## 3. Configuration
 
-A single YAML file with the sections `sources`, `plugins`, `cache` and `db`.
+A single YAML file with the sections `sources`, `plugins`, `process`, `cache`
+and `db`.
 All of them are optional. Each source names its provider explicitly:
 
 ```yaml
@@ -43,8 +44,14 @@ sources:
     name: <readable name>
     provider: <provider name>
     url: <url>
+    options: {...}         # passed to the provider, overriding its plugin's
 plugins:
   <plugin>: {...}          # its options; empty for the plugin's defaults
+process:
+  - <processor>            # a run with the defaults, or
+  - processor: <processor>
+    key: <annotation key>  # default: the processor's own
+    options: {...}         # passed to the processor, overriding its plugin's
 cache:
   expiration: <seconds>    # HTTP cache lifetime
 db:
@@ -56,13 +63,17 @@ db:
 the file is loaded; comments and keys are not expanded. Secrets (API keys,
 tokens) are always passed this way.
 
-Only plugins with an entry in `plugins` are loaded. Each plugin validates
+Plugins with an entry in `plugins` are loaded, in its order. A provider that
+a source names, or a processor that a `process` entry names, that none of
+them provides loads the plugin of the same name with its defaults; a name
+that no plugin provides is a configuration error. Remixers and sinks are
+loaded only from `plugins`. Each plugin validates
 its own options and fills in defaults for the missing ones; invalid options
 are a configuration error that names their path (`plugins.<plugin>.<option>`).
 A plugin decides which of its objects its options enable; the built-in
 bundles enable all of them unless the options name some. Provider,
 processor, remixer and sink names are unique per type across the loaded
-plugins; sources refer to providers, `enrich` entries to processors, and
+plugins; sources refer to providers, `process` entries to processors, and
 annotations, artifacts and deliveries to processors, remixers and sinks, by
 those names.
 
@@ -96,10 +107,10 @@ article.
 - **Source removed from the YAML:** its items are kept and stop being
   updated. Remixers still see them.
 
-### 4.2 Enrichment
+### 4.2 Processing
 
-Processors create annotations on items. `enrich` runs the entries of the
-`enrich` section in order; each run writes one key, by default the
+Processors create annotations on items. `process` runs the entries of the
+`process` section in order; each run writes one key, by default the
 processor's own, and keeps its own processing state per item under that
 key. A key is written by one entry only. A run's options override those of
 the processor's plugin section for that run.
@@ -184,7 +195,7 @@ process, not a network service. It offers:
 
 - **Queries** of items, annotations, artifacts and deliveries. Querying an
   artifact that does not exist returns an explicit "does not exist".
-- **Running** each of the four phases (import, enrich, remix, deliver).
+- **Running** each of the four phases (import, process, remix, deliver).
 - **Forced regeneration** of annotations, which resets the attempt counter.
 - **Deletion** of annotations, by processor, by item or both. Deleting also
   removes the processing state, so the item becomes pending again with
