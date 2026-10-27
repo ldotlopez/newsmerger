@@ -9,7 +9,6 @@ from unittest.mock import Mock, patch
 
 import pydantic
 import requests
-from pydantic import SecretStr
 
 from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
 from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
@@ -18,7 +17,6 @@ from newsmerger.plugins.telegram import (
     MAX_CAPTION_LENGTH,
     Options,
     TelegramArtifactSink,
-    TelegramClient,
     TelegramSink,
     build_caption,
 )
@@ -41,8 +39,7 @@ class TelegramTestCase(unittest.TestCase):
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
-        self.client = TelegramClient(SecretStr("token"))
-        self.cfg = Options(bot_token="token", chat_id="chat")
+        self.cfg = Options(bot_token="s3cr3t", chat_id="chat")
 
     def tearDown(self) -> None:
         self.db.close()
@@ -88,7 +85,7 @@ class TelegramTestCase(unittest.TestCase):
 @patch("newsmerger.plugins.telegram.requests.post")
 class TelegramSinkTests(TelegramTestCase):
     def deliver(self, key: str = "telegram", **options: Any) -> None:
-        sink = TelegramSink(self.client, self.cfg)
+        sink = TelegramSink(self.cfg)
         sink.deliver(self.db, key=key, options=sink.use_options(options))
 
     def test_posts_one_item_per_interval_oldest_first_once(self, post: Mock) -> None:
@@ -122,16 +119,35 @@ class TelegramSinkTests(TelegramTestCase):
             self.delivered("other"), {"h3": {"chat_id": "other-chat", "message_id": 42}}
         )
 
-    def test_an_entry_needs_a_chat(self, post: Mock) -> None:
-        sink = TelegramSink(self.client, Options(bot_token="token"))
-        with self.assertRaises(pydantic.ValidationError):
-            sink.use_options({})
-        self.assertEqual(sink.use_options({"chat_id": "c"}).chat_id, "c")
+    def test_an_entry_needs_a_token_and_a_chat(self, post: Mock) -> None:
+        for section, overrides in (
+            (Options(bot_token="token"), {}),
+            (Options(chat_id="chat"), {}),
+            (Options(), {"chat_id": "c"}),
+        ):
+            with (
+                self.subTest(overrides=overrides),
+                self.assertRaises(pydantic.ValidationError),
+            ):
+                TelegramSink(section).use_options(overrides)
+
+    def test_an_entry_overrides_or_replaces_the_section(self, post: Mock) -> None:
+        post.return_value = ok_response()
+        self.add_summarized(SOURCE_A, 3)
+        sink = TelegramSink(Options())  # no section: the entry says it all
+
+        options = sink.use_options({"bot_token": "other", "chat_id": "@channel"})
+        sink.deliver(self.db, key="channel", options=options)
+
+        (request_url,) = post.call_args.args
+        self.assertEqual(request_url, "https://api.telegram.org/botother/sendMessage")
+        self.assertEqual(post.call_args.kwargs["json"]["chat_id"], "@channel")
+        self.assertNotIn("other", repr(options))  # the token stays secret
 
     def test_failed_post_stays_failed_without_leaking_the_token(
         self, post: Mock
     ) -> None:
-        post.side_effect = requests.ConnectionError("url: /bottoken/sendMessage")
+        post.side_effect = requests.ConnectionError("url: /bots3cr3t/sendMessage")
         self.add_summarized(SOURCE_A, 3)
 
         with self.assertLogs("newsmerger.sinks", "ERROR") as logs:
@@ -140,7 +156,7 @@ class TelegramSinkTests(TelegramTestCase):
         ((row, _),) = self.db.get_item_deliveries("telegram")
         self.assertEqual((row.status, row.attempts), (DeliveryStatus.ERROR, 1))
         self.assertEqual(row.last_error, "ConnectionError")
-        self.assertNotIn("token", "\n".join(logs.output))
+        self.assertNotIn("s3cr3t", "\n".join(logs.output))
 
     def test_sends_photo_with_escaped_caption(self, post: Mock) -> None:
         post.return_value = ok_response()
@@ -176,7 +192,7 @@ class TelegramArtifactSinkTests(TelegramTestCase):
             Artifact("digest", "a/2026-10-01_2026-10-08", "# Week", "text/markdown")
         )
         self.db.save_artifact(Artifact("feedgenerator", "feed", "<rss/>", "text/xml"))
-        sink = TelegramArtifactSink(self.client, self.cfg)
+        sink = TelegramArtifactSink(self.cfg)
         options = sink.use_options({"artifacts": ["digest"]})
 
         sink.deliver(self.db, key="telegram_artifacts", options=options)
@@ -198,8 +214,8 @@ class TelegramArtifactSinkTests(TelegramTestCase):
 
 
 class PluginTests(unittest.TestCase):
-    def test_provides_both_sinks(self) -> None:
-        objects = telegram.__newsmerger_plugin__(Services(), bot_token="t")
+    def test_provides_both_sinks_even_without_a_section(self) -> None:
+        objects = telegram.__newsmerger_plugin__(Services())
 
         self.assertEqual(
             [(name, protocol) for name, protocol, _ in objects],
