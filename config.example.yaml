@@ -128,6 +128,7 @@ deliver:
   - sink: telegram                   # summarized items (`summary`)
     options:
       interval: 30
+      item_image: true               # the item's image as a photo, if any
       original_url_text: original article  # the link to the article
       original_url_preview: false    # Telegram's link preview, text posts only
   - sink: telegram_artifacts         # artifacts, as documents

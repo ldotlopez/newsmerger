@@ -1,89 +1,84 @@
-# Graph Report - telegram-original-url-options  (2026-10-27)
+# Graph Report - telegram-item-image  (2026-10-27)
 
 ## Corpus Check
-- 68 files · ~119,125 words
+- 68 files · ~119,201 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 4 file(s) not represented in the graph (top: (none) 3, .lock 1)
 
 ## Summary
-- 1448 nodes · 4275 edges · 72 communities (49 shown, 23 thin omitted)
+- 1449 nodes · 4279 edges · 70 communities (41 shown, 29 thin omitted)
 - Extraction: 86% EXTRACTED · 14% INFERRED · 0% AMBIGUOUS · INFERRED: 584 edges (avg confidence: 0.92)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9a0ff5c1`
+- Built from commit: `1b532842`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- make_item
-- embed.py
 - test_db.py
+- .close
+- db.py
 - .from_text
 - ApplicationTests
-- Artifact
+- test_telegram.py
 - Application
 - migrate_autoincrement.py
-- merge_options
-- ollama.py
-- .session_scope
-- Context
-- __newsmerger_plugin__
+- feedreader.py
+- GroupingTests
+- DeleteCommandTests
+- app_from_context
+- FeedGeneratorRemixer
 - ProcessingScope
-- process_cmd
-- Sink
+- run_cmd
+- app.py
 - BaseSink
-- TelegramChannelProvider
+- telegram_channel.py
 - DeliveryStatus
 - TestFeedReader
-- single_link_groups
-- .get_annotation_values
+- .key
+- Any
 - SourceItem
-- .record_result
-- .require_annotation
+- Database
 - SourceData
-- BaseProcessor
-- markdownify.py
+- Any
+- MarkdownifyProcessor
 - PrensaIbericaPlainProvider
 - cli.py Click commands
-- Options
-- telegram_channel.py
+- migrate
+- Provider
 - csjuntasgobierno.py
 - __newsmerger_plugin__
 - backoff_seconds
-- BaseRemixer
-- test_sinks.py
-- 0009: Workflows and keyed entries
-- config.py
+- DigestRemixer
+- Artifact
+- delete_items_cmd
+- Config
 - ADR 0007 Sinks and the delivery ledger
-- .__init__
-- command
-- ProcessorTestCase
+- grouping.py
+- report_user_errors
+- PluginOptions
 - Services object (services.llm(name))
-- test_llm.py
+- StubLLM
 - config.example.yaml
-- app.py
-- test_app.py
-- OptionsTests
-- cli.py
-- summarize.py
 - inspect_items_cmd
+- config.py
+- GoogleChatSink
+- expand_variables
+- cli.py
+- _sha256_column
+- json
 - Processor
 - El Periódico Mediterráneo
-- Config
 - plaza.py
 - newsmerger CLAUDE.md agent guidelines
-- StubLLM
 - deliveries table (the ledger)
 - ADR 0001 Item identity and change detection
-- ScoredItem
 - Example sources (prensaiberica_plain, castelloninformacion, plaza, theguardian)
-- EmbeddingGroupingTests
 - Artifact
 - Grouping notes: NLP clustering pipeline
 - news-aggregator
 - LogLevelTests
-- GroupingRemixer
 - ADR 0002 Processing state lifecycle
 - TestSourceItemDataContent
 
@@ -102,14 +97,14 @@
 ## Surprising Connections (you probably didn't know these)
 - `newsmerger README` --references--> `Phases: import, enrich, remix, deliver`  [INFERRED]
   README.md → docs/SPECIFICATION.md
-- `main()` --uses--> `LockedError`  [INFERRED]
-  scripts/migrate_autoincrement.py → newsmerger/app.py
 - `ApplicationTests` --uses--> `LockedError`  [INFERRED]
   tests/test_app.py → newsmerger/app.py
 - `ApplicationTests` --uses--> `Application`  [INFERRED]
   tests/test_app.py → newsmerger/app.py
 - `invoke()` --indirect_call--> `cli()`  [INFERRED]
   tests/test_cli.py → newsmerger/cli.py
+- `ApplicationTests` --uses--> `ConfigError`  [INFERRED]
+  tests/test_app.py → newsmerger/config.py
 
 ## Import Cycles
 - None detected.
@@ -120,77 +115,69 @@
 - **Delivery ledger mechanism** — docs_architecture_deliveries_table, docs_decisions_0007_sinks_and_delivery_ledger_delivery_states, docs_architecture_basesink_cycle, docs_decisions_0007_sinks_and_delivery_ledger_strict_fifo_per_source, docs_decisions_0007_sinks_and_delivery_ledger_lookback_window, docs_specification_write_lock [INFERRED 0.85]
 - **Prensa Ibérica sample article fixtures (El Periódico Mediterráneo, July 2026)** — tests_samples_prensaiberica_item_132310503_article, tests_samples_prensaiberica_item_132340038_article, tests_samples_prensaiberica_item_132344288_article [INFERRED 0.95]
 
-## Communities (72 total, 23 thin omitted)
+## Communities (70 total, 29 thin omitted)
 
-### Community 0 - "make_item"
+### Community 0 - "test_db.py"
 Cohesion: 0.07
-Nodes (13): DBProcessingState, DBSourceItem, AnnotationTests, ConnectionTests, ContentStorageTests, DatabaseTestCase, DeleteTests, GetItemsTests (+5 more)
+Nodes (14): DBProcessingState, DBSource, DBSourceItem, AnnotationTests, ConnectionTests, ContentStorageTests, DatabaseTestCase, DeleteTests (+6 more)
 
-### Community 1 - "embed.py"
-Cohesion: 0.15
-Nodes (4): __newsmerger_plugin__(), __newsmerger_plugin__(), __newsmerger_plugin__(), UnavailableProcessor
+### Community 2 - "db.py"
+Cohesion: 0.09
+Nodes (9): LLM, LLMUnavailableError, strip_code_fence(), __newsmerger_plugin__(), Services, __newsmerger_plugin__(), __newsmerger_plugin__(), UnavailableProcessor (+1 more)
 
-### Community 2 - "test_db.py"
+### Community 5 - "test_telegram.py"
 Cohesion: 0.08
-Nodes (10): _sha256_column(), LLM, LLMUnavailableError, strip_code_fence(), Options, NoOptions, PluginOptions, Services (+2 more)
-
-### Community 4 - "ApplicationTests"
-Cohesion: 0.07
-Nodes (5): __newsmerger_plugin__(), ollama_client(), OllamaLLM, ApplicationTests, OllamaTests
-
-### Community 5 - "Artifact"
-Cohesion: 0.05
-Nodes (25): DBArtifact, Artifact, build_text(), build_caption(), DocumentDeliveryOptions, ItemDeliveryOptions, __newsmerger_plugin__(), Options (+17 more)
+Nodes (18): ProcessingStatus, build_caption(), DocumentDeliveryOptions, ItemDeliveryOptions, __newsmerger_plugin__(), Options, post(), TelegramArtifactSink (+10 more)
 
 ### Community 7 - "migrate_autoincrement.py"
-Cohesion: 0.11
-Nodes (8): Base, DBItemAnnotation, main(), migrate(), needs_autoincrement(), recreate(), make_item(), MigrateAutoincrementTests
+Cohesion: 0.07
+Nodes (11): LockedError, write_lock(), Base, DBItemAnnotation, main(), migrate(), needs_autoincrement(), recreate() (+3 more)
 
-### Community 8 - "merge_options"
+### Community 8 - "feedreader.py"
+Cohesion: 0.13
+Nodes (8): discover_feed_url(), entry_date(), fetch_feed(), find_image(), __newsmerger_plugin__(), Options, parse_entry(), merge_options()
+
+### Community 11 - "app_from_context"
 Cohesion: 0.14
-Nodes (5): FeedReaderProvider, __newsmerger_plugin__(), Options, merge_options(), __newsmerger_plugin__()
+Nodes (10): app_from_context(), cli(), delete_annotations_cmd(), deliver_cmd(), inspect_content_cmd(), inspect_deliveries_cmd(), parse_artifact_ids(), process_cmd() (+2 more)
 
-### Community 9 - "ollama.py"
-Cohesion: 0.23
-Nodes (3): FeedGeneratorTests, GroupingTests, RemixerTestCase
-
-### Community 11 - "Context"
-Cohesion: 0.16
-Nodes (9): app_from_context(), cli(), deliver_cmd(), inspect_content_cmd(), inspect_deliveries_cmd(), parse_artifact_ids(), process_cmd(), resolve_cmd() (+1 more)
+### Community 12 - "FeedGeneratorRemixer"
+Cohesion: 0.29
+Nodes (3): FeedGeneratorRemixer, Options, FeedGeneratorTests
 
 ### Community 13 - "ProcessingScope"
-Cohesion: 0.06
-Nodes (12): workflow_scope(), wrapper(), Annotation, ProcessingScope, RunSummary, annotation(), CommandTests, InspectCommandTests (+4 more)
+Cohesion: 0.07
+Nodes (11): workflow_scope(), wrapper(), ProcessingScope, RunSummary, annotation(), CommandTests, InspectCommandTests, invoke() (+3 more)
 
-### Community 14 - "process_cmd"
+### Community 14 - "run_cmd"
 Cohesion: 0.15
 Nodes (8): import_cmd(), import_sources(), print_import(), print_remix(), progress_rows(), remix_cmd(), run_cmd(), run_each()
 
-### Community 15 - "Sink"
-Cohesion: 0.09
-Nodes (13): delivery_runs(), entry_location(), load_plugins(), lookup(), objects_by_name(), process_runs(), remix_runs(), Run (+5 more)
+### Community 15 - "app.py"
+Cohesion: 0.08
+Nodes (14): delivery_runs(), entry_location(), load_plugins(), lookup(), objects_by_name(), process_runs(), referenced_plugins(), remix_runs() (+6 more)
 
-### Community 17 - "TelegramChannelProvider"
+### Community 17 - "telegram_channel.py"
 Cohesion: 0.10
-Nodes (12): SourceItemData, PrensaIbericaProvider, Options, page_title(), parse_article(), parse_preview(), Post, preview_url() (+4 more)
+Nodes (11): is_home_page(), __newsmerger_plugin__(), Options, page_title(), parse_article(), parse_preview(), Post, preview_url() (+3 more)
 
 ### Community 18 - "DeliveryStatus"
 Cohesion: 0.10
-Nodes (5): DeliveryStatus, Delivery, BaseItemSink, migrate(), GoogleChatSinkTests
+Nodes (5): DBDelivery, DeliveryStatus, Delivery, BaseItemSink, GoogleChatSinkTests
 
-### Community 21 - ".get_annotation_values"
-Cohesion: 0.10
+### Community 20 - ".key"
+Cohesion: 0.20
+Nodes (5): 0009: Workflows and keyed entries, Consequences, Context, Decision, Rejected options
+
+### Community 21 - "Any"
+Cohesion: 0.12
 Nodes (4): _configure_sqlite_connection(), CustomJSON, _encode_value(), UTCDateTime
 
-### Community 22 - "SourceItem"
-Cohesion: 0.10
-Nodes (3): SourceItem, FeedGeneratorRemixer, Options
-
 ### Community 25 - "SourceData"
-Cohesion: 0.06
-Nodes (12): DBSource, HTTPClient, SourceData, CastellonInformacionProvider, __newsmerger_plugin__(), discover_feed_url(), fetch_article(), fetch_feed() (+4 more)
+Cohesion: 0.08
+Nodes (12): HTTPClient, SourceData, SourceItemData, CastellonInformacionProvider, FeedReaderProvider, fetch_article(), PlazaProvider, PrensaIbericaProvider (+4 more)
 
-### Community 27 - "markdownify.py"
+### Community 27 - "MarkdownifyProcessor"
 Cohesion: 0.22
 Nodes (5): MarkdownifyProcessor, __newsmerger_plugin__(), SkipItem, make_pdf(), MarkdownifyPdfTests
 
@@ -202,83 +189,71 @@ Nodes (3): _extract_href(), __newsmerger_plugin__(), PrensaIbericaPlainProvider
 Cohesion: 0.23
 Nodes (10): cli.py Click commands, Database (db.py, only SQLite/storage access), foundation.storage.DiskStorage content-addressed storage, SQLAlchemy models never leave db.py; DTOs cross the boundary, foundation internal library, inspect items|annotations|artifacts|deliveries, Application class (single entry point), Phases: import, enrich, remix, deliver (+2 more)
 
-### Community 31 - "telegram_channel.py"
-Cohesion: 0.18
-Nodes (6): entry_date(), find_image(), parse_entry(), __newsmerger_plugin__(), __newsmerger_plugin__(), Provider
+### Community 31 - "Provider"
+Cohesion: 0.12
+Nodes (4): __newsmerger_plugin__(), __newsmerger_plugin__(), __newsmerger_plugin__(), Provider
 
 ### Community 32 - "csjuntasgobierno.py"
 Cohesion: 0.18
 Nodes (6): CSJuntasGobiernoProvider, find_parent_by_tag_name(), get_date_from_text(), __newsmerger_plugin__(), PreparseData, TestCSJuntasGobierno
 
 ### Community 33 - "__newsmerger_plugin__"
-Cohesion: 0.19
-Nodes (3): __newsmerger_plugin__(), UnavailableRemixer, DigestPluginTests
+Cohesion: 0.25
+Nodes (4): __newsmerger_plugin__(), ollama_client(), Options, OllamaTests
 
-### Community 35 - "BaseRemixer"
-Cohesion: 0.19
-Nodes (3): DigestOptions, DigestRemixer, BaseRemixer
+### Community 36 - "Artifact"
+Cohesion: 0.05
+Nodes (15): DBArtifact, Artifact, __newsmerger_plugin__(), BaseRemixer, UnavailableRemixer, ArtifactDeliveryOptions, DeliveryOptions, SelectionRequiredError (+7 more)
 
-### Community 36 - "test_sinks.py"
-Cohesion: 0.08
-Nodes (6): DBDelivery, DeliveryOptions, SelectionRequiredError, ItemSinkTests, RecordingItemSink, SinkTestCase
+### Community 37 - "delete_items_cmd"
+Cohesion: 0.24
+Nodes (5): check_found(), delete_artifacts_cmd(), delete_items_cmd(), require_selection(), sort_option()
 
-### Community 37 - "0009: Workflows and keyed entries"
-Cohesion: 0.19
-Nodes (6): check_found(), delete_annotations_cmd(), delete_artifacts_cmd(), delete_items_cmd(), require_selection(), sort_option()
-
-### Community 38 - "config.py"
-Cohesion: 0.08
-Nodes (7): CacheConfig, DatabaseConfig, DeliveryEntry, expand_variables(), MissingVariableError, ProcessEntry, RemixEntry
+### Community 38 - "Config"
+Cohesion: 0.10
+Nodes (4): Config, DeliveryEntry, ProcessEntry, RemixEntry
 
 ### Community 39 - "ADR 0007 Sinks and the delivery ledger"
 Cohesion: 0.23
 Nodes (12): Architecture, AUTOINCREMENT integer ids, External pipelines (scripts/pipeline_url.py), ADR 0003 Plugin types and core scope, ADR 0004 Annotation and artifact contents on disk, ADR 0006 LLM plugins, ADR 0007 Sinks and the delivery ledger, deliver SINK --force with explicit selection (+4 more)
 
-### Community 40 - ".__init__"
-Cohesion: 0.21
-Nodes (8): average_between(), average_link_cluster(), cosine_similarity(), EmbeddingsOptions, EmbeddingsRemixer, jaccard(), score_pair(), time_decay()
+### Community 40 - "grouping.py"
+Cohesion: 0.06
+Nodes (26): __newsmerger_plugin__(), average_between(), average_link_cluster(), AverageLinkRemixer, build_score_matrix(), cosine_similarity(), EmbeddingsOptions, EmbeddingsRemixer (+18 more)
 
-### Community 41 - "command"
+### Community 41 - "report_user_errors"
 Cohesion: 0.21
 Nodes (7): annotation_options(), artifact_options(), inspect_annotations_cmd(), inspect_artifacts_cmd(), report_user_errors(), wrapper(), scope_options()
 
-### Community 42 - "ProcessorTestCase"
-Cohesion: 0.19
-Nodes (6): merge_tags(), Options, TaggerOptions, TaggerProcessor, ProcessorTestCase, TaggerTests
+### Community 42 - "PluginOptions"
+Cohesion: 0.10
+Nodes (9): Options, NoOptions, PluginOptions, Options, merge_tags(), Options, TaggerOptions, TaggerProcessor (+1 more)
 
 ### Community 43 - "Services object (services.llm(name))"
 Cohesion: 0.22
 Nodes (12): digest remixer, embed processor, grouping remixers (singlelink, avglink, embeddings), markdownify processor, summarize processor, tagger processor, telegram bundle (telegram, telegram_artifacts sinks), LLM plugins must be listed before their consumers (+4 more)
 
-### Community 44 - "test_llm.py"
-Cohesion: 0.21
-Nodes (5): EmbedOptions, EmbedProcessor, Options, tags_text(), EmbedTests
+### Community 44 - "StubLLM"
+Cohesion: 0.08
+Nodes (13): EmbedOptions, EmbedProcessor, Options, tags_text(), Options, SummarizeOptions, SummarizeProcessor, ConsumerPluginTests (+5 more)
 
 ### Community 45 - "config.example.yaml"
 Cohesion: 0.25
 Nodes (5): foundation.plugin.Register plugin loading, __newsmerger_plugin__(services, **options) entry point, PluginOptions (pydantic, unknown keys rejected), ollama LLM backend, plugins configuration section
 
-### Community 47 - "app.py"
+### Community 47 - "inspect_items_cmd"
 Cohesion: 0.25
 Nodes (5): inspect_items_cmd(), print_deliver(), print_item(), print_process(), print_table()
 
-### Community 48 - "test_app.py"
-Cohesion: 0.10
-Nodes (5): LockedError, write_lock(), main(), migrate(), main()
-
-### Community 49 - "OptionsTests"
-Cohesion: 0.08
-Nodes (11): 0009: Workflows and keyed entries, Consequences, Context, Decision, Rejected options, GoogleChatError, GoogleChatSink, __newsmerger_plugin__() (+3 more)
+### Community 49 - "GoogleChatSink"
+Cohesion: 0.13
+Nodes (7): build_text(), GoogleChatError, GoogleChatSink, __newsmerger_plugin__(), Options, WebhookOptions, OptionsTests
 
 ### Community 51 - "cli.py"
 Cohesion: 0.10
 Nodes (6): delete_group(), deliveries_group(), inspect_group(), lexer_for(), match_snippet(), print_content()
 
-### Community 52 - "summarize.py"
-Cohesion: 0.33
-Nodes (4): Options, SummarizeOptions, SummarizeProcessor, SummarizeTests
-
-### Community 53 - "inspect_items_cmd"
+### Community 53 - "json"
 Cohesion: 0.27
 Nodes (5): format_value(), json_default(), preview(), print_json(), setup_logging()
 
@@ -291,16 +266,12 @@ Cohesion: 0.43
 Nodes (7): El Periódico Mediterráneo, Prensa Ibérica article HTML format (og:/article: meta tags), Telegram t.me/s channel preview HTML (tgme_widget_message, data-post), El eco perdido de las fiestas de julio nacidas del asedio carlista sobre Castellón (sample article), El Grau se vuelca en las fiestas de la Virgen del Carmen (sample article), Castellón apoya a la selección española desde la plaza Mayor (sample article), Telegram channel mediterraneoelperiodico (sample web preview)
 
 ### Community 57 - "plaza.py"
-Cohesion: 0.17
-Nodes (5): get_section(), __newsmerger_plugin__(), parse_datetime(), PlazaProvider, SectionNotFoundError
+Cohesion: 0.19
+Nodes (4): get_section(), __newsmerger_plugin__(), parse_datetime(), SectionNotFoundError
 
 ### Community 58 - "newsmerger CLAUDE.md agent guidelines"
 Cohesion: 0.33
 Nodes (5): pre-commit config, ruff-check and ruff-format hooks, newsmerger CLAUDE.md agent guidelines, DTO/ORM from_dto/to_dto/update convention, Consumer-side Protocol decoupling convention
-
-### Community 59 - "StubLLM"
-Cohesion: 0.29
-Nodes (3): ConsumerPluginTests, ServicesTests, StubLLM
 
 ### Community 60 - "deliveries table (the ledger)"
 Cohesion: 0.33
@@ -310,33 +281,25 @@ Nodes (4): BaseSink deliver cycle (queue, select, send), deliveries table (the l
 Cohesion: 0.40
 Nodes (4): IndexSiteProvider / URLProvider, ADR 0001 Item identity and change detection, Item, Provider
 
-### Community 65 - "ScoredItem"
-Cohesion: 0.21
-Nodes (7): build_score_matrix(), GroupingOptions, item_ref(), member_payload(), pair_payload(), ScoredItem, tagged_items()
-
-### Community 77 - "GroupingRemixer"
-Cohesion: 0.29
-Nodes (5): AverageLinkRemixer, GroupingRemixer, __newsmerger_plugin__(), SingleLinkRemixer, GroupingPluginTests
-
 ## Knowledge Gaps
 - **13 isolated node(s):** `news-aggregator`, `P1: plain logging and <APP>_LOG_LEVEL fix`, `External pipelines (scripts/pipeline_url.py)`, `PluginOptions (pydantic, unknown keys rejected)`, `Annotation` (+8 more)
   These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 418 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **23 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **29 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Database` connect `.record_result` to `make_item`, `embed.py`, `test_db.py`, `Artifact`, `Application`, `migrate_autoincrement.py`, `ollama.py`, `.session_scope`, `__newsmerger_plugin__`, `ProcessingScope`, `Sink`, `BaseSink`, `DeliveryStatus`, `.get_annotation_values`, `SourceItem`, `.require_annotation`, `SourceData`, `BaseProcessor`, `markdownify.py`, `__newsmerger_plugin__`, `backoff_seconds`, `BaseRemixer`, `test_sinks.py`, `.__init__`, `ProcessorTestCase`, `test_llm.py`, `test_app.py`, `OptionsTests`, `summarize.py`, `Config`, `ScoredItem`, `GroupingRemixer`?**
-  _High betweenness centrality (0.163) - this node is a cross-community bridge._
+- **Why does `Database` connect `Database` to `test_db.py`, `.close`, `db.py`, `test_telegram.py`, `Application`, `migrate_autoincrement.py`, `GroupingTests`, `DeleteCommandTests`, `FeedGeneratorRemixer`, `ProcessingScope`, `app.py`, `BaseSink`, `DeliveryStatus`, `Any`, `SourceItem`, `.get_annotation_values`, `SourceData`, `Any`, `MarkdownifyProcessor`, `migrate`, `backoff_seconds`, `DigestRemixer`, `Artifact`, `grouping.py`, `PluginOptions`, `StubLLM`, `.get_content`, `config.py`, `GoogleChatSink`?**
+  _High betweenness centrality (0.161) - this node is a cross-community bridge._
 - **Are the 44 inferred relationships involving `Database` (e.g. with `Application` and `Annotation`) actually correct?**
   _`Database` has 44 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `news-aggregator`, `P1: plain logging and <APP>_LOG_LEVEL fix`, `External pipelines (scripts/pipeline_url.py)` to the rest of the system?**
   _13 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `make_item` be split into smaller, more focused modules?**
-  _Cohesion score 0.07394366197183098 - nodes in this community are weakly interconnected._
-- **Why does `ProcessingScope` connect `ProcessingScope` to `make_item`, `embed.py`, `test_db.py`, `ApplicationTests`, `Artifact`, `Application`, `ollama.py`, `.session_scope`, `Context`, `__newsmerger_plugin__`, `process_cmd`, `Sink`, `BaseSink`, `DeliveryStatus`, `SourceItem`, `.record_result`, `BaseProcessor`, `__newsmerger_plugin__`, `BaseRemixer`, `test_sinks.py`, `0009: Workflows and keyed entries`, `.__init__`, `command`, `app.py`, `test_app.py`, `cli.py`, `ScoredItem`, `EmbeddingGroupingTests`, `GroupingRemixer`?**
-  _High betweenness centrality (0.125) - this node is a cross-community bridge._
+- **Should `test_db.py` be split into smaller, more focused modules?**
+  _Cohesion score 0.06807017543859649 - nodes in this community are weakly interconnected._
+- **Why does `ProcessingScope` connect `ProcessingScope` to `test_db.py`, `db.py`, `ApplicationTests`, `test_telegram.py`, `Application`, `GroupingTests`, `DeleteCommandTests`, `app_from_context`, `FeedGeneratorRemixer`, `run_cmd`, `app.py`, `BaseSink`, `DeliveryStatus`, `SourceItem`, `Database`, `Any`, `migrate`, `DigestRemixer`, `Artifact`, `delete_items_cmd`, `grouping.py`, `report_user_errors`, `PluginOptions`, `inspect_items_cmd`, `config.py`, `cli.py`?**
+  _High betweenness centrality (0.123) - this node is a cross-community bridge._
 - **Are the 40 inferred relationships involving `ProcessingScope` (e.g. with `Application` and `delete_annotations_cmd()`) actually correct?**
   _`ProcessingScope` has 40 INFERRED edges - model-reasoned connections that need verification._
-- **Should `test_db.py` be split into smaller, more focused modules?**
-  _Cohesion score 0.07964912280701754 - nodes in this community are weakly interconnected._
+- **Should `.close` be split into smaller, more focused modules?**
+  _Cohesion score 0.14166666666666666 - nodes in this community are weakly interconnected._

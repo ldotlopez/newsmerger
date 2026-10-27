@@ -63,6 +63,7 @@ def build_caption(
 class ItemDeliveryOptions(DeliveryOptions):
     bot_token: SecretStr
     chat_id: str
+    item_image: bool = True  # post the item's image, when it has one, as a photo
     original_url_preview: bool = False  # only for text messages
     original_url_text: str = "original article"
 
@@ -113,7 +114,7 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
             options.original_url_text,
         )
         image = subject.data.get("image")
-        if isinstance(image, str) and image.strip():
+        if options.item_image and isinstance(image, str) and image.strip():
             payload = {
                 "chat_id": options.chat_id,
                 "photo": image,

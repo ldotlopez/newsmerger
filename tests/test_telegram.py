@@ -171,6 +171,16 @@ class TelegramSinkTests(TelegramTestCase):
         self.assertIn("Hour &lt;3&gt;", payload["caption"])
         self.assertIn('href="https://a.test/3?a=1&amp;b=2"', payload["caption"])
 
+    def test_item_image_off_sends_text(self, post: Mock) -> None:
+        post.return_value = ok_response()
+        self.add_summarized(SOURCE_A, 3, image="https://a.test/image.jpg")
+
+        self.deliver(item_image=False)
+
+        (request_url,) = post.call_args.args
+        self.assertTrue(request_url.endswith("/sendMessage"))
+        self.assertNotIn("photo", post.call_args.kwargs["json"])
+
     def test_sends_text_without_image(self, post: Mock) -> None:
         post.return_value = ok_response()
         self.add_summarized(SOURCE_A, 3)
