@@ -478,6 +478,15 @@ Risks:
   section exists (see the plan above); per-source runs or options are next.
   Proposed shape (2026-10-27, not agreed): the same list format as `process`; an entry
   whose key matches a default entry replaces it, a new key adds a run.
+- **Named deliveries** (2026-10-27, idea): a root section (`delivers`,
+  perhaps `destinations`) defining deliveries by `id` (sink, `bot_token`,
+  `chat_id`...), referenced by id from workflows' `deliver` entries, like
+  `sources`. Open question before building it: is the ledger (and pacing)
+  per workflow, as decision 0009 says (then it only reuses options, and the
+  same item can reach a channel twice), or per destination (one record and
+  one `interval` per channel, however many workflows feed it, which revises
+  0009)? Also its precedence against the plugin section and the entry's
+  `options`. Wait until two workflows share a destination.
 - **Workflow cleanup in the CLI** (2026-10-27, undefined yet): candidates
   are `inspect/delete orphans` (ledger rows, annotations and artifacts of
   keys or remixers no longer configured) or deleting what one workflow
