@@ -3,7 +3,8 @@
 - **Status:** accepted
 - **Date:** 2026-10-18
 - **Revised:** 2026-10-20 (plugin bundles loaded with `Register`);
-  2026-10-26 (per-use options); 2026-10-27 (autoloading, `process`; see
+  2026-10-26 (per-use options); 2026-10-27 (autoloading, `process`;
+  per-use options as models, `remix` and `deliver` entries; see
   *Revisions*)
 - **Amended by:** 0006 (LLM plugins and the `services` argument), 0007
   (sinks and the `deliver` phase)
@@ -33,15 +34,16 @@ until it was first used.
   loaded with `foundation.plugin.Register`, unmodified. A module is a bundle:
   it can provide any number of objects of any type.
 - **Enabling.** The `plugins` config section lists plugins with their
-  options, in the order `remix` and `deliver` run them; `process` runs the
-  entries of the `process` section instead (decision 0002). After them, a
-  provider that a source names or a processor that a `process` entry names,
-  if no loaded plugin provides it, loads the plugin of the same name with
-  its defaults; a name no plugin provides is a configuration error with its
-  path (`sources.<id>.provider`, `process.<n>.processor`). Remixers and
-  sinks, which nothing names, load only from `plugins`, and a plugin neither
-  listed nor named is never imported. All of them are loaded when
-  `Application` is built, before the database is opened.
+  options, in order. The `process`, `remix` and `deliver` sections (and
+  those of each workflow, decision 0009) list the runs of each phase, in
+  order; an object that no entry names never runs. After the listed
+  plugins, a provider that a source names, or a processor, remixer or sink
+  that an entry names, if no loaded plugin provides it, loads the plugin of
+  the same name with its defaults; a name no plugin provides is a
+  configuration error with its path (`sources.<id>.provider`,
+  `process.<n>.processor`). A plugin neither listed nor named is never
+  imported. All of them are loaded when `Application` is built, before the
+  database is opened.
 - **Options.** The entry point, `__newsmerger_plugin__(**options)`, receives
   its section as keyword arguments, validates it with its own pydantic model
   (unknown keys rejected, defaults for the general case, so an empty section
@@ -51,33 +53,40 @@ until it was first used.
   it can be loaded by name alone. The core never sees a plugin's models; it reports a
   `ValidationError` raised by an entry point as a configuration error with
   the options' path (`plugins.<plugin>.<option>`).
-- **Per-use options.** A plugin's section holds its defaults; each use
-  overrides only the options its method declares as keyword arguments. A
-  source's `options` reach its provider's `retrieve_items`, which
-  declares each one (never `**kwargs`) and falls back to its section's value.
-  When `Application` is built, the core binds every source's options to that
-  signature and reports a mismatch as a configuration error
-  (`sources.<id>.options`). Processors work the same way: a `process`
-  entry's `options` reach `process_item`, checked at start-up through the
-  processor's `output_key(**options)`, which also gives the run's default
-  key (`process.<n>.options`); the entry's `key`, outside `options`,
-  overrides it. They live in the
-  configuration only: the database does not store them.
+- **Per-use options.** A plugin's section holds its defaults; each use (a
+  source of a provider, an entry of a processor, remixer or sink) overrides
+  only the options its object declares per use. Every object implements
+  `use_options(overrides)`, which validates them over its section with a
+  pydantic model of its own and returns that model, and the phase method
+  takes it (`retrieve_items(source, fetcher, options)`, `process(db, *,
+  key, options, ...)`). A plugin declares the per-use model and its
+  section's `Options`, usually a subclass adding the instance-only options,
+  so each option is declared once; `merge_options` and the base classes'
+  `options_model` do the merge. When `Application` is built, the core
+  validates every use and reports a rejected option as a configuration
+  error with its path (`sources.<id>.options.<option>`,
+  `process.<n>.options.<option>`). A processor's `output_key(options)`
+  gives the run's default key; the entry's `key`, outside `options`,
+  overrides it. Options live in the configuration only: the database does
+  not store them.
 - **Objects.** Objects are built once and receive what each task needs as
   method arguments: providers the source, the HTTP client and the source's
-  provider options, processors the database, the scope, the run's key and
-  options, and remixers the database and the scope.
+  options, and processors, remixers and sinks the database, the scope, the
+  entry's key and options.
 - **Names.** Object names are unique per type across plugins and are what
-  sources, `process` entries, artifacts and the CLI refer to. A provider or
-  processor is named after its plugin module, so naming it loads it. Processors and
-  remixers own their name, a class attribute, and are registered under it;
-  providers' names exist only in their triples. Annotations are keyed by
-  the run's key, which the configuration may rename (decision 0002).
+  sources and entries refer to. A provider, processor, remixer or sink is
+  usually named after its plugin module, so naming it loads it. Processors,
+  remixers and sinks own their name, a class attribute, and are registered
+  under it; providers' names exist only in their triples. Annotations,
+  artifacts and deliveries are keyed by their entry's key, which defaults
+  to the object's name and which the configuration may rename (decisions
+  0002 and 0009).
 - **Methods.** Each protocol has a method of its own (`retrieve_items`,
   `process`, `remix`), named after the phase that calls it. foundation matches
   declared protocols with `issubclass()`, which compares method names only.
 - **Bundles.** Bundles enable all their objects unless their options name
-  some; this is a convention of the plugins, not a rule of the core. Bundles
+  some (`grouping`); this is a convention of the plugins, not a rule of the
+  core. Bundles
   never import each other: they share data through annotations (`llm.embed`
   stores the vectors `grouping.embeddings` reads). Code used by a single
   bundle, such as clustering, lives in that bundle.
@@ -107,6 +116,13 @@ until it was first used.
   same methods apart, so remixers were loaded as processors and vice versa.
   A marker method per protocol would be noise, and registering against base
   classes instead of protocols would force inheritance.
+- **Per-use options as keyword arguments bound to the method's signature**
+  (the 2026-10-26 revision). Each option was declared twice, in the
+  section's model and as a keyword argument; types went unchecked until the
+  call; and each object had to fall back to its section with `x or self.x`,
+  which cannot unset a section default.
+- **Generic per-use option models in the core.** The core would have to
+  know every plugin's options; each plugin declares its own model.
 - **Per-use options checked when the provider is called**, a `TypeError`
   as the error. It would surface only on import, and a `TypeError` raised
   inside the provider would read as a bad option.
@@ -131,15 +147,24 @@ until it was first used.
 - `name` and `self` cannot be plugin options: they are `register()`'s own
   parameters.
 - Grouping with embeddings needs `process` to have run `embed` first.
-- A plugin needs a section only for options, or to enable its remixers and
-  sinks. Config files with `enrich:` or `provider_options:` must be
-  rewritten as `process:` (with `key` moved out of `options`) and
-  `options:`.
-- A source that gives its provider an option it does not declare fails
-  every command at start-up, like invalid plugin options.
+- A plugin needs a section only for options. Config files with `enrich:`
+  or `provider_options:` must be rewritten as `process:` (with `key` moved
+  out of `options`) and `options:`, and remixers and sinks enabled by their
+  section alone must be listed in `remix:` and `deliver:`.
+- A source or entry that gives its object an option it does not declare,
+  or a value of the wrong type, fails every command at start-up, like
+  invalid plugin options.
+- Every phase method takes its options as one model, so adding a per-use
+  option is a field in the plugin's model, not a new parameter.
 
 ## Revisions
 
+- **2026-10-27.** Per-use options are pydantic models validated by each
+  object's `use_options`, for providers, processors, remixers and sinks,
+  and `remix` and `deliver` list their runs like `process` (with workflows,
+  decision 0009). Discarded: signature binding of keyword arguments,
+  `output_key(**options)` as the processors' check, and enabling remixers
+  and sinks by their plugin section.
 - **2026-10-27.** Providers and processors named by sources and `process`
   entries load their plugin on their own, after the listed plugins; entry
   points return instances. `enrich` renamed `process` (section, phase, CLI

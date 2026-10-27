@@ -1,6 +1,7 @@
 # Copy to config.yaml and adjust.
 # Secrets come from the environment or from a .env file next to this one:
-# ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID}, ${GOOGLECHAT_WEBHOOK_URL}.
+# ${OLLAMA_API_KEY}, ${TELEGRAM_BOT_TOKEN}, ${TELEGRAM_CHAT_ID},
+# ${TELEGRAM_JUNTAS_CHAT_ID}, ${GOOGLECHAT_WEBHOOK_URL}.
 # Write a literal dollar sign in a value as $$; comments are not expanded.
 
 # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set a level.
@@ -27,6 +28,13 @@ sources:
     provider: theguardian
     url: https://www.theguardian.com/world/spain
 
+  # Used only by the workflows that name it (see `workflows` below).
+  - id: juntagobiernolocal
+    name: Junta de Gobierno Local
+    provider: csjuntasgobierno
+    url: https://www.castello.es/es/sesiones
+    default: false
+
   # Any RSS or Atom feed. `options` override, for this source only, the
   # options in the provider's plugin section.
   # - id: some-blog
@@ -40,10 +48,10 @@ cache:
   expiration: 21600
 
 # Plugins and their options; options left out take the plugin's defaults, so
-# an empty section enables a plugin as is. Providers and processors that
-# `sources` and `process` name load on their own, with their defaults, after
-# the plugins listed here: list them only to give them options. Remixers and
-# sinks run only when listed, in this order.
+# an empty section enables a plugin as is. Providers, processors, remixers
+# and sinks that sources and entries name load on their own, with their
+# defaults, after the plugins listed here: list them only to give them
+# options. Only the `process`, `remix` and `deliver` entries run.
 plugins:
   # Providers with options.
   # feedreader:
@@ -65,26 +73,25 @@ plugins:
     llm: ollama
     model: gemma4:12b
 
-  # Remixers.
+  # Remixers: the defaults of their `remix` entries.
   feedgenerator:
+    title: Castelló news
   grouping:                          # singlelink, avglink and embeddings
   digest:                            # sends a week of articles per source
     days: 7
 
-  # Sinks.
-  telegram:
+  # Sinks: the defaults of their `deliver` entries.
+  telegram:                          # the telegram and telegram_artifacts sinks
     bot_token: ${TELEGRAM_BOT_TOKEN}
-    chat_id: ${TELEGRAM_CHAT_ID}
-    telegram:                        # summarized items (`summary`)
-      interval: 30                   # minutes between posts of the same source
-    telegram_artifacts:              # artifacts, as documents
-      artifacts: [digest]
+    chat_id: ${TELEGRAM_CHAT_ID}     # entries may name their own
   googlechat:                        # summarized items, by incoming webhook
     url: ${GOOGLECHAT_WEBHOOK_URL}   # or `channel` (space id) and `token`
 
+# The `default` workflow: every source without `default: false`.
+#
 # The runs of `process`, in order. Each writes one annotation key, the
 # processor's own unless the entry names another with `key`; a key is written
-# by one entry only. `options` override the plugin section for that run.
+# by one entry per item. `options` override the plugin section for that run.
 process:
   - markdownify                      # markdown
   - summarize                        # summary
@@ -99,3 +106,41 @@ process:
   #   options:
   #     prompt: "Resume en español el siguiente artículo:\n\n"
   #     model: gemma4:27b
+
+# The runs of `remix`, in order. Each saves its artifacts under its key, the
+# remixer's own unless the entry names another; keys are unique across
+# workflows.
+remix:
+  - feedgenerator                    # feedgenerator/feed
+  - singlelink
+  - avglink
+  - embeddings
+  - digest                           # digest/<source>/<since>_<until>
+  # - remixer: feedgenerator         # short/feed
+  #   key: short
+  #   options: {title: Headlines, max_items: 10}
+
+# The runs of `deliver`, in order. Each records its deliveries under its key,
+# the sink's own unless the entry names another; keys are unique per
+# workflow. Every entry takes `interval` (minutes between deliveries, oldest
+# first; default 0), `max_per_run` (default 5), `max_retries` and `lookback`.
+deliver:
+  - sink: telegram                   # summarized items (`summary`)
+    options: {interval: 30}
+  - sink: telegram_artifacts         # artifacts, as documents
+    options: {artifacts: [digest]}
+  - googlechat
+
+# More workflows, run with `-w NAME` (one cron line each). A workflow sees only
+# its sources; two workflows may write the same process key only if they
+# share no source. Its deliveries are recorded as `<name>/<key>`.
+workflows:
+  - name: juntas-channel
+    sources: [juntagobiernolocal]
+    process: [markdownify, summarize]
+    deliver:
+      - sink: telegram
+        options:
+          chat_id: ${TELEGRAM_JUNTAS_CHAT_ID}
+          interval: 30
+          max_per_run: 1

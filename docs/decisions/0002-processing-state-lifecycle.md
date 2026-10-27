@@ -2,7 +2,8 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-18
-- **Revised:** 2026-10-27 (`enrich` renamed `process`; the key at entry level)
+- **Revised:** 2026-10-27 (`enrich` renamed `process`; the key at entry
+  level; keys per workflow, by 0009)
 
 ## Context
 
@@ -17,7 +18,8 @@ processor, waits for upstream processors, and reprocesses on a version bump.
   processor with its own options, and writes exactly one annotation key (the
   processor's own unless the entry names one with `key`, next to
   `processor` and outside its `options`: `summary`, `summary/es`). A key is
-  written by one entry only.
+  written by one entry per item: one within a workflow, and across
+  workflows only if they share no source (decision 0009).
 - **Annotations and state** are both keyed by `(item, key)`; the processor
   that wrote them is recorded, not part of the key. Two runs of one
   processor with different keys are independent: each has its own status,
@@ -49,6 +51,8 @@ processor, waits for upstream processors, and reprocesses on a version bump.
 
 ## Revisions
 
+- **2026-10-27 (0009).** Discarded: "a key is written by one entry only",
+  across the whole configuration. Remains: one writer per `(item, key)`.
 - **2026-10-26.** One key per run, keyed by `(item, key)`. Discarded:
   annotations keyed by `(item, processor, key)` with one state per
   `(item, processor)`, which let a processor write several keys per item
