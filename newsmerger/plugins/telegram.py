@@ -38,11 +38,13 @@ class TelegramError(Exception):
     """A message could not be posted."""
 
 
-def build_caption(title: str, summary: str, uri: str) -> str:
+def build_caption(
+    title: str, summary: str, uri: str, link_text: str = "original article"
+) -> str:
     escaped_title = html.escape(title)
     escaped_summary = html.escape(summary)
     escaped_uri = html.escape(uri, quote=True)
-    footer = f'\n\n<a href="{escaped_uri}">Original article</a>'
+    footer = f'\n\n<a href="{escaped_uri}">{html.escape(link_text)}</a>'
     heading = f"<b>{escaped_title}</b>\n\n"
     available_summary_length = MAX_CAPTION_LENGTH - len(heading) - len(footer)
 
@@ -61,6 +63,8 @@ def build_caption(title: str, summary: str, uri: str) -> str:
 class ItemDeliveryOptions(DeliveryOptions):
     bot_token: SecretStr
     chat_id: str
+    original_url_preview: bool = False  # only for text messages
+    original_url_text: str = "original article"
 
 
 class DocumentDeliveryOptions(ArtifactDeliveryOptions):
@@ -102,7 +106,12 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
         self, db: Database, subject: SourceItem, options: ItemDeliveryOptions
     ) -> dict[str, Any]:
         summaries = db.get_annotation_values([subject], key="summary")
-        caption = build_caption(subject.title, str(summaries[subject.key]), subject.uri)
+        caption = build_caption(
+            subject.title,
+            str(summaries[subject.key]),
+            subject.uri,
+            options.original_url_text,
+        )
         image = subject.data.get("image")
         if isinstance(image, str) and image.strip():
             payload = {
@@ -117,6 +126,9 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
                 "chat_id": options.chat_id,
                 "text": caption,
                 "parse_mode": "HTML",
+                "link_preview_options": {
+                    "is_disabled": not options.original_url_preview
+                },
             }
             message_id = post(options.bot_token, "sendMessage", json=payload)
         # A message id is only unique within its chat.
