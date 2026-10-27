@@ -117,20 +117,22 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Config.from_text("plugins:\n  feedgenerator: [title]\n")
 
-    def test_enrich_entries_are_a_name_or_a_processor_with_options(self) -> None:
+    def test_process_entries_are_a_name_or_a_processor_with_key_and_options(
+        self,
+    ) -> None:
         config = Config.from_text(
-            "enrich:\n  - markdownify\n"
-            "  - {processor: summarize, options: {key: summary/es}}\n"
+            "process:\n  - markdownify\n"
+            "  - {processor: summarize, key: summary/es, options: {model: m}}\n"
         )
 
         self.assertEqual(
-            [(entry.processor, entry.options) for entry in config.enrich],
-            [("markdownify", {}), ("summarize", {"key": "summary/es"})],
+            [(entry.processor, entry.key, entry.options) for entry in config.process],
+            [("markdownify", None, {}), ("summarize", "summary/es", {"model": "m"})],
         )
 
-    def test_enrich_entries_reject_unknown_fields(self) -> None:
+    def test_process_entries_reject_unknown_fields(self) -> None:
         with self.assertRaises(ConfigError):
-            Config.from_text("enrich:\n  - {enricher: summarize}\n")
+            Config.from_text("process:\n  - {enricher: summarize}\n")
 
     def test_unconfigured_source_has_clear_error(self) -> None:
         with self.assertRaisesRegex(ConfigError, "source 'missing' is not configured"):

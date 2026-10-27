@@ -23,7 +23,7 @@ class SourceData(BaseModel):
     provider: str
     # Passed to the provider's `retrieve_items` as keyword arguments. Config
     # only: the database does not store them.
-    provider_options: dict[str, JsonCompatible] = Field(default_factory=dict)
+    options: dict[str, JsonCompatible] = Field(default_factory=dict)
 
     def __hash__(self) -> int:
         # The id is the identity (decision 0001), and the options are a dict.

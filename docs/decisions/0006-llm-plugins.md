@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-20
+- **Revised:** 2026-10-27 (LLMs load before autoloaded consumers; decision 0003)
 
 ## Context
 
@@ -60,8 +61,10 @@ the processors could not simply be split out and share the client.
 
 ## Consequences
 
-- LLM plugins must be listed before the plugins that use them; otherwise
-  the consumer logs `llm '<name>' is not loaded` on every `enrich`.
+- LLM plugins must be listed in `plugins`, before the listed plugins that
+  use them; consumers loaded by name alone (decision 0003) load after every
+  listed plugin, so they always see the listed LLMs. Otherwise the consumer
+  logs `llm '<name>' is not loaded` on every `process`.
 - Every entry point takes `services`, used or not.
 - Configurations with an `llm:` plugin section must be rewritten as
   `ollama:` plus `summarize:`, `tagger:` and `embed:` sections; per-processor

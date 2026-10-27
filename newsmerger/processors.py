@@ -31,7 +31,7 @@ class RunSummary:
 
 @runtime_checkable
 class Processor(Protocol):
-    """Annotates items. Each `enrich:` entry runs it with its options, which
+    """Annotates items. Each `process:` entry runs it with its options, which
     an implementation declares one by one (never `**kwargs`). Every run
     writes one annotation key, which also keys its processing state."""
 
@@ -40,7 +40,7 @@ class Processor(Protocol):
         Raise `TypeError` for options the processor does not take."""
         ...
 
-    def enrich(
+    def process(
         self,
         db: Database,
         *,
@@ -53,7 +53,7 @@ class Processor(Protocol):
 
 class UnavailableProcessor:
     """Stands in for a processor that cannot run, such as one whose LLM is
-    not loaded: `enrich` logs why and leaves every item pending.
+    not loaded: `process` logs why and leaves every item pending.
     `output_key` is the real processor's, so its entries are still checked."""
 
     def __init__(self, name: str, reason: str, output_key: Callable[..., str]) -> None:
@@ -64,7 +64,7 @@ class UnavailableProcessor:
     def output_key(self, **options: Any) -> str:
         return self._output_key(**options)
 
-    def enrich(
+    def process(
         self,
         db: Database,
         *,
@@ -103,7 +103,7 @@ class BaseProcessor:
         """The key a run with `options` reads, if any."""
         return self.requires
 
-    def enrich(
+    def process(
         self,
         db: Database,
         *,
@@ -132,7 +132,7 @@ class BaseProcessor:
         for position, item in enumerate(items, start=1):
             LOGGER.info(f"{key}: [{position}/{total}] '{item.title}' ({item.uri})")
             item_started = time.monotonic()
-            status, value, error = self._process(db, item, options)
+            status, value, error = self._run_item(db, item, options)
             LOGGER.debug(
                 f"{key}: '{item.uri}' {status.value}"
                 f" in {time.monotonic() - item_started:.2f}s"
@@ -161,7 +161,7 @@ class BaseProcessor:
         )
         return summary
 
-    def _process(
+    def _run_item(
         self, db: Database, item: SourceItem, options: dict[str, Any]
     ) -> tuple[ProcessingStatus, Any, str | None]:
         """Run `process_item` and translate its outcome into a result."""

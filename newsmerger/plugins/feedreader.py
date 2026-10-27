@@ -20,7 +20,7 @@ LOGGER = logging.getLogger(__name__)
 class Options(PluginOptions):
     # CSS selector of the article body, for feeds that only carry a summary:
     # the item's content is then fetched from its link. The default for every
-    # source; a source overrides it in its `provider_options`.
+    # source; a source overrides it in its `options`.
     article_selector: str | None = None
 
 

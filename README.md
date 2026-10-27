@@ -10,7 +10,7 @@ It works in four phases:
 1. **import**: each configured **source** (a website) is fetched with its
    **provider**, and every article becomes an **item**. Re-importing an
    unchanged article does nothing; a changed one is updated in place.
-2. **enrich**: **processors** add **annotations** to each item (its markdown,
+2. **process**: **processors** add **annotations** to each item (its markdown,
    a summary, tags, the Telegram message it was posted as...).
 3. **remix**: **remixers** combine many items into **artifacts** (an RSS feed,
    a list of events...).
@@ -52,18 +52,22 @@ db:
 cache:
   expiration: 21600                  # HTTP cache lifetime, in seconds
 
-plugins:                             # only these are loaded, in this order
-  plaza:                             # empty: the plugin's defaults
-  markdownify:
-  ollama:                            # an LLM: listed before its users
+plugins:                             # plugins and their options, in this order
+  ollama:                            # an LLM, for the plugins that use one
     api_base: https://ollama.example.com
     api_key: ${OLLAMA_API_KEY}
-  summarize:                         # the default LLM and its default model
+  tagger:                            # empty or missing: the plugin's defaults
+    model: gemma4:12b
   telegram:
     bot_token: ${TELEGRAM_BOT_TOKEN}
     chat_id: ${TELEGRAM_CHAT_ID}
   feedgenerator:
     title: Castelló news
+
+process:                             # processor runs, in order
+  - markdownify
+  - summarize
+  - tagger
 ```
 
 A source's `id` identifies its items: its `url` and `provider` can change
@@ -85,27 +89,31 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
-Only plugins with a section under `plugins` are loaded, and only their
-providers, processors, remixers and sinks can be used. A plugin's section
-holds its options: the missing ones take the defaults listed below, and
-unknown or invalid ones are rejected with their path
-(`plugins.summarize.max_retries: ...`). `remix` and `deliver` run their
-objects in the order of this section; `enrich` runs the `enrich` section.
+A plugin's section under `plugins` holds its options: the missing ones
+take the defaults listed below, and unknown or invalid ones are rejected
+with their path (`plugins.summarize.max_retries: ...`). Plugins with a
+section are loaded in its order. Then, a provider that a source names or a
+processor that a `process` entry names, if no listed plugin provides it,
+loads the plugin of the same name with its defaults; so a plugin needs a
+section only for options. A name no plugin provides fails every command at
+start-up (`sources.<id>.provider: no plugin provides '<name>'`). Remixers
+and sinks are loaded only with a section, and `remix` and `deliver` run
+them in its order; `process` runs the `process` section.
 
-The `enrich` section lists the processor runs, in order. An entry is a
-processor's name, or a processor with `options` for that run. Every run
-writes one annotation **key**, the processor's own unless `options` names
-another with `key` (lowercase words, optionally in `/`-separated parts:
-`summary`, `summary/es`). A key is written by one entry only, so a processor
-can run several times with different options and keys:
+The `process` section lists the processor runs, in order. An entry is a
+processor's name, or a processor with `key` and `options` for that run.
+Every run writes one annotation **key**, the processor's own unless the
+entry names another with `key` (lowercase words, optionally in
+`/`-separated parts: `summary`, `summary/es`). A key is written by one entry
+only, so a processor can run several times with different options and keys:
 
 ```yaml
-enrich:
+process:
   - markdownify                      # writes `markdown`
   - processor: summarize             # writes `summary`
   - processor: summarize
+    key: summary/es
     options:
-      key: summary/es
       prompt: "Resume en español el siguiente artículo:\n\n"
       model: gemma4:27b
 ```
@@ -120,16 +128,18 @@ start-up.
 own subsection. With no subsections, all of them are enabled with their
 defaults; with some, only those are.
 
-LLM plugins (`ollama`) provide a language model to the plugins listed after
-them. `summarize`, `tagger`, `embed` and `digest` take `llm` (the LLM plugin
-to use; default: the first one listed) and `model` (default: that LLM's
-default model). One that cannot get its LLM, because none is loaded or the
-one it names is not, still loads, but `enrich` or `remix` logs an error for
+LLM plugins (`ollama`) provide a language model to the plugins loaded after
+them: list them in `plugins`, before the listed plugins that use them
+(processors loaded on their own always come after). `summarize`, `tagger`,
+`embed` and `digest` take `llm` (the LLM plugin to use; default: the first
+one listed) and `model` (default: that LLM's default model). One that cannot
+get its LLM, because none is loaded or the one it names is not, still
+loads, but `process` or `remix` logs an error for
 it and does nothing; a processor's items stay pending. Everything else works without an LLM, but
 `grouping` and `telegram` read the tags and summaries those processors write.
 
 Changing a plugin's or an entry's options never regenerates existing
-annotations; use `enrich --force` for that.
+annotations; use `process --force` for that.
 
 ## Usage
 
@@ -137,9 +147,9 @@ annotations; use `enrich --force` for that.
 # Import every configured source
 uv run newsmerger -c config.yaml import
 
-# Run every enrich entry in order, or only one processor's
-uv run newsmerger -c config.yaml enrich
-uv run newsmerger -c config.yaml enrich markdownify --source castellonplaza --limit 20
+# Run every process entry in order, or only one processor's
+uv run newsmerger -c config.yaml process
+uv run newsmerger -c config.yaml process markdownify --source castellonplaza --limit 20
 
 # Run every loaded remixer in order, or just one
 uv run newsmerger -c config.yaml remix
@@ -149,7 +159,7 @@ uv run newsmerger -c config.yaml remix feedgenerator --since 2026-10-01
 uv run newsmerger -c config.yaml deliver
 uv run newsmerger -c config.yaml deliver telegram --force --item 4127
 
-# Run import, enrich, remix and deliver in turn (e.g. from cron)
+# Run import, process, remix and deliver in turn (e.g. from cron)
 uv run newsmerger -c config.yaml run
 
 # Inspect what is stored (read-only), as a table or --format json
@@ -169,7 +179,7 @@ uv run newsmerger -c config.yaml delete artifacts --artifact digest/castellonpla
 ```
 
 Items and annotations are selected by their numeric id, which `inspect`
-shows; artifacts by `<remixer>/<name>`. `enrich`, `remix`, `deliver`,
+shows; artifacts by `<remixer>/<name>`. `process`, `remix`, `deliver`,
 `inspect` and `delete` accept `--source` (a source id), `--since`,
 `--until`, `--item` (repeatable) and `--limit`; `inspect` adds
 `--processor`, `--key` and `--annotation` for annotations (`delete` only
@@ -211,7 +221,7 @@ them, the level comes from `NEWSMERGER_LOG_LEVEL`, then from `log_level` in
 the config, then `warning`.
 
 Results (tables, `inspect` output, contents, `--help`, and the summaries of
-`run`, `import`, `enrich`, `remix` and `deliver`) go to stdout; progress and
+`run`, `import`, `process`, `remix` and `deliver`) go to stdout; progress and
 logs go to stderr. Each stream is rich only when it is a terminal, so
 `newsmerger run > summary.txt` keeps the progress rows on screen and writes
 tab-separated tables, and with stderr redirected (cron) there is no progress
@@ -220,7 +230,7 @@ in `run` and a row per source, processor, remixer or sink while it runs.
 Set `DISABLE_RICH=1` (or `RICH_DISABLED=1`), or `TERM=dumb`, for plain
 output on both streams; `NO_COLOR=1` only drops the colors.
 
-### How `enrich` behaves
+### How `process` behaves
 
 - Each entry handles every item once, and keeps its own state per item
   under its key. It runs again on an item only when the item's content
@@ -263,7 +273,7 @@ author, categories as `tags` (the first also as `section`) and an image.
 Feeds that carry only a summary can set `article_selector`, a CSS selector
 of the article body: each entry's link is then fetched and that element
 becomes the item's content. Set it in the plugin's section for every feed,
-or per source in `provider_options`, which wins:
+or per source in its `options`, which win:
 
 ```yaml
 sources:
@@ -271,7 +281,7 @@ sources:
     name: Some blog
     provider: feedreader
     url: https://blog.example.com/feed.xml
-    provider_options:
+    options:
       article_selector: article .post-body
 ```
 
@@ -291,7 +301,7 @@ Every processor takes `max_retries` (default 3) in its plugin section.
 `summarize`, `tagger` and `embed` take `llm` and `model` (see above);
 `summarize` also takes `prompt`, followed by the article's markdown.
 
-Each run takes `key`, plus `model` (`summarize`, `tagger`, `embed`),
+Each run takes `model` (`summarize`, `tagger`, `embed`),
 `prompt` (`summarize`) and `input` (`embed`: `tags`, the default, or
 `markdown`; one entry per input). Consumers read annotations by key:
 `telegram` reads `summary`, `grouping` reads `tags` and
@@ -334,7 +344,7 @@ Options:
   it sets no `--since`). `embeddings` adds `embedding` (`tags` or
   `markdown`, default `tags`) and `embedding_weight` (0 to 1, default 0.5).
   Items without the annotations a remixer reads are left out of its groups,
-  so `embeddings` needs `enrich` to have run `embed` with that input first.
+  so `embeddings` needs `process` to have run `embed` with that input first.
 
 Artifacts are rebuilt each time their remixer runs, so between runs they can
 lag behind the stored items. Remixers never act outside newsmerger.
@@ -401,8 +411,8 @@ databases (back up first):
   `telegram/state` artifact into deliveries. Run it before the first
   `deliver telegram`, or the last `lookback` hours are posted again.
 - `sqlite3 -bail data.db < scripts/migrate_annotation_keys.sql`: keys
-  processing state and annotations by annotation key (the `enrich` section),
-  keeping every row and id. Run it before the first `enrich` on the new
+  processing state and annotations by annotation key (the `process` section),
+  keeping every row and id. Run it before the first `process` on the new
   schema.
 
 Commands that write take a lock next to the database (`data.db.lock`), so

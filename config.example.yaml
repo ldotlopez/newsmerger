@@ -27,35 +27,30 @@ sources:
     provider: theguardian
     url: https://www.theguardian.com/world/spain
 
-  # Any RSS or Atom feed. `provider_options` overrides, for this source only,
-  # the options in the provider's plugin section.
+  # Any RSS or Atom feed. `options` override, for this source only, the
+  # options in the provider's plugin section.
   # - id: some-blog
   #   name: Some blog
   #   provider: feedreader
   #   url: https://blog.example.com/feed.xml
-  #   provider_options:
+  #   options:
   #     article_selector: article .post-body  # fetch the full article
 
 cache:
   expiration: 21600
 
-# Only plugins with a section are loaded; options left out take the plugin's
-# defaults, so an empty section enables a plugin as is. `remix` and `deliver`
-# run their objects in this order; `enrich` runs the `enrich` section below.
+# Plugins and their options; options left out take the plugin's defaults, so
+# an empty section enables a plugin as is. Providers and processors that
+# `sources` and `process` name load on their own, with their defaults, after
+# the plugins listed here: list them only to give them options. Remixers and
+# sinks run only when listed, in this order.
 plugins:
-  # Providers, named by sources' `provider:`.
-  prensaiberica_plain:
-  castelloninformacion:
-  plaza:
-  theguardian:
+  # Providers with options.
   # feedreader:
   #   article_selector: article  # default for every feedreader source
 
-  # Processors.
-  markdownify:
-
-  # LLMs, for the processors listed after them. Without any, those
-  # processors log an error and do nothing.
+  # LLMs, for the processors that use them. Without any, those processors
+  # log an error and do nothing.
   ollama:
     api_base: http://localhost:11434
     api_key: ${OLLAMA_API_KEY}
@@ -64,11 +59,11 @@ plugins:
 
   # LLM processors: `llm:` picks the LLM (default: the first listed) and
   # `model:` overrides its default model, for every run of the processor.
-  summarize:                         # first LLM, its chat_model
+  # summarize and embed, without a section: the first LLM and its
+  # chat_model or embed_model.
   tagger:
     llm: ollama
     model: gemma4:12b
-  embed:                             # first LLM, its embed_model
 
   # Remixers.
   feedgenerator:
@@ -87,10 +82,10 @@ plugins:
   googlechat:                        # summarized items, by incoming webhook
     url: ${GOOGLECHAT_WEBHOOK_URL}   # or `channel` (space id) and `token`
 
-# The runs of `enrich`, in order. Each writes one annotation key, the
-# processor's own unless `options` names another with `key`; a key is written
+# The runs of `process`, in order. Each writes one annotation key, the
+# processor's own unless the entry names another with `key`; a key is written
 # by one entry only. `options` override the plugin section for that run.
-enrich:
+process:
   - markdownify                      # markdown
   - summarize                        # summary
   - tagger                           # tags
@@ -100,7 +95,7 @@ enrich:
       input: markdown                # markdown_embedding
   # A second summary, in Spanish, with its own prompt and model:
   # - processor: summarize
+  #   key: summary/es
   #   options:
-  #     key: summary/es
   #     prompt: "Resume en español el siguiente artículo:\n\n"
   #     model: gemma4:27b

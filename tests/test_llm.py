@@ -86,7 +86,7 @@ class ProcessorTestCase(unittest.TestCase):
 
     def annotation(self, processor: Processor, key: str, **options) -> object:
         """Run `processor` with `options`, writing `key`; return its value."""
-        summary = processor.enrich(self.db, key=key, force=True, **options)
+        summary = processor.process(self.db, key=key, force=True, **options)
         self.assertEqual(summary.done, 1)
         return self.db.get_annotations(self.item, key=key)[key]
 

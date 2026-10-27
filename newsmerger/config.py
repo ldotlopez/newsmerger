@@ -49,13 +49,14 @@ class DatabaseConfig(pydantic.BaseModel):
     )
 
 
-class EnrichEntry(pydantic.BaseModel):
-    """One run of a processor in the enrich phase. `options` are passed to
-    it as keyword arguments; `key`, among them, names the annotation it
-    writes (default: the processor's own)."""
+class ProcessEntry(pydantic.BaseModel):
+    """One run of a processor in the process phase. `key` names the
+    annotation it writes (default: the processor's own for `options`), which
+    are passed to it as keyword arguments."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
     processor: str
+    key: str | None = None
     options: dict[str, JsonCompatible] = {}
 
     @pydantic.model_validator(mode="before")
@@ -70,11 +71,13 @@ class Config(pydantic.BaseModel):
     # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set one.
     log_level: str = "warning"
     sources: list[SourceData] = []
-    # Plugin module name -> its options, validated by the plugin itself. Only
-    # plugins listed here are loaded; an empty section enables its defaults.
+    # Plugin module name -> its options, validated by the plugin itself. An
+    # empty section enables its defaults. Providers and processors named by
+    # `sources` or `process` but provided by no section load the plugin of
+    # the same name with its defaults.
     plugins: dict[str, dict[str, Any] | None] = {}
-    # The processor runs of `enrich`, in order. A processor not listed never runs.
-    enrich: list[EnrichEntry] = []
+    # The processor runs of `process`, in order. A processor not listed never runs.
+    process: list[ProcessEntry] = []
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
 

@@ -78,7 +78,7 @@ What matters is not item versus collection but derived versus recorded:
 - **CLI.** `deliver [SINK]` runs the loaded sinks in configuration order,
   with the scope options, `--requeue` and `--force`. It is a phase of its
   own, after `remix`, so sinks see freshly built artifacts. `run` runs
-  `import`, `enrich`, `remix` and `deliver` in turn; failures inside a
+  `import`, `process`, `remix` and `deliver` in turn; failures inside a
   phase are logged and do not stop the next one, and `run` exits non-zero
   if any occurred. `inspect deliveries [--sink] [--status]` inspects the
   ledger (decision 0008); `deliveries resolve --as done|queued` settles

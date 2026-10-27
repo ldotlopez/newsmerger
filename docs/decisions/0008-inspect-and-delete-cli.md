@@ -38,7 +38,7 @@ the newest rows lets their ids be reused.
   None` (`None` before the first save). Annotations get an `Annotation` DTO
   (`id`, item id, `processor`, `key`, `updated_at`, `value`).
 - **Selection.** `--item ID` (repeatable) replaces `--source`/`--uid`
-  wherever an item is selected: `enrich`, `remix`, `deliver`, `inspect`
+  wherever an item is selected: `process`, `remix`, `deliver`, `inspect`
   and `delete`. `--uid` goes away; `--source` stays as a filter.
   `ProcessingScope` takes item ids instead of uids. `inspect` and `delete`
   share the same option decorators and the same `Application` queries

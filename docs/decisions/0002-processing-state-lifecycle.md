@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-18
+- **Revised:** 2026-10-27 (`enrich` renamed `process`; the key at entry level)
 
 ## Context
 
@@ -12,10 +13,11 @@ processor, waits for upstream processors, and reprocesses on a version bump.
 
 ## Decision
 
-- **Runs and keys.** Each entry of the `enrich` section is a run of a
+- **Runs and keys.** Each entry of the `process` section is a run of a
   processor with its own options, and writes exactly one annotation key (the
-  processor's own unless the entry names one: `summary`, `summary/es`). A
-  key is written by one entry only.
+  processor's own unless the entry names one with `key`, next to
+  `processor` and outside its `options`: `summary`, `summary/es`). A key is
+  written by one entry only.
 - **Annotations and state** are both keyed by `(item, key)`; the processor
   that wrote them is recorded, not part of the key. Two runs of one
   processor with different keys are independent: each has its own status,

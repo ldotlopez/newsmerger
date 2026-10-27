@@ -1,6 +1,6 @@
 """Application: the single entry point for front ends (CLI, scripts) and
 external tools. It owns the wiring (config, HTTP cache, database, plugins),
-runs the four phases (import, enrich, remix, deliver) and answers queries.
+runs the four phases (import, process, remix, deliver) and answers queries.
 """
 
 from __future__ import annotations
@@ -16,10 +16,16 @@ from typing import IO, Any, Self
 
 import pydantic
 from foundation.cache import UserCache
-from foundation.plugin import EntryPointError, ProtocolConformanceError, Register
+from foundation.plugin import (
+    EntryPointError,
+    PluginError,
+    PluginNotFoundError,
+    ProtocolConformanceError,
+    Register,
+)
 from sqlalchemy import make_url
 
-from .config import Config, ConfigError, EnrichEntry, plugin_options_error
+from .config import Config, ConfigError, ProcessEntry, plugin_options_error
 from .consts import PACKAGE_NAME
 from .db import Database, DeliveryStatus
 from .httpclient import HTTPClient
@@ -56,7 +62,7 @@ class LockedError(RuntimeError):
 class Application:
     def __init__(self, config: Config, *, create_schema: bool = True) -> None:
         self.config = config
-        plugins = load_plugins(config.plugins)
+        plugins = load_plugins(config.plugins, referenced_plugins(config))
         self._providers: dict[str, Provider] = objects_by_name(plugins, Provider)
         self._processors: dict[str, Processor] = objects_by_name(plugins, Processor)
         self._remixers: dict[str, Remixer] = objects_by_name(plugins, Remixer)
@@ -67,7 +73,7 @@ class Application:
                     f"source '{source.id}': provider '{source.provider}' is not loaded"
                 )
             check_provider_options(source, self._providers[source.provider])
-        self._enrich = enrich_runs(config.enrich, self._processors)
+        self._process = process_runs(config.process, self._processors)
 
         self._db = Database(
             config.db.uri, config.db.content_dir, create_schema=create_schema
@@ -124,13 +130,13 @@ class Application:
         """Loaded processor names, in configuration order."""
         return list(self._processors)
 
-    def enrich_keys(self, processor: str | None = None) -> list[str]:
-        """The keys of the `enrich:` runs, in order; with `processor`, only
+    def process_keys(self, processor: str | None = None) -> list[str]:
+        """The keys of the `process:` runs, in order; with `processor`, only
         its runs."""
         if processor is None:
-            return list(self._enrich)
+            return list(self._process)
         lookup(self._processors, processor, "processor")
-        return [key for key, run in self._enrich.items() if run.processor == processor]
+        return [key for key, run in self._process.items() if run.processor == processor]
 
     @property
     def remixers(self) -> list[str]:
@@ -150,7 +156,7 @@ class Application:
         provider = self._providers[source.provider]
         items = []
         for item_data in provider.retrieve_items(
-            source, self._fetcher, **source.provider_options
+            source, self._fetcher, **source.options
         ):
             item = SourceItem.from_data(source, item_data)
             LOGGER.info(f"{source.id}: {item.uri}")
@@ -159,17 +165,17 @@ class Application:
         self._db.upsert_source_items(items)
         return items
 
-    # --- Enrich ------------------------------------------------------------
+    # --- Process -----------------------------------------------------------
 
-    def run_enrich(
+    def run_process(
         self, key: str, *, scope: ProcessingScope | None = None, force: bool = False
     ) -> RunSummary:
-        """Run the `enrich:` entry that writes `key`. `force` also resets
+        """Run the `process:` entry that writes `key`. `force` also resets
         attempts."""
-        if (run := self._enrich.get(key)) is None:
-            raise ConfigError(f"no enrich entry writes the key '{key}'")
+        if (run := self._process.get(key)) is None:
+            raise ConfigError(f"no process entry writes the key '{key}'")
         processor = self._processors[run.processor]
-        return processor.enrich(
+        return processor.process(
             self._db, key=key, scope=scope, force=force, **run.options
         )
 
@@ -357,10 +363,29 @@ def write_lock(database_url: str) -> IO[str] | None:
     return lock_file
 
 
-def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:
+def referenced_plugins(config: Config) -> list[tuple[str, type, str]]:
+    """The `(name, protocol, config location)` of every provider and
+    processor the sources and the `process:` entries use, in order."""
+    return [
+        *(
+            (source.provider, Provider, f"sources.{source.id}.provider")
+            for source in config.sources
+        ),
+        *(
+            (entry.processor, Processor, f"process.{index}.processor")
+            for index, entry in enumerate(config.process)
+        ),
+    ]
+
+
+def load_plugins(
+    sections: dict[str, dict[str, Any] | None],
+    referenced: list[tuple[str, type, str]],
+) -> Register:
     """Register every plugin with a config section, in configuration order,
     passing it the services provided by the plugins before it and its section
-    as keyword arguments."""
+    as keyword arguments. Then, for each `referenced` object no plugin
+    provides, register the plugin of the same name with its defaults."""
     plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
     services = Services()
     for name, section in sections.items():
@@ -377,6 +402,18 @@ def load_plugins(sections: dict[str, dict[str, Any] | None]) -> Register:
                 raise plugin_options_error(name, e.__cause__) from e
             raise
         services.llms = objects_by_name(plugins, LLM)
+    loaded = set(sections)
+    for name, protocol, location in referenced:
+        provided = {
+            object_name for _, object_name, _ in plugins.get_by_protocol(protocol)
+        }
+        if name in provided or name in loaded:
+            continue
+        try:
+            plugins.register(name, services)
+        except PluginNotFoundError:
+            raise ConfigError(f"{location}: no plugin provides '{name}'") from None
+        loaded.add(name)
     return plugins
 
 
@@ -384,39 +421,34 @@ def check_provider_options(source: SourceData, provider: Provider) -> None:
     """Reject, at startup rather than on import, options the provider's
     `retrieve_items` does not take, or required ones that are missing."""
     try:
-        inspect.signature(provider.retrieve_items).bind(
-            source, None, **source.provider_options
-        )
+        inspect.signature(provider.retrieve_items).bind(source, None, **source.options)
     except TypeError as e:
-        raise ConfigError(f"sources.{source.id}.provider_options: {e}") from None
+        raise ConfigError(f"sources.{source.id}.options: {e}") from None
 
 
-def enrich_runs(
-    entries: list[EnrichEntry], processors: dict[str, Processor]
-) -> dict[str, EnrichEntry]:
-    """The `enrich:` entries by the key each writes, in order, with `key`
-    taken out of their options. Reject, at startup, entries whose processor
-    is not loaded or does not take their options, malformed keys and keys
-    written twice."""
-    runs: dict[str, EnrichEntry] = {}
+def process_runs(
+    entries: list[ProcessEntry], processors: dict[str, Processor]
+) -> dict[str, ProcessEntry]:
+    """The `process:` entries by the key each writes, in order. Reject, at
+    startup, entries whose processor is not loaded or does not take their
+    options, malformed keys and keys written twice."""
+    runs: dict[str, ProcessEntry] = {}
     for index, entry in enumerate(entries):
-        location = f"enrich.{index}"
+        location = f"process.{index}"
         if (processor := processors.get(entry.processor)) is None:
             raise ConfigError(
                 f"{location}: processor '{entry.processor}' is not loaded"
             )
-        options = dict(entry.options)
-        named_key = options.pop("key", None)
         try:
-            default_key = processor.output_key(**options)
+            default_key = processor.output_key(**entry.options)
         except (TypeError, ValueError) as e:
             raise ConfigError(f"{location}.options: {e}") from None
-        key = str(named_key or default_key)
+        key = entry.key or default_key
         if not KEY_PATTERN.fullmatch(key):
             raise ConfigError(f"{location}: invalid key '{key}'")
         if key in runs:
             raise ConfigError(f"{location}: key '{key}' is written by another entry")
-        runs[key] = EnrichEntry(processor=entry.processor, options=options)
+        runs[key] = entry
     return runs
 
 
@@ -426,6 +458,11 @@ def objects_by_name[T](plugins: Register, protocol: type[T]) -> dict[str, T]:
     objects: dict[str, T] = {}
     owners: dict[str, str] = {}
     for plugin, name, obj in plugins.get_by_protocol(protocol):
+        if isinstance(obj, type):
+            raise PluginError(
+                f"plugin '{plugin}' returned the class of {protocol.__name__} "
+                f"'{name}', not an instance"
+            )
         if name in owners:
             raise ConfigError(
                 f"{protocol.__name__} '{name}' is provided by both plugin "
