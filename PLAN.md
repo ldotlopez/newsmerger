@@ -466,6 +466,10 @@ Risks:
 - **Concurrent imports.** Releasing replaced contents can race with another
   process starting to reference the same content. Add a lock if imports ever
   run in parallel.
+- **HTTP client through `Services`.** Plugins outside providers fetch with
+  bare `requests` (e.g. `telegram` downloads item images to upload them),
+  without the shared `HTTPClient`'s headers and cache. Share one in
+  `Services` so every plugin uses it.
 - **PDF text extraction.** `markdownify` skips non-HTML items; PDF items need
   their own extraction step before `summarize`/`tagger` can use them.
 - **Alembic.** Not needed while the database can be rebuilt from the
