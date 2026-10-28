@@ -539,6 +539,14 @@ Risks:
   (`llm`, decision 0010) and `model`; `json_mode`/`context_length` stay
   explicit in the `LLM` protocol. An `llms` entry with other options covers
   most needs; revisit when a consumer needs a backend option per call.
+- **`pyproject.toml` cleanup** (2026-10-28): the distribution is still
+  named `news-aggregator` with the placeholder description, the `tagging`
+  (ollama) and `feeds` (feedparser) groups duplicate main dependencies, and
+  a stale `news_aggregator.egg-info/` remains. Do it with the `newstool`
+  rename.
+- **`run_each` stops a phase on the first failure** (2026-10-28, bug):
+  `cli.py` wraps each run in `try/finally` without `except`, so one failing
+  run skips the rest of its phase.
 
 ---
 
