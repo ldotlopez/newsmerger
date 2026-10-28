@@ -148,8 +148,8 @@ sinks:
   - sink: googlechat
     id: chat-main
     options:
-      item_image: true               # the item's image as a card, if any
-      item_url_text: original article # the link to the article
+      item_image: true               # the item's image in the card, if any
+      item_url_text: original article # the button to the article
       summary: summary               # the annotation posted, e.g. summary/es
 
 # Workflows, run with `-w NAME` (one cron line each). A workflow sees only its

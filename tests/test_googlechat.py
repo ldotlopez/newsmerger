@@ -16,10 +16,36 @@ from newsmerger.plugins.googlechat import (
     WEBHOOK_KEY,
     GoogleChatSink,
     WebhookOptions,
+    chat_image_url,
 )
 from newsmerger.sinks import SinkType
 
 SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
+BLOGGER_IMAGE = (
+    "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvX/s72-c/A%20b.png"
+)
+
+
+def card_widgets(message: dict[str, Any]) -> list[dict[str, Any]]:
+    ((section,),) = (card["card"]["sections"] for card in message["cardsV2"])
+    return section["widgets"]
+
+
+class ChatImageUrlTests(unittest.TestCase):
+    def test_keeps_other_hosts(self) -> None:
+        self.assertEqual(
+            chat_image_url("https://a.test/s72-c/image.jpg"),
+            "https://a.test/s72-c/image.jpg",
+        )
+
+    def test_proxies_blogger_at_full_size(self) -> None:
+        for size in ("s72-c", "s300", "w1200", "s1600"):
+            with self.subTest(size):
+                self.assertEqual(
+                    chat_image_url(BLOGGER_IMAGE.replace("s72-c", size)),
+                    "https://wsrv.nl/?url=https%3A%2F%2Fblogger.googleusercontent.com"
+                    "%2Fimg%2Fb%2FR29vZ2xl%2FAVvX%2Fs1600%2FA%2520b.png",
+                )
 
 
 def webhook_options(section: dict[str, Any], overrides: dict[str, Any]) -> Any:
@@ -107,11 +133,26 @@ class GoogleChatSinkTests(unittest.TestCase):
 
         post.assert_called_once()
         self.assertEqual(
-            post.call_args.kwargs["json"],
-            {
-                "text": "*A &lt;b&gt; &amp; c*\n\nS summary\n\n"
-                "<https://a.test/1?a=1&b=2|original article>"
-            },
+            card_widgets(post.call_args.kwargs["json"]),
+            [
+                {
+                    "textParagraph": {
+                        "text": "<b>A &lt;b&gt; &amp; c</b><br><br>S summary"
+                    }
+                },
+                {
+                    "buttonList": {
+                        "buttons": [
+                            {
+                                "text": "original article",
+                                "onClick": {
+                                    "openLink": {"url": "https://a.test/1?a=1&b=2"}
+                                },
+                            }
+                        ]
+                    }
+                },
+            ],
         )
         ((row, _),) = self.db.get_item_deliveries("googlechat")
         self.assertEqual(row.status, DeliveryStatus.DONE)
@@ -125,23 +166,28 @@ class GoogleChatSinkTests(unittest.TestCase):
         self.deliver(summary="summary/ca")
 
         post.assert_called_once()
-        self.assertIn("\n\nS summary/ca\n\n", post.call_args.kwargs["json"]["text"])
+        (paragraph, _) = card_widgets(post.call_args.kwargs["json"])
+        self.assertTrue(paragraph["textParagraph"]["text"].endswith("S summary/ca"))
 
-    def test_image_card_and_link_text(self, post: Mock) -> None:
+    def test_image_and_link_text(self, post: Mock) -> None:
         post.return_value = Mock(ok=True)
         post.return_value.json.return_value = {"name": "spaces/AAAA/messages/m1"}
         self.add_summarized("h2", image="https://a.test/image.jpg")
+        self.add_summarized("h3", image=BLOGGER_IMAGE)
 
         self.deliver(item_url_text="Leer <más>")
 
-        messages = [call.kwargs["json"] for call in post.call_args_list]
-        self.assertEqual([("cardsV2" in m) for m in messages], [False, True])
-        self.assertTrue(messages[1]["text"].endswith("|Leer &lt;más&gt;>"))
-        ((widget,),) = (
-            section["widgets"]
-            for section in messages[1]["cardsV2"][0]["card"]["sections"]
+        messages = [card_widgets(call.kwargs["json"]) for call in post.call_args_list]
+        self.assertEqual([len(widgets) for widgets in messages], [2, 3, 3])
+        self.assertEqual(
+            messages[1][1]["image"],
+            {"imageUrl": "https://a.test/image.jpg", "altText": "A <b> & c"},
         )
-        self.assertEqual(widget["image"]["imageUrl"], "https://a.test/image.jpg")
+        self.assertEqual(
+            messages[2][1]["image"]["imageUrl"], chat_image_url(BLOGGER_IMAGE)
+        )
+        (button,) = messages[1][2]["buttonList"]["buttons"]
+        self.assertEqual(button["text"], "Leer <más>")
 
     def test_item_image_off_sends_text_only(self, post: Mock) -> None:
         post.return_value = Mock(ok=True)
@@ -151,7 +197,11 @@ class GoogleChatSinkTests(unittest.TestCase):
         self.deliver(item_image=False)
 
         self.assertFalse(
-            any("cardsV2" in call.kwargs["json"] for call in post.call_args_list)
+            any(
+                "image" in widget
+                for call in post.call_args_list
+                for widget in card_widgets(call.kwargs["json"])
+            )
         )
 
     def test_failed_post_stays_failed_without_leaking_the_token(

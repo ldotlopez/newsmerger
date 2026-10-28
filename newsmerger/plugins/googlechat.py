@@ -1,5 +1,5 @@
 """The `googlechat` sink posts summarized items (title, the `summary` option's
-annotation, link and image, see `WebhookOptions`) to a
+annotation, link and image, see `WebhookOptions`) as a card to a
 Google Chat space through an incoming webhook, given either as its `url` or
 as its `channel` (space id) and `token`, in the `plugins` section (the
 default) or in each use. What was delivered is in the ledger
@@ -7,8 +7,9 @@ default) or in each use. What was delivered is in the ledger
 """
 
 import html
+import re
 from typing import Any, Self
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import pydantic
 import requests
@@ -22,31 +23,63 @@ from . import PluginTypes
 # The API key Google puts in every incoming webhook URL; only the token is secret.
 WEBHOOK_KEY = "AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"
 
+# Chat shows no image from Blogger's host, so those go through this proxy.
+BLOGGER_HOST = "blogger.googleusercontent.com"
+IMAGE_PROXY = "https://wsrv.nl/?url="
+# The size segment of a Blogger image path (`s72-c`, `w1200`, ...); feeds
+# give 72px thumbnails, so cards ask for the full size instead.
+BLOGGER_SIZE = re.compile(r"[swh]\d+(-[\w-]+)?")
+BLOGGER_FULL_SIZE = "s1600"
+
 
 class GoogleChatError(Exception):
     """A message could not be posted."""
 
 
-def build_text(
-    title: str, summary: str, uri: str, link_text: str = "original article"
-) -> str:
-    # Chat parses `<url|label>` links and `*bold*`, so the text must escape `<>&`.
-    return (
-        f"*{html.escape(title, quote=False)}*\n\n"
-        f"{html.escape(summary, quote=False)}\n\n"
-        f"<{uri}|{html.escape(link_text, quote=False)}>"
+def chat_image_url(image_url: str) -> str:
+    """Where Chat can fetch the image: Blogger's at full size, through the
+    proxy; any other as is."""
+    parts = urlsplit(image_url)
+    if parts.hostname != BLOGGER_HOST:
+        return image_url
+    segments = [
+        BLOGGER_FULL_SIZE if BLOGGER_SIZE.fullmatch(segment) else segment
+        for segment in parts.path.split("/")
+    ]
+    full_size = urlunsplit(parts._replace(path="/".join(segments)))
+    return IMAGE_PROXY + quote(full_size, safe="")
+
+
+def build_card(
+    title: str,
+    summary: str,
+    uri: str,
+    link_text: str = "original article",
+    image_url: str | None = None,
+) -> dict[str, Any]:
+    """The message: title and summary, the image if any, and a link button."""
+    # The paragraph is Chat's HTML subset, so the text must escape `<>&`.
+    text = html.escape(summary, quote=False).replace("\n", "<br>")
+    widgets: list[dict[str, Any]] = [
+        {
+            "textParagraph": {
+                "text": f"<b>{html.escape(title, quote=False)}</b><br><br>{text}"
+            }
+        }
+    ]
+    if image_url is not None:
+        widgets.append(
+            {"image": {"imageUrl": chat_image_url(image_url), "altText": title}}
+        )
+    widgets.append(
+        {
+            "buttonList": {
+                "buttons": [{"text": link_text, "onClick": {"openLink": {"url": uri}}}]
+            }
+        }
     )
-
-
-def image_card(image_url: str, alt_text: str) -> dict[str, Any]:
-    """A card holding only the image, shown below the message text."""
     return {
-        "cardId": "image",
-        "card": {
-            "sections": [
-                {"widgets": [{"image": {"imageUrl": image_url, "altText": alt_text}}]}
-            ]
-        },
+        "cardsV2": [{"cardId": "item", "card": {"sections": [{"widgets": widgets}]}}]
     }
 
 
@@ -54,7 +87,7 @@ class WebhookOptions(DeliveryOptions):
     url: SecretStr | None = None
     channel: str | None = None
     token: SecretStr | None = None
-    item_image: bool = True  # the item's image, when it has one, as a card
+    item_image: bool = True  # the item's image, when it has one, in the card
     item_url_text: str = "original article"
     summary: str = "summary"  # the annotation key posted as the summary
 
@@ -88,17 +121,16 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
     def send(self, db: Database, subject: SourceItem) -> dict[str, str]:
         options = self.options
         summaries = db.get_annotation_values([subject], key=options.summary)
-        message: dict[str, Any] = {
-            "text": build_text(
-                subject.title,
-                str(summaries[subject.key]),
-                subject.uri,
-                options.item_url_text,
-            )
-        }
         image = subject.data.get("image")
-        if options.item_image and isinstance(image, str) and image.strip():
-            message["cardsV2"] = [image_card(image, subject.title)]
+        if not (options.item_image and isinstance(image, str) and image.strip()):
+            image = None
+        message = build_card(
+            subject.title,
+            str(summaries[subject.key]),
+            subject.uri,
+            options.item_url_text,
+            image,
+        )
         try:
             response = requests.post(
                 options.webhook_url().get_secret_value(),
