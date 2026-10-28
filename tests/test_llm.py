@@ -9,11 +9,11 @@ from unittest.mock import Mock, patch
 
 import pydantic
 
-from newsmerger.db import Database, ProcessingStatus
-from newsmerger.llms import LLMType, LLMUnavailableError
-from newsmerger.models import SourceData, SourceItem
-from newsmerger.plugins import Services, embed, ollama, summarize, tagger
-from newsmerger.processors import Processor, ProcessorType
+from newstool.db import Database, ProcessingStatus
+from newstool.llms import LLMType, LLMUnavailableError
+from newstool.models import SourceData, SourceItem
+from newstool.plugins import Services, embed, ollama, summarize, tagger
+from newstool.processors import Processor, ProcessorType
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 
@@ -66,7 +66,7 @@ class ServicesTests(unittest.TestCase):
 
 class ProcessorTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
@@ -193,7 +193,7 @@ class ConsumerPluginTests(unittest.TestCase):
             with self.subTest(plugin=plugin.__name__):
                 factory = Mock(return_value=llm)
 
-                ((_, protocol, cls),) = plugin.__newsmerger_plugin__()
+                ((_, protocol, cls),) = plugin.__newstool_plugin__()
                 processor = cls(cls.options_model(**options), Services(factory))
 
                 self.assertIs(protocol, ProcessorType)
@@ -203,7 +203,7 @@ class ConsumerPluginTests(unittest.TestCase):
     def test_consumers_cannot_be_built_without_an_llm(self) -> None:
         for plugin in (summarize, tagger, embed):
             with self.subTest(plugin=plugin.__name__):
-                ((_, _, cls),) = plugin.__newsmerger_plugin__()
+                ((_, _, cls),) = plugin.__newstool_plugin__()
                 with self.assertRaises(LLMUnavailableError):
                     cls(cls.options_model(), Services())
 
@@ -243,7 +243,7 @@ class OllamaTests(unittest.TestCase):
         client.embed.assert_called_once_with(model="embedder", input=["text"])
 
     def test_registers_one_llm_class_named_ollama(self) -> None:
-        ((name, protocol, cls),) = ollama.__newsmerger_plugin__()
+        ((name, protocol, cls),) = ollama.__newstool_plugin__()
         llm = cls(ollama.Options(chat_model="chat"), Services())
 
         self.assertEqual((name, protocol, cls), ("ollama", LLMType, ollama.OllamaLLM))

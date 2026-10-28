@@ -1,4 +1,4 @@
-"""Unit tests for newsmerger.db.
+"""Unit tests for newstool.db.
 
 Uses a real (file-based, temp-dir) SQLite database per test, without mocking
 SQLAlchemy: unit-of-work diffing, upsert semantics and timestamp rules only
@@ -16,7 +16,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from newsmerger.db import (
+from newstool.db import (
     Database,
     DBDelivery,
     DBProcessingState,
@@ -25,7 +25,7 @@ from newsmerger.db import (
     DeliveryStatus,
     ProcessingStatus,
 )
-from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
 
 
 def make_source(source_id: str = "example", name: str = "Example") -> SourceData:
@@ -64,7 +64,7 @@ class DatabaseTestCase(unittest.TestCase):
     """Base class: spins up a fresh temp-file SQLite DB per test."""
 
     def setUp(self) -> None:
-        self.tmp_dir = tempfile.mkdtemp(prefix="newsmerger-test-")
+        self.tmp_dir = tempfile.mkdtemp(prefix="newstool-test-")
         db_path = Path(self.tmp_dir) / "test.db"
         self.db = Database(f"sqlite:///{db_path}", Path(self.tmp_dir) / "content")
 

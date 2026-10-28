@@ -8,7 +8,7 @@
 -- `tags_text` annotations are dropped (their content files are left
 -- orphaned on disk). Unknown processors keep their name as the key.
 --
--- Back up the database first, with no newsmerger command running. Run once:
+-- Back up the database first, with no newstool command running. Run once:
 --     sqlite3 -bail data.db < scripts/migrate_annotation_keys.sql
 
 PRAGMA foreign_keys = OFF;

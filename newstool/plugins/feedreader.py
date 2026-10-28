@@ -150,5 +150,5 @@ def select_article(html: bytes, selector: str) -> bytes:
     return str(article).encode("utf-8")
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("feedreader", ProviderType, FeedReaderProvider)]

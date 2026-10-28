@@ -70,5 +70,5 @@ class CastellonInformacionProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("castelloninformacion", ProviderType, CastellonInformacionProvider)]

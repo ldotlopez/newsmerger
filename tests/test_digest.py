@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
 
-from newsmerger.db import Database, ProcessingStatus
-from newsmerger.llms import LLMUnavailableError
-from newsmerger.models import ProcessingScope, SourceData, SourceItem
-from newsmerger.plugins import Services, digest
-from newsmerger.remixers import RemixerType
+from newstool.db import Database, ProcessingStatus
+from newstool.llms import LLMUnavailableError
+from newstool.models import ProcessingScope, SourceData, SourceItem
+from newstool.plugins import Services, digest
+from newstool.remixers import RemixerType
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 OTHER_SOURCE = SourceData(id="o", name="O", url="https://o.test/", provider="plaza")
@@ -19,7 +19,7 @@ OTHER_SOURCE = SourceData(id="o", name="O", url="https://o.test/", provider="pla
 
 class DigestRemixerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
@@ -129,7 +129,7 @@ class DigestPluginTests(unittest.TestCase):
             requested.append(name)
             return llm
 
-        ((name, protocol, cls),) = digest.__newsmerger_plugin__()
+        ((name, protocol, cls),) = digest.__newstool_plugin__()
         remixer = cls(digest.DigestOptions(llm="writer"), Services(factory))
 
         self.assertEqual((name, protocol), ("digest", RemixerType))

@@ -160,5 +160,5 @@ def get_date_from_text(tag: bs4.Tag, pattern: str | re.Pattern) -> re.Match:
     return m
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("csjuntasgobierno", ProviderType, CSJuntasGobiernoProvider)]

@@ -223,7 +223,7 @@ def own_entries(
 
 class Config(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
-    # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set one.
+    # Used when neither --log-level, -v/-q nor NEWSTOOL_LOG_LEVEL set one.
     log_level: str = "warning"
     # Plugin type name -> the defaults of its options in every use of the
     # type. Nothing is built from a section.

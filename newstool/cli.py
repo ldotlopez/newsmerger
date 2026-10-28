@@ -69,7 +69,7 @@ def report_user_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
 
 def setup_logging(log_options: dict[str, Any], default_log_level: str) -> None:
     """Configure the package logger from the global options, falling back to
-    NEWSMERGER_LOG_LEVEL, then to `default_log_level`."""
+    NEWSTOOL_LOG_LEVEL, then to `default_log_level`."""
     # Logs go through foundation's shared stderr console, the same one the
     # progress bars use, so live progress redraws around log records; plain
     # lines when stderr is not a terminal.

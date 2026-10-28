@@ -47,5 +47,5 @@ def tags_text(tags: list[str]) -> str:
     return ", ".join(sorted(tags, key=str.lower))
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(EmbedProcessor.name, ProcessorType, EmbedProcessor)]

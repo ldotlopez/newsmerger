@@ -98,5 +98,5 @@ class PlazaProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("plaza", ProviderType, PlazaProvider)]

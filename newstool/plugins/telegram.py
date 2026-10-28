@@ -187,6 +187,6 @@ class TelegramArtifactSink(BaseArtifactSink[DocumentDeliveryOptions]):
         return {"chat_id": options.chat_id, "message_id": message_id}
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     sinks = [TelegramSink, TelegramArtifactSink]
     return [(sink.name, SinkType, sink) for sink in sinks]

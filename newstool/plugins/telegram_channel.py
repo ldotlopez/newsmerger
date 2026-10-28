@@ -156,5 +156,5 @@ class TelegramChannelProvider(BaseProvider):
                     yield item
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("telegram_channel", ProviderType, TelegramChannelProvider)]

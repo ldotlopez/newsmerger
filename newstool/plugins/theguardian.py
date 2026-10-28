@@ -89,5 +89,5 @@ class TheGuardianProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("theguardian", ProviderType, TheGuardianProvider)]

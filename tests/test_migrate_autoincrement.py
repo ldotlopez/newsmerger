@@ -6,8 +6,8 @@ from pathlib import Path
 
 from sqlalchemy import MetaData, create_engine
 
-from newsmerger.db import Base, Database, ProcessingStatus
-from newsmerger.models import Artifact, SourceData, SourceItem
+from newstool.db import Base, Database, ProcessingStatus
+from newstool.models import Artifact, SourceData, SourceItem
 from scripts.migrate_autoincrement import migrate
 
 SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
@@ -26,7 +26,7 @@ def make_item(uid: str) -> SourceItem:
 
 class MigrateAutoincrementTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db_path = self.tmp_dir / "data.db"
         self.url = f"sqlite:///{self.db_path}"
 

@@ -21,14 +21,14 @@ consumer without its LLM became an `Unavailable*` stand-in.
 ## Decision
 
 - **Classes, not instances.** An entry point,
-  `__newsmerger_plugin__()`, takes no arguments and returns
+  `__newstool_plugin__()`, takes no arguments and returns
   `(type name, type Protocol, class)` triples. A bundle may register any
   number of classes per protocol; type names are unique per protocol. The
   type protocols (`ProviderType`, `ProcessorType`, `RemixerType`,
   `SinkType`, `LLMType`) declare `options_model` and
   `__call__(options, services)`, plus the keys a run writes or reads
   (`output_key`, `required_key`) as class methods, so the core works them
-  out without an object. `ClassRegister` (in `newsmerger.plugins`, on
+  out without an object. `ClassRegister` (in `newstool.plugins`, on
   foundation's `BaseRegister`, to move to foundation later) imports every
   module of the namespace and checks conformance with `isinstance(cls,
   protocol)`.

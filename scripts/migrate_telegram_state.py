@@ -21,11 +21,11 @@ from pathlib import Path
 import rich_click as click
 from foundation.loglib import setup_logger
 
-from newsmerger.app import LockedError, write_lock
-from newsmerger.config import Config
-from newsmerger.consts import PACKAGE_NAME
-from newsmerger.db import Database, DeliveryStatus
-from newsmerger.models import ItemKey, ProcessingScope, SourceItem
+from newstool.app import LockedError, write_lock
+from newstool.config import Config
+from newstool.consts import PACKAGE_NAME
+from newstool.db import Database, DeliveryStatus
+from newstool.models import ItemKey, ProcessingScope, SourceItem
 
 LOGGER = logging.getLogger(PACKAGE_NAME)
 

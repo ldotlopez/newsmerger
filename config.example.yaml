@@ -4,7 +4,7 @@
 # ${TELEGRAM_JUNTAS_CHAT_ID}, ${GOOGLECHAT_WEBHOOK_URL}.
 # Write a literal dollar sign in a value as $$; comments are not expanded.
 
-# Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set a level.
+# Used when neither --log-level, -v/-q nor NEWSTOOL_LOG_LEVEL set a level.
 # log_level: info
 
 # Lengths of time, here and in plugin options, are seconds or take a unit

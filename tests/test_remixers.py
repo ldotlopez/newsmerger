@@ -8,17 +8,17 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
 
-from newsmerger.db import Database, ProcessingStatus
-from newsmerger.models import ProcessingScope, SourceData, SourceItem
-from newsmerger.plugins import Services, feedgenerator, grouping
-from newsmerger.remixers import RemixerType
+from newstool.db import Database, ProcessingStatus
+from newstool.models import ProcessingScope, SourceData, SourceItem
+from newstool.plugins import Services, feedgenerator, grouping
+from newstool.remixers import RemixerType
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 
 
 class RemixerTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
@@ -176,7 +176,7 @@ class EmbeddingGroupingTests(RemixerTestCase):
 
 class GroupingPluginTests(unittest.TestCase):
     def test_registers_every_remixer_class(self) -> None:
-        registered = grouping.__newsmerger_plugin__()
+        registered = grouping.__newstool_plugin__()
 
         names = [name for name, _, _ in registered]
         self.assertEqual(names, ["singlelink", "avglink", "embeddings"])

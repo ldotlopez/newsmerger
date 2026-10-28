@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pydantic
 
-from newsmerger.db import Database, DBDelivery, DeliveryStatus, ProcessingStatus
-from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
-from newsmerger.plugins import Services
-from newsmerger.processors import RunSummary
-from newsmerger.sinks import (
+from newstool.db import Database, DBDelivery, DeliveryStatus, ProcessingStatus
+from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newstool.plugins import Services
+from newstool.processors import RunSummary
+from newstool.sinks import (
     ArtifactDeliveryOptions,
     BaseArtifactSink,
     BaseItemSink,
@@ -61,7 +61,7 @@ class RecordingArtifactSink(BaseArtifactSink[ArtifactDeliveryOptions]):
 
 class SinkTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
@@ -152,7 +152,7 @@ class ItemSinkTests(SinkTestCase):
         self.add(SOURCE_B, "b1", hours_ago=1)
         sink = RecordingItemSink(failing={"a1"})
 
-        with self.assertLogs("newsmerger.sinks", "ERROR"):
+        with self.assertLogs("newstool.sinks", "ERROR"):
             summary = sink.run(self.db)
         sink.run(self.db)  # a1 is in its backoff: nothing of source a moves
 
@@ -165,7 +165,7 @@ class ItemSinkTests(SinkTestCase):
         self.add(SOURCE_A, "a2", hours_ago=2)
         sink = RecordingItemSink(failing={"a1", "a2"}, max_retries=1)
 
-        with self.assertLogs("newsmerger.sinks", "ERROR"):
+        with self.assertLogs("newstool.sinks", "ERROR"):
             sink.run(self.db)
         sink.failing = set()
         sink.run(self.db)
@@ -178,7 +178,7 @@ class ItemSinkTests(SinkTestCase):
     def test_requeue_gives_failed_rows_fresh_attempts(self) -> None:
         self.add(SOURCE_A, "a1", hours_ago=3)
         sink = RecordingItemSink(failing={"a1"}, max_retries=1)
-        with self.assertLogs("newsmerger.sinks", "ERROR"):
+        with self.assertLogs("newstool.sinks", "ERROR"):
             sink.run(self.db)
         sink.failing = set()
 
@@ -195,7 +195,7 @@ class ItemSinkTests(SinkTestCase):
         self.db.save_delivery(row)
         sink = RecordingItemSink()
 
-        with self.assertLogs("newsmerger.sinks", "WARNING") as logs:
+        with self.assertLogs("newstool.sinks", "WARNING") as logs:
             sink.run(self.db)
 
         self.assertEqual(sink.sent, [])

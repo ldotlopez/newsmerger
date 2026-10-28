@@ -41,5 +41,5 @@ class SummarizeProcessor(BaseProcessor):
         return summary
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(SummarizeProcessor.name, ProcessorType, SummarizeProcessor)]

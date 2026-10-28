@@ -57,5 +57,5 @@ def ollama_client(cfg: Options) -> ollama.Client:
     return ollama.Client(host=cfg.api_base, headers=headers)
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("ollama", LLMType, OllamaLLM)]

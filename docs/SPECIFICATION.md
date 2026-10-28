@@ -1,15 +1,15 @@
-# newsmerger: specification
+# newstool: specification
 
 Consolidated version · 23 October 2026
 
-This document defines what newsmerger does, independently of how it is
+This document defines what newstool does, independently of how it is
 implemented. It is self-contained: it is the reference for rebuilding the
 application. [ARCHITECTURE.md](ARCHITECTURE.md) describes the current
 implementation and [decisions/](decisions/) records why it is that way.
 
 ## 1. Purpose and scope
 
-newsmerger is a pipeline for **acquiring, enriching, remixing and
+newstool is a pipeline for **acquiring, enriching, remixing and
 delivering** content,
 built for news and meant to grow into a personal collector of generic
 information. External tools that consume its results are outside the project
@@ -73,8 +73,8 @@ workflows:
 cache:
   expiration: <duration>   # HTTP cache lifetime: seconds, or 5m, 2h, 3d
 db:
-  uri: <sqlalchemy uri>    # default: <user data dir>/newsmerger/data.db
-  content_dir: <path>      # default: <user data dir>/newsmerger/content
+  uri: <sqlalchemy uri>    # default: <user data dir>/newstool/data.db
+  content_dir: <path>      # default: <user data dir>/newstool/content
 ```
 
 `${VAR}` references in values are replaced with environment variables when

@@ -113,5 +113,5 @@ class DigestRemixer(BaseRemixer):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(DigestRemixer.name, RemixerType, DigestRemixer)]

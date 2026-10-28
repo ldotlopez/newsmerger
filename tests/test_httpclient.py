@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 from foundation import cache
 
-from newsmerger.httpclient import HTTPClient
+from newstool.httpclient import HTTPClient
 
 
 class TestHTTPClient(unittest.TestCase):

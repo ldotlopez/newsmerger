@@ -9,16 +9,16 @@ from unittest.mock import Mock, patch
 import pydantic
 import requests
 
-from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
-from newsmerger.models import SourceData, SourceItem
-from newsmerger.plugins import Services, googlechat, merge_options
-from newsmerger.plugins.googlechat import (
+from newstool.db import Database, DeliveryStatus, ProcessingStatus
+from newstool.models import SourceData, SourceItem
+from newstool.plugins import Services, googlechat, merge_options
+from newstool.plugins.googlechat import (
     WEBHOOK_KEY,
     GoogleChatSink,
     WebhookOptions,
     chat_image_url,
 )
-from newsmerger.sinks import SinkType
+from newstool.sinks import SinkType
 
 SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
 BLOGGER_IMAGE = (
@@ -84,16 +84,16 @@ class OptionsTests(unittest.TestCase):
             webhook_options({}, {})
 
     def test_entry_point_registers_the_sink_class(self) -> None:
-        ((name, protocol, cls),) = googlechat.__newsmerger_plugin__()
+        ((name, protocol, cls),) = googlechat.__newstool_plugin__()
         self.assertEqual(
             (name, protocol, cls), ("googlechat", SinkType, GoogleChatSink)
         )
 
 
-@patch("newsmerger.plugins.googlechat.requests.post")
+@patch("newstool.plugins.googlechat.requests.post")
 class GoogleChatSinkTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
@@ -209,7 +209,7 @@ class GoogleChatSinkTests(unittest.TestCase):
     ) -> None:
         post.side_effect = requests.ConnectionError("url: ...&token=secret")
 
-        with self.assertLogs("newsmerger.sinks", "ERROR") as logs:
+        with self.assertLogs("newstool.sinks", "ERROR") as logs:
             self.deliver()
 
         ((row, _),) = self.db.get_item_deliveries("googlechat")
@@ -222,7 +222,7 @@ class GoogleChatSinkTests(unittest.TestCase):
         post.return_value = Mock(ok=False)
         post.return_value.json.return_value = {"error": {"message": "bad space"}}
 
-        with self.assertLogs("newsmerger.sinks", "ERROR"):
+        with self.assertLogs("newstool.sinks", "ERROR"):
             self.deliver()
 
         ((row, _),) = self.db.get_item_deliveries("googlechat")

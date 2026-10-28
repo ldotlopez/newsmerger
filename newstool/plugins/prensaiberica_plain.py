@@ -163,5 +163,5 @@ def _extract_href(article: bs4.Tag) -> str:
     return cast(str, a_tag.get("href"))
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("prensaiberica_plain", ProviderType, PrensaIbericaPlainProvider)]

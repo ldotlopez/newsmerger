@@ -7,16 +7,16 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from newsmerger.cli import cli
-from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
-from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newstool.cli import cli
+from newstool.db import Database, DeliveryStatus, ProcessingStatus
+from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
 
 SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
 
 
 class DeleteCommandTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.config = self.tmp_dir / "config.yaml"
         self.config.write_text(
             f"db:\n  uri: sqlite:///{self.tmp_dir}/data.db\n"

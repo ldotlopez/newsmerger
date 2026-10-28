@@ -7,13 +7,13 @@ from unittest.mock import Mock
 
 import pydantic
 
-from newsmerger.models import SourceData, SourceItemData
-from newsmerger.plugins import NoOptions, Services, merge_options
-from newsmerger.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
-from newsmerger.plugins.feedreader import FeedReaderProvider, Options
-from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
-from newsmerger.plugins.telegram_channel import Options as ChannelOptions
-from newsmerger.plugins.telegram_channel import (
+from newstool.models import SourceData, SourceItemData
+from newstool.plugins import NoOptions, Services, merge_options
+from newstool.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
+from newstool.plugins.feedreader import FeedReaderProvider, Options
+from newstool.plugins.prensaiberica import PrensaIbericaProvider
+from newstool.plugins.telegram_channel import Options as ChannelOptions
+from newstool.plugins.telegram_channel import (
     TelegramChannelProvider,
     parse_article,
     parse_preview,
@@ -146,7 +146,7 @@ class TestFeedReader(unittest.TestCase):
           <link>https://x.test/1</link><pubDate>someday</pubDate>
           <description>&lt;p&gt;&lt;img src="/i.jpg"&gt;&lt;/p&gt;</description>
         </item></channel></rss>"""
-        with self.assertLogs("newsmerger.plugins.feedreader", "WARNING"):
+        with self.assertLogs("newstool.plugins.feedreader", "WARNING"):
             (item,) = self.parse(feed)
 
         self.assertIsNone(item.published_at)
@@ -206,7 +206,7 @@ class TestFeedReader(unittest.TestCase):
         feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
           <link>https://x.test/1</link><description>teaser</description>
         </item></channel></rss>"""
-        with self.assertLogs("newsmerger.plugins.feedreader", "ERROR"):
+        with self.assertLogs("newstool.plugins.feedreader", "ERROR"):
             items = self.parse(feed, article_page=b"<p>caf\xe9</p>", fetch_article=True)
 
         self.assertEqual(items, [])
@@ -450,7 +450,7 @@ class TestTelegramChannel(unittest.TestCase):
             url, b"not html"
         )
 
-        with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
+        with self.assertLogs("newstool.plugins.telegram_channel", "ERROR"):
             items = list(
                 TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
                     self.source(), fetcher
@@ -481,7 +481,7 @@ class TestTelegramChannel(unittest.TestCase):
             url, b"not html"
         )
 
-        with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
+        with self.assertLogs("newstool.plugins.telegram_channel", "ERROR"):
             items = list(
                 TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
                     self.source(), fetcher

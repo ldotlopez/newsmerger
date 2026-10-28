@@ -1,4 +1,4 @@
-# newsmerger
+# newstool
 
 Collects news from several websites, keeps the articles, and builds things
 from them: markdown copies, LLM summaries and tags, event groupings, RSS
@@ -43,8 +43,8 @@ Pass a YAML file with `-c/--config`. Every section is optional;
 
 ```yaml
 db:
-  uri: sqlite:////path/to/data.db    # default: <user data dir>/newsmerger/data.db
-  content_dir: /path/to/content      # default: <user data dir>/newsmerger/content
+  uri: sqlite:////path/to/data.db    # default: <user data dir>/newstool/data.db
+  content_dir: /path/to/content      # default: <user data dir>/newstool/content
 
 cache:
   expiration: 6h                     # HTTP cache lifetime (seconds, or 5m, 2h, 3d)
@@ -195,7 +195,7 @@ workflows:
 
 `skip_default` only leaves an entry out of `default`: the workflows that
 name it still run it. Commands run `default` unless given `-w/--workflow
-NAME`, so each workflow is its own cron line (`newsmerger run -w
+NAME`, so each workflow is its own cron line (`newstool run -w
 juntas-channel`). A workflow only touches its sources: `import` fetches
 them, and `process`, `remix` and its deliveries see only their items.
 
@@ -229,39 +229,39 @@ changes nothing stored.
 
 ```sh
 # Import every configured source
-uv run newsmerger -c config.yaml import
+uv run newstool -c config.yaml import
 
 # Run every process run of the workflow in order, or only one processor's
-uv run newsmerger -c config.yaml process
-uv run newsmerger -c config.yaml process markdownify --source castellonplaza --limit 20
+uv run newstool -c config.yaml process
+uv run newstool -c config.yaml process markdownify --source castellonplaza --limit 20
 
 # Run every remix run of the workflow in order, or just one, by key
-uv run newsmerger -c config.yaml remix
-uv run newsmerger -c config.yaml remix feedgenerator --since 2026-10-01
+uv run newstool -c config.yaml remix
+uv run newstool -c config.yaml remix feedgenerator --since 2026-10-01
 
 # Run import, process, remix and deliver in turn (e.g. from cron)
-uv run newsmerger -c config.yaml run
+uv run newstool -c config.yaml run
 
 # The same, for another workflow (every phase command takes -w)
-uv run newsmerger -c config.yaml run -w juntas-channel
+uv run newstool -c config.yaml run -w juntas-channel
 
 # Inspect what is stored (read-only), as a table or --format json
-uv run newsmerger -c config.yaml inspect items --source castellonplaza --limit 20
-uv run newsmerger -c config.yaml inspect items --item 4127
-uv run newsmerger -c config.yaml inspect content --sha256 <sha256> > item.html
-uv run newsmerger -c config.yaml inspect annotations --item 4127
-uv run newsmerger -c config.yaml inspect annotations --annotation 512
-uv run newsmerger -c config.yaml inspect annotations --key summary/telegram/es
-uv run newsmerger -c config.yaml inspect artifacts
-uv run newsmerger -c config.yaml inspect artifacts --artifact feedgenerator/feed > feed.xml
-uv run newsmerger -c config.yaml inspect deliveries --sink telegram --status error
+uv run newstool -c config.yaml inspect items --source castellonplaza --limit 20
+uv run newstool -c config.yaml inspect items --item 4127
+uv run newstool -c config.yaml inspect content --sha256 <sha256> > item.html
+uv run newstool -c config.yaml inspect annotations --item 4127
+uv run newstool -c config.yaml inspect annotations --annotation 512
+uv run newstool -c config.yaml inspect annotations --key summary/telegram/es
+uv run newstool -c config.yaml inspect artifacts
+uv run newstool -c config.yaml inspect artifacts --artifact feedgenerator/feed > feed.xml
+uv run newstool -c config.yaml inspect deliveries --sink telegram --status error
 
 # Delete, without asking: the same options as inspect select what goes
-uv run newsmerger -c config.yaml delete items --item 4127
-uv run newsmerger -c config.yaml delete annotations --processor summarize --source castellonplaza
-uv run newsmerger -c config.yaml delete annotations --key summary/telegram/es
-uv run newsmerger -c config.yaml delete artifacts --artifact digest/castellonplaza/2026-10-01_2026-10-08
-uv run newsmerger -c config.yaml delete deliveries --sink telegram --item 4127
+uv run newstool -c config.yaml delete items --item 4127
+uv run newstool -c config.yaml delete annotations --processor summarize --source castellonplaza
+uv run newstool -c config.yaml delete annotations --key summary/telegram/es
+uv run newstool -c config.yaml delete artifacts --artifact digest/castellonplaza/2026-10-01_2026-10-08
+uv run newstool -c config.yaml delete deliveries --sink telegram --item 4127
 ```
 
 Items and annotations are selected by their numeric id, which `inspect`
@@ -306,13 +306,13 @@ which deletes their deliveries too, so they can be delivered again.
 Global options: `--log-level LEVEL` (also accepts specs such as
 `info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one step
 each from `warning` (`-v` shows progress messages, `-vv` debug). Without
-them, the level comes from `NEWSMERGER_LOG_LEVEL`, then from `log_level` in
+them, the level comes from `NEWSTOOL_LOG_LEVEL`, then from `log_level` in
 the config, then `warning`.
 
 Results (tables, `inspect` output, contents, `--help`, and the summaries of
 `run`, `import`, `process` and `remix`) go to stdout; progress and
 logs go to stderr. Each stream is rich only when it is a terminal, so
-`newsmerger run > summary.txt` keeps the progress rows on screen and writes
+`newstool run > summary.txt` keeps the progress rows on screen and writes
 tab-separated tables, and with stderr redirected (cron) there is no progress
 and logs are one plain line per record. The progress shows a row per phase
 in `run` and a row per source, processor, remixer or sink while it runs.
@@ -431,7 +431,7 @@ here and in every other option, are seconds or a number with a unit suffix:
   week, or `--since`/`--until` for another period. Each period is its own
   artifact (dates as `YYYY-MM-DD`), so `inspect artifacts --remixer digest`
   (the entry's key) lists them and rebuilding a period overwrites it.
-- `feedgenerator`: `title` (default `newsmerger feed`), `link`, `description`
+- `feedgenerator`: `title` (default `newstool feed`), `link`, `description`
   (default: the title), `max_items` (default 100).
 - `singlelink`, `avglink` and `embeddings`: `min_score` (default 0.3), `tau` (time
   decay, default 24h; `null` disables it), `lookback` (default 7d: the scope
@@ -441,7 +441,7 @@ here and in every other option, are seconds or a number with a unit suffix:
   so `embeddings` needs `process` to have run `embed` with that input first.
 
 Artifacts are rebuilt each time their remixer runs, so between runs they can
-lag behind the stored items. Remixers never act outside newsmerger.
+lag behind the stored items. Remixers never act outside newstool.
 
 ### Sinks
 
@@ -562,7 +562,7 @@ Other tools use `Application`, the same core the CLI uses:
 ```python
 from pathlib import Path
 
-from newsmerger.app import Application
+from newstool.app import Application
 
 with Application.from_config_file(Path("config.yaml"), create_schema=False) as app:
     feed = app.get_artifact("feedgenerator", "feed")  # None if it doesn't exist

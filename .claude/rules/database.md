@@ -1,14 +1,14 @@
 ---
 paths:
-  - "newsmerger/db.py"
-  - "newsmerger/models.py"
+  - "newstool/db.py"
+  - "newstool/models.py"
   - "scripts/**"
 ---
 
 # Database & ORM Conventions
 
-- **DTO Boundary Isolation:** SQLAlchemy ORM models MUST NOT leak outside the database / data access layer (`newsmerger/db.py`).
-  - Convert data passing into or out of the DB layer using `@dataclass(slots=True)` DTOs (`newsmerger/models.py`).
+- **DTO Boundary Isolation:** SQLAlchemy ORM models MUST NOT leak outside the database / data access layer (`newstool/db.py`).
+  - Convert data passing into or out of the DB layer using `@dataclass(slots=True)` DTOs (`newstool/models.py`).
   - Every SQLAlchemy model must implement three explicit methods:
     - `from_dto(cls, dto: DTOType) -> Self`: Class method to instantiate a new DB model from a DTO.
     - `to_dto(self) -> DTOType`: Instance method to export model state to its corresponding `@dataclass` DTO.

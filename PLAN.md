@@ -1,4 +1,4 @@
-# newsmerger — Working Plan
+# newstool — Working Plan
 
 Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
@@ -13,7 +13,7 @@ are the catalog, with `id`s workflows refer to; `default` is the catalog
 without `skip_default` and delivers nothing. Needs a new database and a
 rewritten configuration.
 
-- [x] **`ClassRegister`** in `newsmerger.plugins`, on foundation's
+- [x] **`ClassRegister`** in `newstool.plugins`, on foundation's
   `BaseRegister`: every module registered, classes by type Protocol
   (`ProviderType`, `ProcessorType`, `RemixerType`, `SinkType`, `LLMType`),
   several per bundle under different names.
@@ -178,7 +178,7 @@ External pipelines go too: they will be replaced, not kept as scripts.
   (the plugins register as `Provider`), `scripts/pipeline_url.py` (the
   only pipeline).
   `import_sample()` in `tests/test_app.py` imports another way.
-- [x] **2. Remove the pickle cache** (`NEWSMERGER_PICKLE_CACHE`) from
+- [x] **2. Remove the pickle cache** (`NEWSTOOL_PICKLE_CACHE`) from
   `Application.import_source`.
 - [x] **3. `provider_options` on sources**, from the config only: not stored
   in the database (`DBSource` unchanged). `import_source` passes them to
@@ -203,7 +203,7 @@ External pipelines go too: they will be replaced, not kept as scripts.
 
 ## P1 — Plain logging and the `<APP>_LOG_LEVEL` fix
 
-Precedence: CLI (`--log-level`, `-v`/`-q`) > `NEWSMERGER_LOG_LEVEL` >
+Precedence: CLI (`--log-level`, `-v`/`-q`) > `NEWSTOOL_LOG_LEVEL` >
 config `log_level` > `warning`. With `-v`/`-q` and no `--log-level`, they
 step from `warning`, ignoring the env var: `-v` is always info, `-vv` debug.
 
@@ -223,7 +223,7 @@ foundation (`../foundation`, separate commits; its push is manual):
   applies; `--log-level` and `-v` beat it; the app default applies when
   neither CLI nor env set a level.
 
-newsmerger:
+newstool:
 
 - [x] **4.** `uv lock --upgrade-package foundation` (foundation `main` at
   `96d6929`).
@@ -277,7 +277,7 @@ foundation:
   streams (computed at import), and both handler choices. Branch
   `p2-rich-per-stream` (`efc073c`), not merged yet.
 
-newsmerger:
+newstool:
 
 - [x] **4.** `uv lock --upgrade-package foundation`; the README test command
   becomes `DISABLE_RICH=1 uv run python -m unittest discover -s tests`, so
@@ -316,7 +316,7 @@ Out of scope: `inspect`, `delete` and `scripts/` (fast, tables already rich).
   `sqlite_autoincrement=True` on every table with an integer id; a
   one-shot script recreates the existing tables with it, keeping rows and
   ids, with a test on a copy of a populated database. Run on
-  `~/.local/share/newsmerger/data.db` on 2026-10-23 (backup at
+  `~/.local/share/newstool/data.db` on 2026-10-23 (backup at
   `data.db.bak-20261023`); it had no `telegram/state` to migrate.
 - [x] **2. Ids in the DTOs.** `id: int | None` on `SourceItem` and
   `Artifact`; an `Annotation` DTO (`id`, item id, `processor`, `key`,
@@ -411,7 +411,7 @@ Risks:
   identity coverage (73 tests).
 - [x] **`foundation.dblib` and `foundation.plugin` declare `__all__`.** The
   shared `configure_connection` was tried and dropped: `dblib` is a shortcut
-  for direct `sqlite3` use, and newsmerger, on SQLAlchemy, keeps its own
+  for direct `sqlite3` use, and newstool, on SQLAlchemy, keeps its own
   `SQLITE_PRAGMAS`.
 - [x] **`rssfeed`** takes the newest `max_items` items, newest first, and
   emits the required channel `<description>` (plus `<link>` when configured).
@@ -438,7 +438,7 @@ Risks:
   helper (`llm.py`, default port 11434); `castelloninformacion` no longer
   mutates its source; the `group_events*.py` scripts duplicated by the
   grouping remixers are gone.
-- [x] **Application core (`newsmerger/app.py`).** `App` moved out of the CLI:
+- [x] **Application core (`newstool/app.py`).** `App` moved out of the CLI:
   wiring plus `import_source`, `import_url`, `run_processor`, `run_pipeline`;
   reads go through `App.db`. `cli.py` and the `group_events*` scripts use it.
 - [x] **Reprocess changed content.** `processing_state.content_sha256` records
@@ -468,7 +468,7 @@ Risks:
 - [x] **Removed `save_source_items`** and its tests; `upsert_source_items` is
   the only write path. The commented-out block in `_get_or_create_source_bulk`
   is gone too.
-- [x] **Removed `newsmerger/filestore.py`** (`BufferedStore`), superseded by
+- [x] **Removed `newstool/filestore.py`** (`BufferedStore`), superseded by
   `foundation.storage`.
 - [x] **Keep cleaned HTML at ingestion instead of markdown.** Providers keep
   `main_node` and its ancestors with `prune_to_spine`, drop cruft with
@@ -476,7 +476,7 @@ Risks:
   processor's job.
 - [x] **Use `SourceItem.from_data()`** in `App.import_source`.
 - [x] **Swap `save_source_items` → `upsert_source_items`** in `App.import_source`.
-- [x] **Gate the debug pickle dump behind `NEWSMERGER_PICKLE_CACHE`.**
+- [x] **Gate the debug pickle dump behind `NEWSTOOL_PICKLE_CACHE`.**
 - [x] **Configuration-defined pipelines.** `pipeline-url` runs an ordered list
   of configured processor steps; step params override processor defaults.
 - [x] **Telegram message formatting.** `sendPhoto` with an escaped HTML caption

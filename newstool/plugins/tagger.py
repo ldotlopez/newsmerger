@@ -101,5 +101,5 @@ def merge_tags(existing_tags: list[str], new_tags: list[str]) -> list[str]:
     return list(merged.values())
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(TaggerProcessor.name, ProcessorType, TaggerProcessor)]

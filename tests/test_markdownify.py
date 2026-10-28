@@ -5,10 +5,10 @@ from unittest.mock import Mock
 
 import pymupdf
 
-from newsmerger.models import SourceData, SourceItem
-from newsmerger.plugins import Services
-from newsmerger.plugins.markdownify import MarkdownifyProcessor
-from newsmerger.processors import ProcessorOptions, SkipItem
+from newstool.models import SourceData, SourceItem
+from newstool.plugins import Services
+from newstool.plugins.markdownify import MarkdownifyProcessor
+from newstool.processors import ProcessorOptions, SkipItem
 
 
 def make_pdf(*pages: str) -> bytes:

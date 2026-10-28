@@ -18,7 +18,7 @@ RFC822 = "%a, %d %b %Y %H:%M:%S %z"
 
 
 class Options(PluginOptions):
-    title: str = "newsmerger feed"
+    title: str = "newstool feed"
     link: str | None = None
     description: str | None = None  # the title when unset
     max_items: int = 100
@@ -70,5 +70,5 @@ class FeedGeneratorRemixer(BaseRemixer):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(FeedGeneratorRemixer.name, RemixerType, FeedGeneratorRemixer)]

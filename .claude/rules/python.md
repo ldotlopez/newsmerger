@@ -4,9 +4,9 @@ paths:
   - "pyproject.toml"
 ---
 
-# newsmerger Python Specifics
+# newstool Python Specifics
 
-Generic Python conventions live in the user-level `rules/python.md`; this file adds what is specific to newsmerger.
+Generic Python conventions live in the user-level `rules/python.md`; this file adds what is specific to newstool.
 
 ## Framework Usage
 

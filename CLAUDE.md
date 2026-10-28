@@ -46,7 +46,7 @@ The project documentation (`README.md`, `docs/ARCHITECTURE.md`, `docs/SPECIFICAT
 
 1. **Strictly Scoped Searches:**
    - NEVER execute broad or recursive workspace searches (e.g., raw `grep -r`, `find .`, `ls -R`, or `**/*`) without specifying target paths and extensions.
-   - Restrict searches to explicit subdirectories (e.g., `newsmerger/`, `newsmerger/plugins/`, `tests/`) and specific extensions (e.g., `*.py`).
+   - Restrict searches to explicit subdirectories (e.g., `newstool/`, `newstool/plugins/`, `tests/`) and specific extensions (e.g., `*.py`).
 
 2. **Justified Broad Search Exception:**
    - If an unbounded/repo-wide search is strictly necessary (e.g., tracking cross-module refactors, global type mismatches, or missing exports):
@@ -72,7 +72,7 @@ uv run ruff format .
 
 ## Project Gotchas
 
-- Plugins are modules in `newsmerger/plugins/` exposing `__newsmerger_plugin__()`; a module that fails to import breaks plugin discovery for the whole app.
+- Plugins are modules in `newstool/plugins/` exposing `__newstool_plugin__()`; a module that fails to import breaks plugin discovery for the whole app.
 - A source's `id` is part of every item's key: renaming a source in config re-imports it from scratch.
 - The DB schema is created, never migrated. Schema or stored-data changes need a one-shot script in `scripts/` (with a test).
 - Config is YAML passed with `-c`. `config.yaml` and `.env` are git-ignored; `config.example.yaml` is the tracked reference. `${VAR}` resolves from the environment, falling back to a `.env` next to the config file; a missing variable is an error.

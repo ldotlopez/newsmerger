@@ -10,10 +10,10 @@ from unittest.mock import Mock, call, patch
 from click.testing import CliRunner
 from foundation.storage import EntryNotFoundError
 
-from newsmerger.cli import cli
-from newsmerger.config import ConfigError
-from newsmerger.db import DeliveryStatus
-from newsmerger.models import (
+from newstool.cli import cli
+from newstool.config import ConfigError
+from newstool.db import DeliveryStatus
+from newstool.models import (
     Annotation,
     Artifact,
     Delivery,
@@ -21,7 +21,7 @@ from newsmerger.models import (
     SourceData,
     SourceItem,
 )
-from newsmerger.processors import RunSummary
+from newstool.processors import RunSummary
 
 SOURCE = SourceData(
     id="plaza", name="Plaza", url="https://plaza.test/", provider="plaza"
@@ -29,7 +29,7 @@ SOURCE = SourceData(
 
 
 def invoke(app: Mock, *args: str):
-    with patch("newsmerger.cli.app_from_context", return_value=app):
+    with patch("newstool.cli.app_from_context", return_value=app):
         return CliRunner().invoke(cli, list(args))
 
 
@@ -113,7 +113,7 @@ class CommandTests(unittest.TestCase):
         app = Mock()
         app.remix_keys.return_value = []
 
-        with patch("newsmerger.cli.Application", return_value=app):
+        with patch("newstool.cli.Application", return_value=app):
             result = CliRunner().invoke(cli, ["remix"])
 
         self.assertEqual(result.exit_code, 0, result.output)
@@ -129,7 +129,7 @@ class CommandTests(unittest.TestCase):
         app.delivery_keys.return_value = ["telegram"]
         app.run_delivery.return_value = RunSummary(done=1)
 
-        with self.assertLogs("newsmerger", "ERROR"):
+        with self.assertLogs("newstool", "ERROR"):
             result = invoke(app, "run")
 
         self.assertEqual(result.exit_code, 1)
@@ -205,26 +205,26 @@ class SearchTests(unittest.TestCase):
 
 
 class LogLevelTests(unittest.TestCase):
-    """Precedence: --log-level and -v/-q, then NEWSMERGER_LOG_LEVEL, then the
+    """Precedence: --log-level and -v/-q, then NEWSTOOL_LOG_LEVEL, then the
     config's log_level, then warning."""
 
     def setUp(self) -> None:
-        logging.getLogger("newsmerger").setLevel(logging.NOTSET)
-        self.config_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        logging.getLogger("newstool").setLevel(logging.NOTSET)
+        self.config_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
 
     def level(self, *args: str, env: str | None = None, config: str = "") -> int:
         config_path = self.config_dir / "config.yaml"
         config_path.write_text(config)
         app = Mock()
         app.remix_keys.return_value = []
-        with patch("newsmerger.cli.Application", return_value=app):
+        with patch("newstool.cli.Application", return_value=app):
             result = CliRunner().invoke(
                 cli,
                 ["-c", str(config_path), *args, "remix"],
-                env={"NEWSMERGER_LOG_LEVEL": env},
+                env={"NEWSTOOL_LOG_LEVEL": env},
             )
         self.assertEqual(result.exit_code, 0, result.output)
-        return logging.getLogger("newsmerger").level
+        return logging.getLogger("newstool").level
 
     def test_defaults_to_warning(self) -> None:
         self.assertEqual(self.level(), logging.WARNING)

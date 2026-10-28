@@ -47,5 +47,5 @@ class MarkdownifyProcessor(BaseProcessor):
             return "\n".join(page.get_text() for page in doc).strip()
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(MarkdownifyProcessor.name, ProcessorType, MarkdownifyProcessor)]

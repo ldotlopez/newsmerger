@@ -33,7 +33,7 @@ until it was first used.
   `Processor`, `Remixer`). Remixers read items, annotations
   and other remixers' artifacts, and produce artifacts; they run on demand
   from the CLI.
-- **Loading.** Plugins live in one namespace, `newsmerger.plugins`, and are
+- **Loading.** Plugins live in one namespace, `newstool.plugins`, and are
   loaded with `foundation.plugin.Register`, unmodified. A module is a bundle:
   it can provide any number of objects of any type.
 - **Enabling.** The `plugins` config section lists plugins with their
@@ -47,7 +47,7 @@ until it was first used.
   `process.<n>.processor`). A plugin neither listed nor named is never
   imported. All of them are loaded when `Application` is built, before the
   database is opened.
-- **Options.** The entry point, `__newsmerger_plugin__(**options)`, receives
+- **Options.** The entry point, `__newstool_plugin__(**options)`, receives
   its section as keyword arguments, validates it with its own pydantic model
   (unknown keys rejected, defaults for the general case, so an empty section
   is enough), builds its objects and returns `(name, Protocol, object)`

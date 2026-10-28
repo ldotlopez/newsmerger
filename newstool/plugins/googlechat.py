@@ -146,5 +146,5 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
         return {"message": result["name"]}
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [(GoogleChatSink.name, SinkType, GoogleChatSink)]

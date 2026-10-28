@@ -20,8 +20,8 @@ from pathlib import Path
 import rich_click as click
 from sqlalchemy import make_url
 
-from newsmerger.app import LockedError, write_lock
-from newsmerger.config import Config
+from newstool.app import LockedError, write_lock
+from newstool.config import Config
 
 OLD_NAME = "rssfeed"
 NEW_NAME = "feedgenerator"

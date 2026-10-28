@@ -109,5 +109,5 @@ class PrensaIbericaProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("prensaiberica", ProviderType, PrensaIbericaProvider)]

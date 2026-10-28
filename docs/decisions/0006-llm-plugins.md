@@ -29,7 +29,7 @@ the processors could not simply be split out and share the client.
   default, means no preference) and `model` (overrides the backend's
   default).
 - **Services.** The core passes a `Services` object as the first positional
-  argument of every entry point: `__newsmerger_plugin__(services,
+  argument of every entry point: `__newstool_plugin__(services,
   **options)`. It holds the LLMs of the plugins registered before, by name,
   in configuration order. `services.llm(name)` returns the named LLM, or the
   first one for `None`, and raises `LLMUnavailableError` when none is loaded

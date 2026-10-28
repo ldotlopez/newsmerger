@@ -36,14 +36,14 @@ from .plugins import ClassRegister, Services
 from .processors import RunSummary
 from .sinks import ArtifactNames
 
-PLUGINS_NAMESPACE = "newsmerger.plugins"
-PLUGIN_ENTRY_POINT = "__newsmerger_plugin__"
+PLUGINS_NAMESPACE = "newstool.plugins"
+PLUGIN_ENTRY_POINT = "__newstool_plugin__"
 
 LOGGER = logging.getLogger(__name__)
 
 
 class LockedError(RuntimeError):
-    """Another newsmerger command holds the write lock."""
+    """Another newstool command holds the write lock."""
 
 
 class Application:
@@ -373,7 +373,7 @@ def write_lock(database_url: str) -> IO[str] | None:
     except BlockingIOError:
         lock_file.close()
         raise LockedError(
-            f"another newsmerger command is using the database ({lock_path})"
+            f"another newstool command is using the database ({lock_path})"
         ) from None
     return lock_file
 

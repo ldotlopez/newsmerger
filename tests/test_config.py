@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from newsmerger.config import Config, ConfigError
+from newstool.config import Config, ConfigError
 
 SOURCE = """
 sources:

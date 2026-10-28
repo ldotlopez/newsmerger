@@ -11,24 +11,24 @@ from unittest.mock import Mock, patch
 
 from foundation.plugin import PluginError, ProtocolConformanceError
 
-from newsmerger.app import (
+from newstool.app import (
     PLUGIN_ENTRY_POINT,
     PLUGINS_NAMESPACE,
     Application,
     LockedError,
 )
-from newsmerger.config import Config, ConfigError
-from newsmerger.db import ProcessingStatus
-from newsmerger.models import (
+from newstool.config import Config, ConfigError
+from newstool.db import ProcessingStatus
+from newstool.models import (
     LazySourceItemData,
     ProcessingScope,
     SourceItem,
     SourceItemData,
 )
-from newsmerger.plugins import ClassRegister, Services, feedreader, markdownify
-from newsmerger.plugins.markdownify import MarkdownifyProcessor
-from newsmerger.plugins.ollama import OllamaLLM
-from newsmerger.processors import ProcessorOptions, ProcessorType
+from newstool.plugins import ClassRegister, Services, feedreader, markdownify
+from newstool.plugins.markdownify import MarkdownifyProcessor
+from newstool.plugins.ollama import OllamaLLM
+from newstool.processors import ProcessorOptions, ProcessorType
 
 SAMPLE = Path(__file__).parent / "samples" / "prensaiberica-item-132310503.html"
 SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
@@ -36,7 +36,7 @@ SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
 
 class ApplicationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.app = self.make_app()
 
     def tearDown(self) -> None:
@@ -209,7 +209,7 @@ cache:
         self.app.lock()
         other = self.make_app()
 
-        with self.assertRaisesRegex(LockedError, "another newsmerger command"):
+        with self.assertRaisesRegex(LockedError, "another newstool command"):
             other.lock()
         self.app.close()
         other.lock()
@@ -308,7 +308,7 @@ remixers:
             ):
                 self.make_app(workflows=workflows)
 
-    @patch("newsmerger.plugins.telegram.requests.post")
+    @patch("newstool.plugins.telegram.requests.post")
     def test_workflows_run_on_their_sources_and_deliver_under_their_name(
         self, post
     ) -> None:
@@ -413,7 +413,7 @@ workflows:
 
     def test_other_options_for_a_key_on_shared_sources_are_a_warning(self) -> None:
         self.app.close()
-        with self.assertLogs("newsmerger.catalog", "WARNING") as logs:
+        with self.assertLogs("newstool.catalog", "WARNING") as logs:
             self.app = self.make_app(
                 workflows="workflows:\n  - name: a\n    sources: [mediterraneo]\n"
                 "    process: [{processor: markdownify, options: {max_retries: 5}}]\n"

@@ -1,5 +1,5 @@
 """Plugin bundles. Every module is a bundle: it exposes
-`__newsmerger_plugin__()`, which returns the classes it provides as
+`__newstool_plugin__()`, which returns the classes it provides as
 `(type name, type Protocol, class)` triples. The core builds one object of
 a class per configured use, with that use's options (decision 0010).
 """

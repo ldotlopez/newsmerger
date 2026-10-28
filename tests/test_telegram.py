@@ -10,10 +10,10 @@ from unittest.mock import Mock, patch
 import pydantic
 import requests
 
-from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
-from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
-from newsmerger.plugins import Services, merge_options, telegram
-from newsmerger.plugins.telegram import (
+from newstool.db import Database, DeliveryStatus, ProcessingStatus
+from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newstool.plugins import Services, merge_options, telegram
+from newstool.plugins.telegram import (
     MAX_CAPTION_LENGTH,
     DocumentDeliveryOptions,
     ItemDeliveryOptions,
@@ -21,7 +21,7 @@ from newsmerger.plugins.telegram import (
     TelegramSink,
     build_caption,
 )
-from newsmerger.sinks import SinkType
+from newstool.sinks import SinkType
 from scripts.migrate_telegram_state import migrate
 
 SOURCE_A = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
@@ -41,7 +41,7 @@ def ok_response(message_id: int = 42) -> Mock:
 
 class TelegramTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
@@ -88,7 +88,7 @@ class TelegramTestCase(unittest.TestCase):
         }
 
 
-@patch("newsmerger.plugins.telegram.requests.post")
+@patch("newstool.plugins.telegram.requests.post")
 class TelegramSinkTests(TelegramTestCase):
     def deliver(self, key: str = "telegram", **options: Any) -> None:
         sink = TelegramSink(item_options(self.section, options), Services())
@@ -155,7 +155,7 @@ class TelegramSinkTests(TelegramTestCase):
         post.side_effect = requests.ConnectionError("url: /bots3cr3t/sendMessage")
         self.add_summarized(SOURCE_A, 3)
 
-        with self.assertLogs("newsmerger.sinks", "ERROR") as logs:
+        with self.assertLogs("newstool.sinks", "ERROR") as logs:
             self.deliver()
 
         ((row, _),) = self.db.get_item_deliveries("telegram")
@@ -163,7 +163,7 @@ class TelegramSinkTests(TelegramTestCase):
         self.assertEqual(row.last_error, "ConnectionError")
         self.assertNotIn("s3cr3t", "\n".join(logs.output))
 
-    @patch("newsmerger.plugins.telegram.requests.get")
+    @patch("newstool.plugins.telegram.requests.get")
     def test_uploads_photo_with_escaped_caption(self, get: Mock, post: Mock) -> None:
         get.return_value.content = b"JPEG"
         get.return_value.headers = {"Content-Type": "image/jpeg"}
@@ -183,7 +183,7 @@ class TelegramSinkTests(TelegramTestCase):
         self.assertIn("Hour &lt;3&gt;", payload["caption"])
         self.assertIn('href="https://a.test/3?a=1&amp;b=2"', payload["caption"])
 
-    @patch("newsmerger.plugins.telegram.requests.get")
+    @patch("newstool.plugins.telegram.requests.get")
     def test_image_download_failure_is_a_failed_delivery(
         self, get: Mock, post: Mock
     ) -> None:
@@ -252,7 +252,7 @@ class TelegramSinkTests(TelegramTestCase):
         self.assertIn("[original article](https://a.test/3?a=1&b=2)", payload["text"])
 
 
-@patch("newsmerger.plugins.telegram.requests.post")
+@patch("newstool.plugins.telegram.requests.post")
 class TelegramArtifactSinkTests(TelegramTestCase):
     def test_sends_new_artifacts_of_the_listed_remixers_as_documents(
         self, post: Mock
@@ -287,7 +287,7 @@ class TelegramArtifactSinkTests(TelegramTestCase):
 
 class PluginTests(unittest.TestCase):
     def test_registers_both_sink_classes(self) -> None:
-        registered = telegram.__newsmerger_plugin__()
+        registered = telegram.__newstool_plugin__()
 
         self.assertEqual(
             [(name, protocol, cls) for name, protocol, cls in registered],
@@ -311,7 +311,7 @@ class MigrateTelegramStateTests(TelegramTestCase):
             Artifact("telegram", "state", json.dumps(state), "application/json")
         )
 
-        with self.assertLogs("newsmerger", "WARNING") as logs:
+        with self.assertLogs("newstool", "WARNING") as logs:
             self.assertEqual(migrate(self.db), (1, 1))
             self.assertEqual(migrate(self.db), (0, 1))
 

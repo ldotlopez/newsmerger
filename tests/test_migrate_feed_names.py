@@ -5,14 +5,14 @@ from pathlib import Path
 
 import click
 
-from newsmerger.db import Database
-from newsmerger.models import Artifact
+from newstool.db import Database
+from newstool.models import Artifact
 from scripts.migrate_feed_names import migrate
 
 
 class MigrateFeedNamesTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newsmerger-test-"))
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.db_path = self.tmp_dir / "data.db"
         self.db = Database(f"sqlite:///{self.db_path}", self.tmp_dir / "content")
 

@@ -326,6 +326,6 @@ class EmbeddingsRemixer(GroupingRemixer):
         return single_link_groups(embedded, scores, options.min_score)
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     remixers = [SingleLinkRemixer, AverageLinkRemixer, EmbeddingsRemixer]
     return [(remixer.name, RemixerType, remixer) for remixer in remixers]

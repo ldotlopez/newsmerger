@@ -53,9 +53,9 @@ Plugins register classes; the core builds one object per configured use
 `processors.py`, `remixers.py`, `sinks.py` and `llms.py`, never a plugin's
 code:
 
-1. `Application.__init__` registers every module of the `newsmerger.plugins`
+1. `Application.__init__` registers every module of the `newstool.plugins`
    namespace with `ClassRegister.register_found()`. Each module's
-   `__newsmerger_plugin__()` returns `[(type name, type Protocol, class),
+   `__newstool_plugin__()` returns `[(type name, type Protocol, class),
    ...]`, declared under `ProviderType`, `ProcessorType`, `RemixerType`,
    `SinkType` or `LLMType`. `ClassRegister.classes(protocol)` indexes them
    by type name, checks that names are unique per protocol, that each is a
@@ -174,8 +174,8 @@ always UTF-8 and no charset is stored.
 
 ### Writing a plugin
 
-A plugin is a module in `newsmerger/plugins/` that exposes
-`__newsmerger_plugin__() -> PluginTypes`, the classes it provides under
+A plugin is a module in `newstool/plugins/` that exposes
+`__newstool_plugin__() -> PluginTypes`, the classes it provides under
 their type names, which are what `plugins:` sections, sources and entries
 name. A provider for a site with an index page (a section, an RSS feed)
 that links to one article per item:
@@ -223,7 +223,7 @@ class ExampleProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__() -> PluginTypes:
+def __newstool_plugin__() -> PluginTypes:
     return [("example", ProviderType, ExampleProvider)]
 ```
 
@@ -288,7 +288,7 @@ The DTOs carry it; `upsert_source_items` sets it on the items it saves.
 SQLAlchemy models never leave `db.py`: `Database` takes and returns DTOs.
 Every SQLite connection gets `SQLITE_PRAGMAS` from a SQLAlchemy `connect`
 listener: foreign keys on, WAL, `busy_timeout`, `synchronous=NORMAL`,
-in-memory temp store. newsmerger does not use `foundation.dblib`, which is a
+in-memory temp store. newstool does not use `foundation.dblib`, which is a
 shortcut for code that uses `sqlite3` directly. Item and artifact foreign
 keys are `ON DELETE CASCADE`, so `delete_items` and `delete_artifacts`
 only delete the subjects, then release their contents.

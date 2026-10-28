@@ -4,7 +4,7 @@
 have it are left alone, so running it again does nothing.
 
 Back the database up first. It takes the write lock, so it fails at once
-if another newsmerger command is using the database.
+if another newstool command is using the database.
 
 Usage:
     python scripts/migrate_autoincrement.py -c config.yaml
@@ -20,9 +20,9 @@ from sqlalchemy import MetaData, Table, make_url
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.schema import CreateIndex, CreateTable
 
-from newsmerger.app import LockedError, write_lock
-from newsmerger.config import Config
-from newsmerger.db import Base
+from newstool.app import LockedError, write_lock
+from newstool.config import Config
+from newstool.db import Base
 
 
 def needs_autoincrement(connection: sqlite3.Connection, table: Table) -> bool:
