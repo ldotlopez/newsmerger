@@ -184,8 +184,9 @@ pyrightconfig.json
 # Local configuration (see config.example.yaml)
 config.yaml
 
-# Claude Code local settings and worktrees
-.claude/
+# Claude Code local settings and worktrees (rules are shared)
+.claude/*
+!.claude/rules/
 
 # graphify: only the graph and its report are shared
 graphify-out/*
