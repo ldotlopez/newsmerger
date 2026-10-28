@@ -55,11 +55,20 @@ def fetch_feed(url: str, fetcher: HTTPClient) -> FeedParserDict:
     content = fetcher.get(url)
     feed = feedparser.parse(content)
     # No version means HTML: maybe a site's home page advertising its feed.
-    if not feed.version and (feed_url := discover_feed_url(content, url)):
-        feed = feedparser.parse(fetcher.get(feed_url))
+    if not feed.version:
+        feed_url = discover_feed_url(content, url)
+        if feed_url is None:
+            raise ValueError(
+                f"{url} is a web page, not an RSS/Atom feed, and it doesn't link "
+                "to one; set the source url to the site's feed address"
+            )
+        url = feed_url
+        feed = feedparser.parse(fetcher.get(url))
     # An empty but valid feed is fine.
     if not feed["entries"] and (feed.bozo or not feed.version):
-        raise ValueError(f"not a valid feed: {feed.get('bozo_exception')}")
+        raise ValueError(
+            f"{url} is not a valid RSS/Atom feed ({feed.get('bozo_exception')})"
+        )
     return feed
 
 
