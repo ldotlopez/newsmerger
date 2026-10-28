@@ -295,9 +295,11 @@ can be redirected. `--format json` prints full records.
 selection with no filter or id is refused. Deleting an item takes its
 processing state, annotations and deliveries with it, and an item still in
 its source's index comes back on the next `import` with a new id.
-Annotations are deleted per processor (every key that processor wrote on
-the item, with their processing state), so every run of it processes the
-item again; `delete` selects them by processor, not by key or id. Items and
+`delete annotations` deletes exactly what `inspect annotations` lists with
+the same options (by processor, key such as `summary/telegram/es`, id or
+item), each with its processing state, so the run that wrote the key
+processes the item again. `delete deliveries` drops ledger rows; the next
+`run` delivers those subjects again while its `lookback` covers them. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
 

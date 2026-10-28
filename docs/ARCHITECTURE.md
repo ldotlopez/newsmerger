@@ -399,7 +399,7 @@ the entry's ledger key:
 Every state change is a `Database.save_delivery(delivery)` in its own
 transaction; eligibility and backoff (`backoff_seconds`, as processors) live
 in the sinks. `BaseItemSink.select` keeps strict FIFO per source: a row
-that is not due holds back the rest of its source. `--requeue` turns the
+that is not due holds back the rest of its source. `requeue` turns the
 `error` rows in scope back into `queued`; `force` needs an explicit
 selection (`SelectionRequiredError`), gives the selected subjects a row and
 sends them whatever their state, without pacing.

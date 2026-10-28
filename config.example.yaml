@@ -134,6 +134,8 @@ remixers:
 # the sink's name unless the entry names another; keys are unique per
 # workflow. Every sink takes `interval` (time between deliveries, oldest
 # first; default 0), `max_per_run` (default 5), `max_retries` and `lookback`.
+# `delete deliveries` drops records, so the next `run` delivers those subjects
+# again while `lookback` covers them.
 sinks:
   - sink: telegram                   # summarized items
     id: telegram-main
