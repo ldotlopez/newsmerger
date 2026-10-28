@@ -240,6 +240,17 @@ class TelegramSinkTests(TelegramTestCase):
         post.assert_called_once()
         self.assertIn("Summary h4 summary/ca", post.call_args.kwargs["json"]["text"])
 
+    def test_markdown_posts_the_summary_unescaped(self, post: Mock) -> None:
+        post.return_value = ok_response()
+        self.add_summarized(SOURCE_A, 3)
+
+        self.deliver(markdown=True)
+
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["parse_mode"], "Markdown")
+        self.assertIn("*Hour <3>*", payload["text"])
+        self.assertIn("[original article](https://a.test/3?a=1&b=2)", payload["text"])
+
 
 @patch("newsmerger.plugins.telegram.requests.post")
 class TelegramArtifactSinkTests(TelegramTestCase):
@@ -329,6 +340,17 @@ class BuildCaptionTests(unittest.TestCase):
         self.assertLessEqual(len(caption), MAX_CAPTION_LENGTH)
         self.assertIn("original article", caption)
         self.assertIn("https://example.test/article", caption)
+
+    def test_markdown_caption_keeps_the_summary_and_link_parseable(self) -> None:
+        caption = build_caption(
+            "A *bold* title", "**Big** _news_", "https://w.test/a_(b)", markdown=True
+        )
+
+        self.assertEqual(
+            caption,
+            "*A bold title*\n\n**Big** _news_\n\n"
+            "[original article](https://w.test/a_(b%29)",
+        )
 
 
 if __name__ == "__main__":
