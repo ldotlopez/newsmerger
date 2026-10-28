@@ -117,7 +117,7 @@ class ItemSinkTests(SinkTestCase):
     def test_interval_paces_the_whole_entry_oldest_first(self) -> None:
         self.add(SOURCE_B, "b1", hours_ago=3)
         self.add(SOURCE_A, "a1", hours_ago=2)
-        sink = RecordingItemSink(interval=30)
+        sink = RecordingItemSink(interval="30m")
 
         sink.run(self.db)
         sink.run(self.db)  # the first delivery is not 30 minutes old yet

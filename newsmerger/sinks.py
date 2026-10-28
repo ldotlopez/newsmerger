@@ -11,6 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 import pydantic
 from foundation.jsonlib import JsonCompatible
 
+from .config import Duration
 from .db import Database, DeliveryStatus, backoff_seconds
 from .models import Artifact, Delivery, ProcessingScope, SourceItem
 from .plugins import PluginOptions, Services
@@ -28,14 +29,14 @@ class SelectionRequiredError(ValueError):
 class DeliveryOptions(PluginOptions):
     """Options every sink takes."""
 
-    # Minutes between the entry's deliveries, oldest subject first; 0: no
+    # Time between the entry's deliveries, oldest subject first; 0: no
     # pacing.
-    interval: pydantic.NonNegativeInt = 0
+    interval: Duration = 0
     # Deliveries per run at most, against flooding (a new key starts with an
     # empty ledger).
     max_per_run: pydantic.PositiveInt = 5
     max_retries: int = 3
-    lookback: int = 24  # hours: the candidates without --since or --item
+    lookback: Duration = 24 * 3600  # the candidates without --since or --item
 
 
 class ArtifactDeliveryOptions(DeliveryOptions):
@@ -183,7 +184,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         interval = self.options.interval
         if interval:
             last = db.last_delivered_at(key)
-            if last is not None and now - last < timedelta(minutes=interval):
+            if last is not None and now - last < timedelta(seconds=interval):
                 return []
             selected = selected[:1]
         return selected[: self.options.max_per_run]
@@ -269,7 +270,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
 
 class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
     """Delivers items, oldest first. Without `since` or item ids in scope,
-    the candidates are the items of the last `lookback` hours; with
+    the candidates are the items of the last `lookback`; with
     `required_key`, only those whose run of that annotation key finished. Each
     source is a strict FIFO queue: a row that is not due yet holds back the
     ones after it."""
@@ -293,7 +294,7 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
         now: datetime,
     ) -> None:
         if scope.since is None and scope.item_ids is None:
-            since = now - timedelta(hours=self.options.lookback)
+            since = now - timedelta(seconds=self.options.lookback)
             scope = dataclasses.replace(scope, since=since)
         db.queue_item_deliveries(key, scope, requires=self.required_key(self.options))
 
@@ -337,7 +338,7 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
 class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
     """Delivers the artifacts of the remixers its `artifacts` option names.
     Without `since` or `--artifact`, the candidates are those created in the
-    last `lookback` hours."""
+    last `lookback`."""
 
     selection_hint = "a forced delivery needs --artifact"
 
@@ -356,7 +357,7 @@ class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
         if artifacts:
             db.queue_artifact_deliveries(key, remixers, names=artifacts)
         else:
-            since = scope.since or now - timedelta(hours=self.options.lookback)
+            since = scope.since or now - timedelta(seconds=self.options.lookback)
             db.queue_artifact_deliveries(key, remixers, since=since)
 
     def queue_selected(

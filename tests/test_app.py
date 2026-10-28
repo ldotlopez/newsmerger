@@ -320,7 +320,7 @@ workflows:
     sources: [juntas]
     process: [markdownify, summarize]
     deliver:
-      - {sink: telegram, options: {chat_id: juntas, interval: 30, max_per_run: 1}}
+      - {sink: telegram, options: {chat_id: juntas, interval: 30m, max_per_run: 1}}
 """,
         )
         item = self.import_sample()  # a `mediterraneo` item

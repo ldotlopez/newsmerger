@@ -99,8 +99,8 @@ class TelegramSinkTests(TelegramTestCase):
         self.add_summarized(SOURCE_A, 3, 2, 30)
         self.add_summarized(SOURCE_B, 1)
 
-        self.deliver(interval=30)
-        self.deliver(interval=30)
+        self.deliver(interval="30m")
+        self.deliver(interval="30m")
         self.assertEqual(
             self.delivered(), {"h3": {"chat_id": "chat", "message_id": 42}}
         )

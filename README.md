@@ -47,7 +47,7 @@ db:
   content_dir: /path/to/content      # default: <user data dir>/newsmerger/content
 
 cache:
-  expiration: 21600                  # HTTP cache lifetime, in seconds
+  expiration: 6h                     # HTTP cache lifetime (seconds, or 5m, 2h, 3d)
 
 plugins:                             # defaults of each type's options
   ollama:
@@ -161,7 +161,7 @@ sinks:
   - sink: telegram
     id: politics
     key: telegram-politics
-    options: {chat_id: "-1001234", interval: 30, max_per_run: 1}
+    options: {chat_id: "-1001234", interval: 30m, max_per_run: 1}
   - sink: telegram_artifacts
     id: digests
     options: {artifacts: [digest]}
@@ -190,7 +190,7 @@ workflows:
     process: [markdownify, summarize]
     deliver:
       - sink: telegram
-        options: {chat_id: "-1009876", interval: 30, max_per_run: 1}
+        options: {chat_id: "-1009876", interval: 30m, max_per_run: 1}
 ```
 
 `skip_default` only leaves an entry out of `default`: the workflows that
@@ -208,7 +208,7 @@ process. A remix key belongs to one workflow, since artifacts belong to no
 source. A workflow's deliveries are recorded as `<workflow>/<key>`: the
 same item delivered by two workflows is sent by each, and renaming a
 workflow or a delivery key starts its record from scratch, so its last
-`lookback` hours are sent again (`max_per_run` limits how many at once).
+`lookback` is sent again (`max_per_run` limits how many at once).
 Ids, workflow names and remix and deliver keys use lowercase letters,
 digits, `_` and `-`; `default` is reserved.
 
@@ -415,10 +415,12 @@ Options of `ollama`: `api_base` (default `http://localhost:11434`),
 | `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `tags_embedding` or `markdown_embedding` (single-link) |
 | `digest` | `digest` | `<source id>/<since>_<until>` | Markdown digest of the highlights of each source in scope, written with an LLM from `markdown` |
 
-Options, in the type's section as defaults or per entry:
+Options, in the type's section as defaults or per entry. Lengths of time,
+here and in every other option, are seconds or a number with a unit suffix:
+`90s`, `5m`, `2h`, `3d`, `1h30m`.
 
-- `digest`: `llm` and `model` (see above), `days` (default 7: the scope
-  when it sets no `--since`), `max_items` (newest items per source, default
+- `digest`: `llm` and `model` (see above), `lookback` (default 7d: the
+  scope when it sets no `--since`), `max_items` (newest items per source, default
   50), `max_article_chars` (each article's markdown is cut to this, default
   3000) and `context_length` (the model's context window in tokens, default
   32768). Meant for one source: `remix digest --source <id>` for the last
@@ -427,9 +429,9 @@ Options, in the type's section as defaults or per entry:
   (the entry's key) lists them and rebuilding a period overwrites it.
 - `feedgenerator`: `title` (default `newsmerger feed`), `link`, `description`
   (default: the title), `max_items` (default 100).
-- `singlelink`, `avglink` and `embeddings`: `min_score` (default 0.3), `tau_hours` (time
-  decay, default 24; `null` disables it), `days` (default 7: the scope when
-  it sets no `--since`). `embeddings` adds `embedding` (`tags` or
+- `singlelink`, `avglink` and `embeddings`: `min_score` (default 0.3), `tau` (time
+  decay, default 24h; `null` disables it), `lookback` (default 7d: the scope
+  when it sets no `--since`). `embeddings` adds `embedding` (`tags` or
   `markdown`, default `tags`) and `embedding_weight` (0 to 1, default 0.5).
   Items without the annotations a remixer reads are left out of its groups,
   so `embeddings` needs `process` to have run `embed` with that input first.
@@ -445,9 +447,9 @@ lag behind the stored items. Remixers never act outside newsmerger.
 | `telegram` | `telegram_artifacts` | The artifacts of the remix keys in `artifacts` (e.g. `[digest]`), as documents |
 | `googlechat` | `googlechat` | Summarized items to a Google Chat space, by incoming webhook |
 
-Every sink takes `interval` (minutes between its deliveries,
+Every sink takes `interval` (time between its deliveries,
 default 0: no pacing), `max_per_run` (deliveries per run at most, default
-5), `max_retries` (default 3) and `lookback` (hours, default 24).
+5), `max_retries` (default 3) and `lookback` (default 24h).
 `telegram` adds `item_image` (post the item's image, when it has one, as a
 photo with the text as its caption; default true), `item_url_text` (the
 text of the link to the article, default `original article`),
@@ -480,7 +482,7 @@ plugins:
   googlechat:
     url: ${GOOGLECHAT_WEBHOOK_URL}
 sinks:
-  - {sink: telegram, id: chat, options: {interval: 30}}
+  - {sink: telegram, id: chat, options: {interval: 30m}}
   - {sink: telegram_artifacts, id: digests, options: {artifacts: [digest]}}
   - {sink: googlechat, id: space}
 workflows:
@@ -491,7 +493,7 @@ How `deliver` behaves:
 
 - Each run queues what is new, then delivers what is due. Without `--since`
   or `--item` (`--artifact` for artifact sinks), new means the subjects of
-  the last `lookback` hours without a delivery yet; `telegram` only queues
+  the last `lookback` without a delivery yet; `telegram` only queues
   items whose `summary` run finished. Run `deliver` (or `run`)
   periodically, e.g. from cron every few minutes.
 - Items go out oldest first. With an `interval`, an entry delivers one
@@ -528,7 +530,7 @@ databases (back up first):
   reused, which `--item` and `--annotation` rely on.
 - `scripts/migrate_telegram_state.py -c config.yaml`: turns the old
   `telegram/state` artifact into deliveries. Run it before the first
-  `deliver telegram`, or the last `lookback` hours are posted again.
+  `deliver telegram`, or the last `lookback` is posted again.
 - `sqlite3 -bail data.db < scripts/migrate_annotation_keys.sql`: keys
   processing state and annotations by annotation key,
   keeping every row and id. Run it before the first `process` on the new

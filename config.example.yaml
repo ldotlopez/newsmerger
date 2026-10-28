@@ -7,8 +7,10 @@
 # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set a level.
 # log_level: info
 
+# Lengths of time, here and in plugin options, are seconds or take a unit
+# suffix: 90s, 5m, 2h, 3d, 1h30m.
 cache:
-  expiration: 21600
+  expiration: 6h
 
 # Plugin types and the defaults of their options in every use of the type:
 # the catalog entries and the workflows' own entries below override them
@@ -33,7 +35,7 @@ plugins:
   feedgenerator:
     title: Castelló news
   digest:                            # sends a week of articles per source
-    days: 7
+    lookback: 7d
 
   telegram:                          # summarized items; uses may name their
     bot_token: ${TELEGRAM_BOT_TOKEN} # own bot and chat
@@ -128,14 +130,14 @@ remixers:
 
 # Each delivery records what it sent under `<workflow>/<key>`, the key being
 # the sink's name unless the entry names another; keys are unique per
-# workflow. Every sink takes `interval` (minutes between deliveries, oldest
+# workflow. Every sink takes `interval` (time between deliveries, oldest
 # first; default 0), `max_per_run` (default 5), `max_retries` and `lookback`.
 sinks:
   - sink: telegram                   # summarized items
     id: telegram-main
     options:
       chat_id: ${TELEGRAM_CHAT_ID}
-      interval: 30
+      interval: 30m
       item_image: true               # the item's image as a photo, if any
       item_url_text: original article # the link to the article
       summary: summary               # the annotation posted, e.g. summary/es
@@ -172,5 +174,5 @@ workflows:
       - sink: telegram
         options:
           chat_id: ${TELEGRAM_JUNTAS_CHAT_ID}
-          interval: 30
+          interval: 30m
           max_per_run: 1

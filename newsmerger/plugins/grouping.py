@@ -31,6 +31,7 @@ from typing import Any, Literal
 
 import pydantic
 
+from ..config import Duration
 from ..db import Database
 from ..models import ItemKey, ProcessingScope, SourceItem
 from ..remixers import BaseRemixer, RemixerType
@@ -43,8 +44,8 @@ ARTIFACT_NAME = "current"
 
 class GroupingOptions(PluginOptions):
     min_score: float = 0.3
-    tau_hours: float | None = 24.0
-    days: int = 7  # scope when it sets no `since`
+    tau: Duration | None = 24 * 3600  # time decay; None disables it
+    lookback: Duration = 7 * 86400  # scope when it sets no `since`
 
 
 class EmbeddingsOptions(GroupingOptions):
@@ -85,30 +86,27 @@ def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def time_decay(a: datetime | None, b: datetime | None, tau_hours: float) -> float:
+def time_decay(a: datetime | None, b: datetime | None, tau: float) -> float:
     """exp(-delta/tau): 1.0 for simultaneous items, decaying towards 0 as the
     gap between publish times grows. Missing timestamps don't penalize."""
     if a is None or b is None:
         return 1.0
-    delta_hours = abs((a - b).total_seconds()) / 3600.0
-    return math.exp(-delta_hours / tau_hours)
+    return math.exp(-abs((a - b).total_seconds()) / tau)
 
 
-def score_pair(a: ScoredItem, b: ScoredItem, tau_hours: float | None) -> float:
+def score_pair(a: ScoredItem, b: ScoredItem, tau: float | None) -> float:
     overlap = jaccard(a.tags, b.tags)
-    if overlap == 0.0 or tau_hours is None:
+    if overlap == 0.0 or tau is None:
         return overlap
-    return overlap * time_decay(a.item.published_at, b.item.published_at, tau_hours)
+    return overlap * time_decay(a.item.published_at, b.item.published_at, tau)
 
 
-def build_score_matrix(
-    items: list[ScoredItem], tau_hours: float | None
-) -> list[list[float]]:
+def build_score_matrix(items: list[ScoredItem], tau: float | None) -> list[list[float]]:
     """Full symmetric n x n pairwise score matrix (diagonal unused)."""
     n = len(items)
     matrix = [[0.0] * n for _ in range(n)]
     for i, j in combinations(range(n), 2):
-        matrix[i][j] = matrix[j][i] = score_pair(items[i], items[j], tau_hours)
+        matrix[i][j] = matrix[j][i] = score_pair(items[i], items[j], tau)
     return matrix
 
 
@@ -222,7 +220,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class GroupingRemixer(BaseRemixer):
-    """Groups the tagged items of the last `days` into events."""
+    """Groups the tagged items of the last `lookback` into events."""
 
     options_model = GroupingOptions
     options: GroupingOptions
@@ -233,7 +231,7 @@ class GroupingRemixer(BaseRemixer):
         options = self.options
         if scope.since is None:
             scope = dataclasses.replace(
-                scope, since=datetime.now(UTC) - timedelta(days=options.days)
+                scope, since=datetime.now(UTC) - timedelta(seconds=options.lookback)
             )
 
         items = db.get_items(scope)
@@ -259,7 +257,7 @@ class SingleLinkRemixer(GroupingRemixer):
     name = "singlelink"
 
     def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
-        scores = build_score_matrix(items, self.options.tau_hours)
+        scores = build_score_matrix(items, self.options.tau)
         return single_link_groups(items, scores, self.options.min_score)
 
 
@@ -267,7 +265,7 @@ class AverageLinkRemixer(GroupingRemixer):
     name = "avglink"
 
     def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
-        matrix = build_score_matrix(items, self.options.tau_hours)
+        matrix = build_score_matrix(items, self.options.tau)
         clusters = average_link_cluster(matrix, min_score=self.options.min_score)
 
         return [
@@ -303,10 +301,10 @@ class EmbeddingsRemixer(GroupingRemixer):
         cosine = max(cosine_similarity(embedding_a, embedding_b), 0.0)
         weight = options.embedding_weight
         blended = weight * cosine + (1 - weight) * jaccard(a.tags, b.tags)
-        if options.tau_hours is None:
+        if options.tau is None:
             return blended
         return blended * time_decay(
-            a.item.published_at, b.item.published_at, options.tau_hours
+            a.item.published_at, b.item.published_at, options.tau
         )
 
     def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:

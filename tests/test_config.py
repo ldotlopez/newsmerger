@@ -109,6 +109,17 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(section=section), self.assertRaises(ConfigError):
                 Config.from_text(section)
 
+    def test_durations_are_seconds_or_take_a_unit_suffix(self) -> None:
+        for text, seconds in (("90", 90), ("5m", 300), ("2h", 7200), ("3d", 259200)):
+            with self.subTest(text=text):
+                config = Config.from_text(f"cache:\n  expiration: {text}\n")
+                self.assertEqual(config.cache.expiration, seconds)
+
+    def test_invalid_durations_are_rejected(self) -> None:
+        for text in ("soon", "-5m", "-1"):
+            with self.subTest(text=text), self.assertRaises(ConfigError):
+                Config.from_text(f"cache:\n  expiration: {text}\n")
+
     def test_empty_plugin_section_enables_the_plugin(self) -> None:
         config = Config.from_text("plugins:\n  markdownify:\n  feedgenerator: {}\n")
 

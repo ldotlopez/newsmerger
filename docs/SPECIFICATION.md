@@ -71,7 +71,7 @@ workflows:
     remix: [...]
     deliver: [...]
 cache:
-  expiration: <seconds>    # HTTP cache lifetime
+  expiration: <duration>   # HTTP cache lifetime: seconds, or 5m, 2h, 3d
 db:
   uri: <sqlalchemy uri>    # default: <user data dir>/newsmerger/data.db
   content_dir: <path>      # default: <user data dir>/newsmerger/content
@@ -209,7 +209,7 @@ Sinks deliver items or artifacts and record every delivery. They run after
 remix, so they see freshly built artifacts.
 
 - **Candidates:** the subjects that have no delivery for the entry yet. By
-  default, those of the last `lookback` hours (24; items by publication,
+  default, those of the last `lookback` (24h; items by publication,
   artifacts by creation); an explicit date or selection replaces that
   window. An item sink can depend on an annotation key, like processor runs
   do, and then only queues items whose run of that key finished on their

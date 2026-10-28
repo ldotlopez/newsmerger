@@ -34,7 +34,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `app.py` | `Application`, the single entry point: registers the plugin classes, resolves the configuration into a `Catalog`, wires config, HTTP cache and database, builds each profile's object on first use (`_object`), runs the phases one unit at a time, each on its workflow's sources (`import_source`, `run_process`, `run_remix`, `run_delivery`; `sources()`, `process_keys()`, `remix_keys()` and `delivery_keys()` list a workflow's units in configuration order, `workflows` the workflows), answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
 | `cli.py` | Click commands only: the phases (`import`, `process`, `remix`, `deliver`, and `run` for all four), each for one workflow (`-w`, default `default`), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
 | `catalog.py` | `Catalog`: the configuration resolved against the registered classes, at start-up. Every use becomes a `Profile` (class, validated options), every workflow's runs a `Run` (workflow, key, profile), with every check of decision 0010 (sections, ids, keys, what runs read, LLMs). Builds nothing. |
-| `config.py` | Pydantic models for `config.yaml` (log level, `plugins` defaults per type, the catalog: `llms`, `sources`, `processors`, `remixers`, `sinks`; `workflows`, cache, database); `Config.all_workflows()` adds `default` (the sources without `skip_default`) and `Workflow.ledger_key` names a workflow's delivery records. `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of option errors with their config path. |
+| `config.py` | Pydantic models for `config.yaml` (log level, `plugins` defaults per type, the catalog: `llms`, `sources`, `processors`, `remixers`, `sinks`; `workflows`, cache, database); `Config.all_workflows()` adds `default` (the sources without `skip_default`) and `Workflow.ledger_key` names a workflow's delivery records. `Duration`, a length of time as seconds or with a unit suffix (`5m`, `2h`, `3d`), parsed to seconds at load. `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of option errors with their config path. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope` (`sources` holds a workflow's). |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
@@ -366,7 +366,7 @@ one).
 `digest` writes one markdown artifact per source in scope, named
 `<source id>/<since>_<until>` (YYYY-MM-DD), so each period is delivered
 once. It reads `markdown` of the newest `max_items` items
-per source published since `since` (default: the last `days`), cuts each to
+per source published since `since` (default: the last `lookback`), cuts each to
 `max_article_chars`, sends them oldest first in one prompt with a
 `context_length` window and prepends a `# <source name>: <since> – <until>`
 title to the model's answer.
@@ -381,7 +381,7 @@ the entry's ledger key:
 
 1. queue the candidates: `queue_item_deliveries` or
    `queue_artifact_deliveries` insert `queued` rows for the subjects in
-   scope without one (by default, those of the last `lookback` hours; item
+   scope without one (by default, those of the last `lookback`; item
    sinks only take items whose run of their `requires` key finished);
 2. read the sink's `queued`, `error` and `sending` rows with their subjects
    (`get_item_deliveries`, `get_artifact_deliveries`), in FIFO order; warn
