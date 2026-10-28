@@ -6,6 +6,7 @@ import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
+from ..config import Duration
 from ..db import Database
 from ..llms import strip_code_fence
 from ..models import ProcessingScope, SourceData, SourceItem
@@ -32,7 +33,7 @@ Articles:
 
 class DigestOptions(UsesLLMOptions):
     model: str | None = None
-    days: int = 7  # scope when it sets no `since`
+    lookback: Duration = 7 * 86400  # scope when it sets no `since`
     max_items: int = 50  # newest items per source
     max_article_chars: int = 3000  # each article's markdown is cut to this
     context_length: int = 32768  # the model's context window, in tokens
@@ -40,7 +41,7 @@ class DigestOptions(UsesLLMOptions):
 
 class DigestRemixer(BaseRemixer):
     """Writes a markdown digest of each source in scope from the markdown of
-    its newest items of the last `days`; one artifact per source, named
+    its newest items of the last `lookback`; one artifact per source, named
     `<source id>/<since>_<until>` (YYYY-MM-DD), so each period is a new
     artifact and rebuilding one overwrites it. Items without
     `markdownify.markdown` are left out."""
@@ -58,7 +59,7 @@ class DigestRemixer(BaseRemixer):
     ) -> Iterator[tuple[str, str, str]]:
         options = self.options
         now = datetime.now(UTC)
-        since = scope.since or now - timedelta(days=options.days)
+        since = scope.since or now - timedelta(seconds=options.lookback)
         until = scope.until or now
         items = db.get_items(dataclasses.replace(scope, since=since), newest_first=True)
         markdowns = db.get_annotation_values(items, key="markdown")

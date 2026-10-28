@@ -82,7 +82,7 @@ class GroupingTests(RemixerTestCase):
         self.db.record_result(item, "tagger", "tags", ProcessingStatus.DONE, value=tags)
 
     def groups(self, remixer_class) -> list[list[str]]:
-        cfg = grouping.GroupingOptions(tau_hours=None, days=10_000)
+        cfg = grouping.GroupingOptions(tau=None, lookback="10000d")
         remixer = remixer_class(cfg, Services())
         ((_, content, _),) = remixer.produce(self.db, ProcessingScope())
         return [
@@ -143,7 +143,7 @@ class EmbeddingGroupingTests(RemixerTestCase):
                 )
 
     def groups_of(self, **options) -> tuple[list[list[str]], dict]:
-        cfg = grouping.EmbeddingsOptions(tau_hours=None, days=10_000, **options)
+        cfg = grouping.EmbeddingsOptions(tau=None, lookback="10000d", **options)
         ((_, content, _),) = grouping.EmbeddingsRemixer(cfg, Services()).produce(
             self.db, ProcessingScope()
         )

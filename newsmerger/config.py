@@ -5,10 +5,11 @@ import re
 import string
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import platformdirs
 import pydantic
+import pytimeparse2
 import yaml
 from dotenv import dotenv_values
 from foundation.jsonlib import JsonCompatible
@@ -36,12 +37,29 @@ class MissingVariableError(ConfigError):
         self.location = location
 
 
+def parse_duration(value: Any) -> Any:
+    """Seconds from a duration with a unit suffix (`90s`, `5m`, `2h`, `3d`,
+    `1h30m`); numbers, and the rest, are left to the field's validation."""
+    if not isinstance(value, str):
+        return value
+    seconds = pytimeparse2.parse(value)
+    if seconds is None:
+        raise ValueError(f"invalid duration '{value}': use seconds or 5m, 2h, 3d")
+    return seconds
+
+
+# A length of time in the config: seconds, or a string with a unit suffix.
+type Duration = Annotated[
+    float, pydantic.BeforeValidator(parse_duration), pydantic.Field(ge=0)
+]
+
+
 class CacheConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     base_dir: Path = pydantic.Field(
         default_factory=lambda: platformdirs.user_cache_path(PACKAGE_NAME)
     )
-    expiration: float = 60 * 60
+    expiration: Duration = 60 * 60
 
 
 class DatabaseConfig(pydantic.BaseModel):

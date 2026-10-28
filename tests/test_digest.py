@@ -106,7 +106,7 @@ class DigestRemixerTests(unittest.TestCase):
     def test_nothing_in_scope_produces_nothing(self) -> None:
         self.add_item(SOURCE, 1, "Body")
 
-        llm, artifacts = self.digest(ProcessingScope(), days=7)
+        llm, artifacts = self.digest(ProcessingScope(), lookback="7d")
 
         self.assertEqual(artifacts, [])
         llm.prompt.assert_not_called()
