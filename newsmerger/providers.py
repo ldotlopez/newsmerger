@@ -1,13 +1,15 @@
+from __future__ import annotations
+
 import logging
 from abc import abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from typing import Any, Protocol, runtime_checkable
 
 import pydantic
 
 from .httpclient import HTTPClient
 from .models import SourceData, SourceItemData
-from .plugins import NoOptions
+from .plugins import NoOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -15,22 +17,39 @@ type URI = str
 
 
 @runtime_checkable
-class Provider[O: pydantic.BaseModel](Protocol):
-    """Retrieves a source's items. Sources name it in `provider:`; their
-    `options` are validated once, at startup, by `use_options`, and passed to
-    every `retrieve_items`."""
-
-    def use_options(self, overrides: Mapping[str, Any]) -> O:
-        """A source's options over the plugin section's defaults. Raise
-        `pydantic.ValidationError` for options the provider does not take."""
-        ...
+class Provider(Protocol):
+    """Retrieves a source's items."""
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient, options: O
+        self, source: SourceData, fetcher: HTTPClient
     ) -> Iterator[SourceItemData]: ...
 
 
-class IndexSiteProvider:
+@runtime_checkable
+class ProviderType(Protocol):
+    """A Provider class, as plugins register it: each source builds one with
+    its options, validated at startup with `options_model`."""
+
+    options_model: type[pydantic.BaseModel]
+
+    def __call__(self, options: Any, services: Services) -> Provider: ...
+
+
+class BaseProvider:
+    """A Provider built with its source's options."""
+
+    options_model: type[pydantic.BaseModel] = NoOptions
+
+    def __init__(self, options: Any, services: Services) -> None:
+        self.options = options
+
+    @abstractmethod
+    def retrieve_items(
+        self, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[SourceItemData]: ...
+
+
+class IndexSiteProvider(BaseProvider):
     """A Provider for a site with an index page listing article URLs, one
     item per article."""
 
@@ -45,15 +64,12 @@ class IndexSiteProvider:
     @abstractmethod
     def parse_item(self, content: bytes) -> SourceItemData: ...
 
-    def use_options(self, overrides: Mapping[str, Any]) -> NoOptions:
-        return NoOptions.model_validate(overrides)
-
     def retrieve_item(self, url: str, fetcher: HTTPClient) -> SourceItemData:
         """Fetch and parse one item URL."""
         return self.parse_item(fetcher.get(url))
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient, options: NoOptions
+        self, source: SourceData, fetcher: HTTPClient
     ) -> Iterator[SourceItemData]:
         index = fetcher.get(self.index_url(source))
         for url in self.parse_index(index, source, fetcher):

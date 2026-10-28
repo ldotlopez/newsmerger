@@ -7,12 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
 
-import pydantic
-
 from newsmerger.db import Database, ProcessingStatus
+from newsmerger.llms import LLMUnavailableError
 from newsmerger.models import ProcessingScope, SourceData, SourceItem
 from newsmerger.plugins import Services, digest
-from newsmerger.remixers import Remixer, UnavailableRemixer
+from newsmerger.remixers import RemixerType
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 OTHER_SOURCE = SourceData(id="o", name="O", url="https://o.test/", provider="plaza")
@@ -50,8 +49,9 @@ class DigestRemixerTests(unittest.TestCase):
     ) -> tuple[Mock, list[tuple[str, str, str]]]:
         llm = Mock()
         llm.prompt.return_value = response
-        remixer = digest.DigestRemixer(llm, digest.Options(**options))
-        return llm, list(remixer.produce(self.db, scope, remixer.use_options({})))
+        services = Services(llm_factory=lambda name: llm)
+        remixer = digest.DigestRemixer(digest.DigestOptions(**options), services)
+        return llm, list(remixer.produce(self.db, scope))
 
     def test_digests_newest_items_with_markdown_oldest_first(self) -> None:
         self.add_item(SOURCE, 1, "Body 1")
@@ -123,30 +123,22 @@ class DigestRemixerTests(unittest.TestCase):
 class DigestPluginTests(unittest.TestCase):
     def test_uses_the_requested_llm(self) -> None:
         llm = Mock()
+        requested: list[str | None] = []
 
-        ((name, protocol, remixer),) = digest.__newsmerger_plugin__(
-            Services({"ollama": llm}), model="writer"
-        )
+        def factory(name: str | None) -> Mock:
+            requested.append(name)
+            return llm
 
-        self.assertEqual((name, protocol), ("digest", Remixer))
+        ((name, protocol, cls),) = digest.__newsmerger_plugin__()
+        remixer = cls(digest.DigestOptions(llm="writer"), Services(factory))
+
+        self.assertEqual((name, protocol), ("digest", RemixerType))
         self.assertIs(remixer.llm, llm)
-        self.assertEqual(remixer.use_options({}).model, "writer")
-        self.assertEqual(remixer.use_options({"model": "other"}).model, "other")
+        self.assertEqual(requested, ["writer"])
 
-    def test_without_its_llm_it_logs_and_produces_nothing(self) -> None:
-        ((name, _, remixer),) = digest.__newsmerger_plugin__(Services())
-
-        self.assertEqual(name, "digest")
-        self.assertIsInstance(remixer, UnavailableRemixer)
-        with self.assertLogs("newsmerger.remixers", "ERROR") as logs:
-            options = remixer.use_options({})
-            self.assertEqual(remixer.remix(Mock(), key="digest", options=options), [])
-        with self.assertRaises(pydantic.ValidationError):
-            remixer.use_options({"temperature": 1})
-        self.assertIn(
-            "digest: no llm is loaded (llm plugins must be listed before the plugins that use them); nothing produced",
-            logs.output[0],
-        )
+    def test_cannot_be_built_without_an_llm(self) -> None:
+        with self.assertRaises(LLMUnavailableError):
+            digest.DigestRemixer(digest.DigestOptions(), Services())
 
 
 if __name__ == "__main__":

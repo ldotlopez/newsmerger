@@ -11,7 +11,7 @@ from pathlib import Path
 from newsmerger.db import Database, ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceData, SourceItem
 from newsmerger.plugins import Services, feedgenerator, grouping
-from newsmerger.remixers import Remixer
+from newsmerger.remixers import RemixerType
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 
@@ -47,9 +47,10 @@ class RemixerTestCase(unittest.TestCase):
 
 class FeedGeneratorTests(RemixerTestCase):
     def feed(self, **params) -> ET.Element:
-        remixer = feedgenerator.FeedGeneratorRemixer(feedgenerator.Options(**params))
-        options = remixer.use_options({})
-        (artifact,) = remixer.produce(self.db, ProcessingScope(), options)
+        remixer = feedgenerator.FeedGeneratorRemixer(
+            feedgenerator.Options(**params), Services()
+        )
+        (artifact,) = remixer.produce(self.db, ProcessingScope())
         name, content, content_type = artifact
         self.assertEqual((name, content_type), ("feed", "application/rss+xml"))
         return ET.fromstring(content)
@@ -82,7 +83,8 @@ class GroupingTests(RemixerTestCase):
 
     def groups(self, remixer_class) -> list[list[str]]:
         cfg = grouping.GroupingOptions(tau_hours=None, days=10_000)
-        ((_, content, _),) = remixer_class(cfg).produce(self.db, ProcessingScope(), cfg)
+        remixer = remixer_class(cfg, Services())
+        ((_, content, _),) = remixer.produce(self.db, ProcessingScope())
         return [
             sorted(member["uid"] for member in group["members"])
             for group in json.loads(content)["groups"]
@@ -112,9 +114,9 @@ class GroupingTests(RemixerTestCase):
     def test_nothing_to_group_produces_no_artifact(self) -> None:
         self.add_items(1)
         cfg = grouping.GroupingOptions()
-        remixer = grouping.SingleLinkRemixer(cfg)
+        remixer = grouping.SingleLinkRemixer(cfg, Services())
 
-        self.assertEqual(list(remixer.produce(self.db, ProcessingScope(), cfg)), [])
+        self.assertEqual(list(remixer.produce(self.db, ProcessingScope())), [])
 
 
 class EmbeddingGroupingTests(RemixerTestCase):
@@ -142,8 +144,8 @@ class EmbeddingGroupingTests(RemixerTestCase):
 
     def groups_of(self, **options) -> tuple[list[list[str]], dict]:
         cfg = grouping.EmbeddingsOptions(tau_hours=None, days=10_000, **options)
-        ((_, content, _),) = grouping.EmbeddingsRemixer(cfg).produce(
-            self.db, ProcessingScope(), cfg
+        ((_, content, _),) = grouping.EmbeddingsRemixer(cfg, Services()).produce(
+            self.db, ProcessingScope()
         )
         payload = json.loads(content)
         groups = [
@@ -173,24 +175,14 @@ class EmbeddingGroupingTests(RemixerTestCase):
 
 
 class GroupingPluginTests(unittest.TestCase):
-    def names(self, **options) -> list[str]:
-        return [
-            name for name, _, _ in grouping.__newsmerger_plugin__(Services(), **options)
-        ]
+    def test_registers_every_remixer_class(self) -> None:
+        registered = grouping.__newsmerger_plugin__()
 
-    def test_no_sections_enable_every_remixer(self) -> None:
-        self.assertEqual(self.names(), ["singlelink", "avglink", "embeddings"])
-
-    def test_sections_enable_only_the_listed_remixers_with_defaults(self) -> None:
-        ((name, protocol, remixer),) = grouping.__newsmerger_plugin__(
-            Services(), avglink={"min_score": 0.5}
-        )
-
-        self.assertEqual((name, protocol), ("avglink", Remixer))
-        options = remixer.use_options({})
-        self.assertEqual((options.min_score, options.days), (0.5, 7))
-        self.assertEqual(remixer.use_options({"days": 3}).days, 3)
-        self.assertEqual(self.names(embeddings=None), ["embeddings"])
+        names = [name for name, _, _ in registered]
+        self.assertEqual(names, ["singlelink", "avglink", "embeddings"])
+        for _, protocol, cls in registered:
+            self.assertIs(protocol, RemixerType)
+            self.assertIsInstance(cls, RemixerType)
 
 
 if __name__ == "__main__":

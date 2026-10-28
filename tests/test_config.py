@@ -104,7 +104,8 @@ class ConfigTests(unittest.TestCase):
             Config.from_text(duplicated)
 
     def test_unknown_sections_are_rejected(self) -> None:
-        for section in ("pipelines: []\n", "processors: []\n", "remixers: []\n"):
+        # `process`, `remix` and `deliver` were the default workflow's runs.
+        for section in ("pipelines: []\n", "process: []\n", "deliver: []\n"):
             with self.subTest(section=section), self.assertRaises(ConfigError):
                 Config.from_text(section)
 
@@ -117,22 +118,75 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Config.from_text("plugins:\n  feedgenerator: [title]\n")
 
-    def test_process_entries_are_a_name_or_a_processor_with_key_and_options(
+    def test_catalog_entries_are_a_name_or_a_type_with_id_key_and_options(
         self,
     ) -> None:
         config = Config.from_text(
-            "process:\n  - markdownify\n"
-            "  - {processor: summarize, key: summary/es, options: {model: m}}\n"
+            "processors:\n  - markdownify\n"
+            "  - {processor: summarize, id: summary-es, key: summary/es,"
+            " options: {model: m}}\n"
         )
 
         self.assertEqual(
-            [(entry.processor, entry.key, entry.options) for entry in config.process],
-            [("markdownify", None, {}), ("summarize", "summary/es", {"model": "m"})],
+            [
+                (entry.processor, entry.id, entry.key, entry.options)
+                for entry in config.processors
+            ],
+            [
+                ("markdownify", None, None, {}),
+                ("summarize", "summary-es", "summary/es", {"model": "m"}),
+            ],
         )
 
-    def test_process_entries_reject_unknown_fields(self) -> None:
+    def test_catalog_entries_reject_unknown_fields(self) -> None:
         with self.assertRaises(ConfigError):
-            Config.from_text("process:\n  - {enricher: summarize}\n")
+            Config.from_text("processors:\n  - {enricher: summarize}\n")
+
+    def test_catalog_ids_are_unique_per_section(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "processors: id.s. a used twice"):
+            Config.from_text(
+                "processors:\n  - {processor: summarize, id: a}\n"
+                "  - {processor: tagger, id: a}\n"
+                "remixers:\n  - {remixer: digest, id: a}\n"
+            )
+        with self.assertRaisesRegex(ConfigError, "invalid id 'A b'"):
+            Config.from_text("sinks:\n  - {sink: telegram, id: A b}\n")
+
+    def test_workflow_entries_are_references_or_entries_of_its_own(self) -> None:
+        config = Config.from_text(
+            SOURCE + "workflows:\n  - name: w\n    sources: [plaza]\n"
+            "    process: [markdownify, {processor: summarize, key: s}]\n"
+        )
+
+        (workflow,) = config.workflows
+        reference, own = workflow.process
+        self.assertEqual(reference, "markdownify")
+        self.assertEqual((own.processor, own.key), ("summarize", "s"))
+
+    def test_workflow_entries_have_no_id_nor_skip_default(self) -> None:
+        for entry in (
+            "{processor: summarize, id: s}",
+            "{remixer: digest, skip_default: true}",
+        ):
+            section = "remix" if "remixer" in entry else "process"
+            with (
+                self.subTest(entry=entry),
+                self.assertRaisesRegex(ConfigError, "only catalog entries do"),
+            ):
+                Config.from_text(
+                    SOURCE + f"workflows:\n  - name: w\n    sources: [plaza]\n"
+                    f"    {section}: [{entry}]\n"
+                )
+
+    def test_default_workflow_has_the_sources_without_skip_default(self) -> None:
+        config = Config.from_text(
+            SOURCE + "  - {id: other, name: O, provider: plaza, url: 'https://o.test/',"
+            " skip_default: true}\n"
+        )
+
+        (default,) = config.all_workflows()
+        self.assertEqual((default.name, default.sources), ("default", ["plaza"]))
+        self.assertEqual((default.process, default.deliver), ([], []))
 
     def test_unconfigured_source_has_clear_error(self) -> None:
         with self.assertRaisesRegex(ConfigError, "source 'missing' is not configured"):

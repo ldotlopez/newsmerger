@@ -1,13 +1,11 @@
 """The `ollama` LLM: one Ollama server, with default models for prompts and
 embeddings that processors may override."""
 
-from typing import Any
-
 import ollama
 import pydantic
 
-from ..llms import LLM
-from . import PluginObjects, PluginOptions, Services
+from ..llms import LLMType
+from . import PluginOptions, PluginTypes, Services
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_CHAT_MODEL = "gemma4:12b"
@@ -22,12 +20,12 @@ class Options(PluginOptions):
 
 
 class OllamaLLM:
-    def __init__(
-        self, client: ollama.Client, chat_model: str, embed_model: str
-    ) -> None:
-        self.client = client
-        self.chat_model = chat_model
-        self.embed_model = embed_model
+    options_model = Options
+
+    def __init__(self, options: Options, services: Services) -> None:
+        self.client = ollama_client(options)
+        self.chat_model = options.chat_model
+        self.embed_model = options.embed_model
 
     def prompt(
         self,
@@ -59,7 +57,5 @@ def ollama_client(cfg: Options) -> ollama.Client:
     return ollama.Client(host=cfg.api_base, headers=headers)
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    llm = OllamaLLM(ollama_client(cfg), cfg.chat_model, cfg.embed_model)
-    return [("ollama", LLM, llm)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("ollama", LLMType, OllamaLLM)]

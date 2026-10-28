@@ -1,8 +1,8 @@
 """The `googlechat` sink posts summarized items (title, the `summary` option's
 annotation, link and image, see `WebhookOptions`) to a
 Google Chat space through an incoming webhook, given either as its `url` or
-as its `channel` (space id) and `token`, in the section (the default) or in
-each `deliver:` entry. What was delivered is in the ledger
+as its `channel` (space id) and `token`, in the `plugins` section (the
+default) or in each use. What was delivered is in the ledger
 (`inspect deliveries`), so nothing is ever posted twice unless forced.
 """
 
@@ -16,8 +16,8 @@ from pydantic import SecretStr
 
 from ..db import Database
 from ..models import SourceItem
-from ..sinks import BaseItemSink, DeliveryOptions, Sink
-from . import PluginObjects, PluginOptions, Services
+from ..sinks import BaseItemSink, DeliveryOptions, SinkType
+from . import PluginTypes
 
 # The API key Google puts in every incoming webhook URL; only the token is secret.
 WEBHOOK_KEY = "AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"
@@ -48,14 +48,6 @@ def image_card(image_url: str, alt_text: str) -> dict[str, Any]:
             ]
         },
     }
-
-
-class Options(PluginOptions):
-    """Defaults for every entry."""
-
-    url: SecretStr | None = None
-    channel: str | None = None
-    token: SecretStr | None = None
 
 
 class WebhookOptions(DeliveryOptions):
@@ -89,12 +81,12 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
     name = "googlechat"
     options_model = WebhookOptions
 
-    def required_key(self, options: WebhookOptions) -> str:
+    @classmethod
+    def required_key(cls, options: WebhookOptions) -> str:
         return options.summary
 
-    def send(
-        self, db: Database, subject: SourceItem, options: WebhookOptions
-    ) -> dict[str, str]:
+    def send(self, db: Database, subject: SourceItem) -> dict[str, str]:
+        options = self.options
         summaries = db.get_annotation_values([subject], key=options.summary)
         message: dict[str, Any] = {
             "text": build_text(
@@ -122,6 +114,5 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
         return {"message": result["name"]}
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    sink = GoogleChatSink(Options.model_validate(options))
-    return [(sink.name, Sink, sink)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(GoogleChatSink.name, SinkType, GoogleChatSink)]

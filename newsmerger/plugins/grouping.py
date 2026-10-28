@@ -15,9 +15,6 @@ are left out.
   catches variants of the same entity ("BCE" vs "Banco Central Europeo").
   The score is (weight * cosine + (1 - weight) * jaccard) * time decay, so
   `embedding_weight=0` reproduces `singlelink`.
-
-Without per-remixer sections all three are enabled with their defaults;
-with sections, only the listed ones are.
 """
 
 from __future__ import annotations
@@ -36,8 +33,8 @@ import pydantic
 
 from ..db import Database
 from ..models import ItemKey, ProcessingScope, SourceItem
-from ..remixers import BaseRemixer, Remixer
-from . import PluginObjects, PluginOptions, Services
+from ..remixers import BaseRemixer, RemixerType
+from . import PluginOptions, PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,17 +50,6 @@ class GroupingOptions(PluginOptions):
 class EmbeddingsOptions(GroupingOptions):
     embedding: Literal["tags", "markdown"] = "tags"
     embedding_weight: float = pydantic.Field(default=0.5, ge=0.0, le=1.0)
-
-
-class Options(PluginOptions):
-    singlelink: GroupingOptions = GroupingOptions()
-    avglink: GroupingOptions = GroupingOptions()
-    embeddings: EmbeddingsOptions = EmbeddingsOptions()
-
-    @pydantic.field_validator("singlelink", "avglink", "embeddings", mode="before")
-    @classmethod
-    def empty_section_takes_defaults(cls, value: Any) -> Any:
-        return {} if value is None else value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -236,14 +222,15 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class GroupingRemixer(BaseRemixer):
-    """Groups the tagged items of the last `days` into events. Every option
-    is per `remix:` entry; the plugin's subsection sets their defaults."""
+    """Groups the tagged items of the last `days` into events."""
 
     options_model = GroupingOptions
+    options: GroupingOptions
 
     def produce(
-        self, db: Database, scope: ProcessingScope, options: GroupingOptions
+        self, db: Database, scope: ProcessingScope
     ) -> Iterator[tuple[str, str, str]]:
+        options = self.options
         if scope.since is None:
             scope = dataclasses.replace(
                 scope, since=datetime.now(UTC) - timedelta(days=options.days)
@@ -259,35 +246,29 @@ class GroupingRemixer(BaseRemixer):
         payload = {
             "generated_at": datetime.now(UTC).isoformat(),
             "params": {"algorithm": self.name, **options.model_dump()},
-            "groups": self.group(db, scored, options),
+            "groups": self.group(db, scored),
         }
         yield ARTIFACT_NAME, json.dumps(payload, indent=2), "application/json"
 
     @abstractmethod
-    def group(
-        self, db: Database, items: list[ScoredItem], options: GroupingOptions
-    ) -> list[dict[str, Any]]:
+    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
         """Cluster the items; return one payload dict per group, largest first."""
 
 
 class SingleLinkRemixer(GroupingRemixer):
     name = "singlelink"
 
-    def group(
-        self, db: Database, items: list[ScoredItem], options: GroupingOptions
-    ) -> list[dict[str, Any]]:
-        scores = build_score_matrix(items, options.tau_hours)
-        return single_link_groups(items, scores, options.min_score)
+    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+        scores = build_score_matrix(items, self.options.tau_hours)
+        return single_link_groups(items, scores, self.options.min_score)
 
 
 class AverageLinkRemixer(GroupingRemixer):
     name = "avglink"
 
-    def group(
-        self, db: Database, items: list[ScoredItem], options: GroupingOptions
-    ) -> list[dict[str, Any]]:
-        matrix = build_score_matrix(items, options.tau_hours)
-        clusters = average_link_cluster(matrix, min_score=options.min_score)
+    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+        matrix = build_score_matrix(items, self.options.tau_hours)
+        clusters = average_link_cluster(matrix, min_score=self.options.min_score)
 
         return [
             {
@@ -309,6 +290,7 @@ class AverageLinkRemixer(GroupingRemixer):
 class EmbeddingsRemixer(GroupingRemixer):
     name = "embeddings"
     options_model = EmbeddingsOptions
+    options: EmbeddingsOptions
 
     @staticmethod
     def score(
@@ -327,9 +309,8 @@ class EmbeddingsRemixer(GroupingRemixer):
             a.item.published_at, b.item.published_at, options.tau_hours
         )
 
-    def group(
-        self, db: Database, items: list[ScoredItem], options: EmbeddingsOptions
-    ) -> list[dict[str, Any]]:
+    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+        options = self.options
         embedding_key = f"{options.embedding}_embedding"
         vectors = db.get_annotation_values(
             [scored.item for scored in items], key=embedding_key
@@ -347,13 +328,6 @@ class EmbeddingsRemixer(GroupingRemixer):
         return single_link_groups(embedded, scores, options.min_score)
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    builders = {
-        "singlelink": lambda: SingleLinkRemixer(cfg.singlelink),
-        "avglink": lambda: AverageLinkRemixer(cfg.avglink),
-        "embeddings": lambda: EmbeddingsRemixer(cfg.embeddings),
-    }
-    enabled = [name for name in options if name in builders] or list(builders)
-    remixers = [builders[name]() for name in enabled]
-    return [(remixer.name, Remixer, remixer) for remixer in remixers]
+def __newsmerger_plugin__() -> PluginTypes:
+    remixers = [SingleLinkRemixer, AverageLinkRemixer, EmbeddingsRemixer]
+    return [(remixer.name, RemixerType, remixer) for remixer in remixers]

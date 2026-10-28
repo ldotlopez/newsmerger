@@ -5,9 +5,8 @@ import dataclasses
 import hashlib
 import logging
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from datetime import datetime
-from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import bs4
@@ -20,8 +19,8 @@ from pydantic import PositiveInt
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import Provider
-from . import PluginObjects, PluginOptions, Services, merge_options
+from ..providers import BaseProvider, ProviderType
+from . import PluginOptions, PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -124,12 +123,9 @@ def parse_article(content: bytes, post: Post | None = None) -> SourceItemData:
     )
 
 
-class TelegramChannelProvider:
-    def __init__(self, cfg: Options) -> None:
-        self.cfg = cfg
-
-    def use_options(self, overrides: Mapping[str, Any]) -> Options:
-        return merge_options(Options, self.cfg, overrides)
+class TelegramChannelProvider(BaseProvider):
+    options_model = Options
+    options: Options
 
     def iter_posts(
         self, source: SourceData, fetcher: HTTPClient, pages: int
@@ -146,9 +142,9 @@ class TelegramChannelProvider:
             yield from posts
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient, options: Options
+        self, source: SourceData, fetcher: HTTPClient
     ) -> Iterator[SourceItemData]:
-        for post in self.iter_posts(source, fetcher, options.pages):
+        for post in self.iter_posts(source, fetcher, self.options.pages):
             for url in post.links:
                 try:
                     item = parse_article(fetcher.get(url), post)
@@ -160,6 +156,5 @@ class TelegramChannelProvider:
                     yield item
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    return [("telegram_channel", Provider, TelegramChannelProvider(cfg))]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("telegram_channel", ProviderType, TelegramChannelProvider)]

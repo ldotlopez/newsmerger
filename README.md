@@ -42,12 +42,6 @@ Pass a YAML file with `-c/--config`. Every section is optional;
 `config.example.yaml` is a starting point.
 
 ```yaml
-sources:
-  - id: castellonplaza               # required, stable: part of each item's key
-    name: Castellón Plaza
-    provider: plaza                  # see "Providers" below
-    url: https://castellonplaza.com/castellon9/
-
 db:
   uri: sqlite:////path/to/data.db    # default: <user data dir>/newsmerger/data.db
   content_dir: /path/to/content      # default: <user data dir>/newsmerger/content
@@ -55,28 +49,41 @@ db:
 cache:
   expiration: 21600                  # HTTP cache lifetime, in seconds
 
-plugins:                             # plugins and their options, in this order
-  ollama:                            # an LLM, for the plugins that use one
+plugins:                             # defaults of each type's options
+  ollama:
     api_base: https://ollama.example.com
     api_key: ${OLLAMA_API_KEY}
-  tagger:                            # empty or missing: the plugin's defaults
+  tagger:
     model: gemma4:12b
   telegram:
     bot_token: ${TELEGRAM_BOT_TOKEN}
-    chat_id: ${TELEGRAM_CHAT_ID}       # the default for every delivery entry
   feedgenerator:
     title: Castelló news
 
-process:                             # processor runs, in order
+llms:                                # the first serves those that name none
+  - ollama
+
+sources:
+  - id: castellonplaza               # required, stable: part of each item's key
+    name: Castellón Plaza
+    provider: plaza                  # see "Providers" below
+    url: https://castellonplaza.com/castellon9/
+
+processors:                          # the `default` workflow runs them in order
   - markdownify
   - summarize
   - tagger
 
-remix:                               # remixer runs, in order
+remixers:
   - feedgenerator
 
-deliver:                             # sink runs, in order
-  - telegram
+sinks:                               # delivered by workflows only
+  - {sink: telegram, id: main-chat, options: {chat_id: "${TELEGRAM_CHAT_ID}"}}
+
+workflows:
+  - name: channel
+    sources: [castellonplaza]
+    deliver: [main-chat]
 ```
 
 A source's `id` identifies its items: its `url` and `provider` can change
@@ -98,83 +105,86 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
-A plugin's section under `plugins` holds its options: the missing ones
-take the defaults listed below, and unknown or invalid ones are rejected
-with their path (`plugins.summarize.max_retries: ...`). Plugins with a
-section are loaded in its order. Then, a provider that a source names or a
-processor that a `process` entry names, if no listed plugin provides it,
-loads the plugin of the same name with its defaults, and so does a
-remixer or sink that a `remix` or `deliver` entry names; so a plugin needs
-a section only for options. A name no plugin provides fails every command at
-start-up (`sources.<id>.provider: no plugin provides '<name>'`). Only the
-entries run: a processor, remixer or sink that is loaded but not listed
-never does.
+### Plugin types and the catalog
 
-The `process` section lists the processor runs, in order. An entry is a
-processor's name, or a processor with `key` and `options` for that run.
-Every run writes one annotation **key**, the processor's own unless the
-entry names another with `key` (lowercase words, optionally in
-`/`-separated parts: `summary`, `summary/es`). A key is written by one entry
-per item (see *Workflows*), so a processor can run several times with
-different options and keys:
+Plugins provide **types**: providers, processors, remixers, sinks and LLMs,
+each with a name (listed below). `plugins.<type>` holds the defaults of a
+type's options for every use of it; the missing ones take the defaults
+listed below, and unknown or invalid ones are rejected with their path
+(`plugins.summarize.max_retries: ...`). A section builds nothing.
+
+The **catalog** lists the uses: `llms`, `sources`, `processors`,
+`remixers` and `sinks`. An entry is a type name, or a type with `id`, `key`
+and `options`. Its options override its type's section, merged key by key
+in nested mappings (any other value, lists included, replaces). `id` names
+the entry so workflows can refer to it, and cannot be a type's name.
+Everything in the catalog is checked at start-up, whether a workflow runs
+it or not; an object is built only when a run needs it.
+
+Every processor run writes one annotation **key**, the processor's own
+unless the entry names another with `key` (lowercase words, optionally in
+`/`-separated parts: `summary`, `summary/es`), so a processor can run
+several times with different options and keys:
 
 ```yaml
-process:
+processors:
   - markdownify                      # writes `markdown`
-  - processor: summarize             # writes `summary`
+  - summarize                        # writes `summary`
   - processor: summarize
+    id: summary-es                   # for the workflows that name it
     key: summary/es
+    skip_default: true
     options:
       prompt: "Resume en español el siguiente artículo:\n\n"
       model: gemma4:27b
 ```
 
-A run's options override, for that run only, those of the processor's
-plugin section; the ones a processor takes are listed below. An entry whose
-processor is not loaded, or that gives it an option it does not take, fails
-every command at start-up with the option's path
-(`process.1.options.temperature: Extra inputs are not permitted`).
+An entry that gives its type an option it does not take fails every command
+at start-up with the option's path
+(`processors.1.options.temperature: Extra inputs are not permitted`).
 
-`remix` and `deliver` entries work the same way: a remixer's or sink's name,
-or one with `key` and `options`. A remix entry saves its artifacts under its
-key (default: the remixer's name), so a remixer can run twice with different
-options; remix keys are unique across workflows. A deliver entry records
-its deliveries under its key (default: the sink's name), unique within its
-workflow, so a sink can post to several places:
+Remixer and sink entries work the same way. A remix run saves its
+artifacts under its key (default: the remixer's name), so a remixer can run
+twice with different options; a remix key belongs to one workflow. A
+delivery records what it sent under its key (default: the sink's name),
+unique within its workflow, so a sink can post to several places:
 
 ```yaml
-remix:
+remixers:
   - feedgenerator                    # artifacts `feedgenerator/...`
   - remixer: feedgenerator           # artifacts `short/...`
     key: short
     options: {title: Headlines, max_items: 10}
 
-deliver:
-  - telegram                         # the section's chat_id
+sinks:
+  - {sink: telegram, id: main-chat}  # the section's chat_id
   - sink: telegram
+    id: politics
     key: telegram-politics
     options: {chat_id: "-1001234", interval: 30, max_per_run: 1}
   - sink: telegram_artifacts
+    id: digests
     options: {artifacts: [digest]}
 ```
 
-`grouping` bundles several remixers, each with its own subsection, whose
-options are the defaults of its entries. With no subsections, all of them
-are enabled with their defaults; with some, only those are. `telegram`
-provides both its sinks.
-
 ### Workflows
 
-The root `process`, `remix` and `deliver` are the `default` workflow, which
-uses every source except those with `default: false`. `workflows` lists
-more, each with the ids of its sources and its own entries:
+The `default` workflow uses every source and runs every catalog processor
+and remixer, in order, except those with `skip_default: true`; it delivers
+nothing. `workflows` lists more, each with the ids of its sources and its
+runs: a catalog `id`, a type name (the type with its section's options) or
+an entry of its own, without `id`. A reference runs the entry as it is; to
+change an option, write an entry of the workflow's own.
 
 ```yaml
 sources:
   - {id: castellonplaza, name: Castellón Plaza, provider: plaza, url: ...}
-  - {id: juntas, name: Juntas, provider: csjuntasgobierno, url: ..., default: false}
+  - {id: juntas, name: Juntas, provider: csjuntasgobierno, url: ..., skip_default: true}
 
 workflows:
+  - name: main-channel               # delivers what `default` processes
+    sources: [castellonplaza]
+    deliver: [main-chat, digests]
   - name: juntas-channel
     sources: [juntas]
     process: [markdownify, summarize]
@@ -183,34 +193,37 @@ workflows:
         options: {chat_id: "-1009876", interval: 30, max_per_run: 1}
 ```
 
-Commands run `default` unless given `-w/--workflow NAME`, so each workflow
-is its own cron line (`newsmerger run -w juntas-channel`). A workflow only
-touches its sources: `import` fetches them, and `process`, `remix` and
-`deliver` see only their items.
+`skip_default` only leaves an entry out of `default`: the workflows that
+name it still run it. Commands run `default` unless given `-w/--workflow
+NAME`, so each workflow is its own cron line (`newsmerger run -w
+juntas-channel`). A workflow only touches its sources: `import` fetches
+them, and `process`, `remix` and `deliver` see only their items.
 
-Annotations belong to items, so two workflows may write the same key only
-if they share no source; within a workflow, or between workflows that
-share one, a key is written by one entry. Remix keys are unique across all
-workflows, since artifacts belong to no source. A workflow's deliveries are
-recorded as `<workflow>/<key>` (the bare key in `default`): the same item
-delivered by two workflows is sent by each, and renaming a workflow or a
-deliver key starts its record from scratch, so its last `lookback` hours
-are sent again (`max_per_run` limits how many at once). Workflow names and
-remix and deliver keys use lowercase letters, digits, `_` and `-`;
-`default` is reserved.
+Annotations belong to items. Within a workflow a key is written by one run;
+on sources that workflows share, one processor type writes it, and other
+options for it only get a warning (the first run to process an item writes
+it). Every key a run reads must be written by a process run on its
+workflow's sources, in any workflow, so a workflow may deliver what others
+process. A remix key belongs to one workflow, since artifacts belong to no
+source. A workflow's deliveries are recorded as `<workflow>/<key>`: the
+same item delivered by two workflows is sent by each, and renaming a
+workflow or a delivery key starts its record from scratch, so its last
+`lookback` hours are sent again (`max_per_run` limits how many at once).
+Ids, workflow names and remix and deliver keys use lowercase letters,
+digits, `_` and `-`; `default` is reserved.
 
-LLM plugins (`ollama`) provide a language model to the plugins loaded after
-them: list them in `plugins`, before the listed plugins that use them
-(processors loaded on their own always come after). `summarize`, `tagger`,
-`embed` and `digest` take `llm` (the LLM plugin to use; default: the first
-one listed) and `model` (default: that LLM's default model). One that cannot
-get its LLM, because none is loaded or the one it names is not, still
-loads, but `process` or `remix` logs an error for
-it and does nothing; a processor's items stay pending. Everything else works without an LLM, but
-`grouping` and `telegram` read the tags and summaries those processors write.
+`summarize`, `tagger`, `embed` and `digest` use an LLM: `llm` names an
+`llms` entry by `id`, or an LLM type (with its section's options), and
+defaults to the first `llms` entry; `model` defaults to that LLM's default
+model. A name that resolves to no LLM, or an LLM consumer with `llms`
+empty, fails every command at start-up. Everything else works without an
+LLM, but `grouping` and `telegram` read the tags and summaries those
+processors write.
 
-Changing a plugin's or an entry's options never regenerates existing
-annotations; use `process --force` for that.
+Changing a type's or an entry's options never regenerates existing
+annotations; use `process --force` for that. In the catalog, what is stored
+is keyed by a source's `id` and a run's `key`: renaming any other `id`
+changes nothing stored.
 
 ## Usage
 
@@ -218,15 +231,15 @@ annotations; use `process --force` for that.
 # Import every configured source
 uv run newsmerger -c config.yaml import
 
-# Run every process entry in order, or only one processor's
+# Run every process run of the workflow in order, or only one processor's
 uv run newsmerger -c config.yaml process
 uv run newsmerger -c config.yaml process markdownify --source castellonplaza --limit 20
 
-# Run every remix entry in order, or just one, by key
+# Run every remix run of the workflow in order, or just one, by key
 uv run newsmerger -c config.yaml remix
 uv run newsmerger -c config.yaml remix feedgenerator --since 2026-10-01
 
-# Run every deliver entry in order, or just one, by key
+# Run every delivery of the workflow in order, or just one, by key
 uv run newsmerger -c config.yaml deliver
 uv run newsmerger -c config.yaml deliver telegram --force --item 4127
 
@@ -255,7 +268,7 @@ uv run newsmerger -c config.yaml delete artifacts --artifact digest/castellonpla
 
 Items and annotations are selected by their numeric id, which `inspect`
 shows; artifacts by `<remix key>/<name>`, and deliveries by their recorded
-key (`<workflow>/<key>`, or the bare key in `default`). `process`, `remix`, `deliver`,
+key (`<workflow>/<key>`). `process`, `remix`, `deliver`,
 `inspect` and `delete` accept `--source` (a source id), `--since`,
 `--until`, `--item` (repeatable) and `--limit`; `inspect` adds
 `--processor`, `--key` and `--annotation` for annotations (`delete` only
@@ -373,12 +386,11 @@ To support a new site, see
 | `tagger` | `tagger` | `markdown` | `tags` | Extracts entity tags with an LLM |
 | `embed` | `embed` | `tags` or `markdown` | `<input>_embedding` | Embeds the tags (sorted and comma-separated) or the markdown with an LLM |
 
-Every processor takes `max_retries` (default 3) in its plugin section, and
-`summarize`, `tagger` and `embed` take `llm` (see above). The rest can be
-set in the section, as the default, or per entry: `model` (`summarize`,
-`tagger`, `embed`), `prompt` (`summarize`, followed by the article's
-markdown) and `input` (`embed`: `tags`, the default, or `markdown`; one
-entry per input). Consumers read annotations by key:
+Every option can be set in the type's section, as the default, or per
+entry. Every processor takes `max_retries` (default 3), and `summarize`,
+`tagger` and `embed` take `llm` (see above) and `model`; `summarize` takes
+`prompt` (followed by the article's markdown) and `embed` takes `input`
+(`tags`, the default, or `markdown`; one entry per input). Consumers read annotations by key:
 `telegram` and `googlechat` read `summary` (or their `summary` option's
 key), `grouping` reads `tags` and
 `<embedding>_embedding`, and `digest` and `search` read `markdown`.
@@ -403,8 +415,7 @@ Options of `ollama`: `api_base` (default `http://localhost:11434`),
 | `grouping` | `embeddings` | `current` | Clusters tagged items by tag overlap blended with the similarity of their `tags_embedding` or `markdown_embedding` (single-link) |
 | `digest` | `digest` | `<source id>/<since>_<until>` | Markdown digest of the highlights of each source in scope, written with an LLM from `markdown` |
 
-Options, in the plugin section as defaults or per entry (except `llm`,
-section only):
+Options, in the type's section as defaults or per entry:
 
 - `digest`: `llm` and `model` (see above), `days` (default 7: the scope
   when it sets no `--since`), `max_items` (newest items per source, default
@@ -416,7 +427,7 @@ section only):
   (the entry's key) lists them and rebuilding a period overwrites it.
 - `feedgenerator`: `title` (default `newsmerger feed`), `link`, `description`
   (default: the title), `max_items` (default 100).
-- `grouping`, per remixer subsection: `min_score` (default 0.3), `tau_hours` (time
+- `singlelink`, `avglink` and `embeddings`: `min_score` (default 0.3), `tau_hours` (time
   decay, default 24; `null` disables it), `days` (default 7: the scope when
   it sets no `--since`). `embeddings` adds `embedding` (`tags` or
   `markdown`, default `tags`) and `embedding_weight` (0 to 1, default 0.5).
@@ -434,7 +445,7 @@ lag behind the stored items. Remixers never act outside newsmerger.
 | `telegram` | `telegram_artifacts` | The artifacts of the remix keys in `artifacts` (e.g. `[digest]`), as documents |
 | `googlechat` | `googlechat` | Summarized items to a Google Chat space, by incoming webhook |
 
-Every deliver entry takes `interval` (minutes between its deliveries,
+Every sink takes `interval` (minutes between its deliveries,
 default 0: no pacing), `max_per_run` (deliveries per run at most, default
 5), `max_retries` (default 3) and `lookback` (hours, default 24).
 `telegram` adds `item_image` (post the item's image, when it has one, as a
@@ -445,27 +456,32 @@ without an image, default false) and `summary` (the annotation key posted
 as the summary, e.g. `summary/es`; default `summary`).
 `telegram_artifacts` adds `artifacts` (remix keys, default none).
 
-Every `telegram` and `telegram_artifacts` entry needs a `bot_token` and a
-`chat_id`, its own or the `telegram` section's, which holds their defaults
-and is optional: entries can post with different bots, and a workflow can
-give its entries both with no section at all. The
-`googlechat` section or entry gives the webhook as `url`, or as `channel`
-(the space id) and `token`. Its entries take `item_image` (the item's image,
-when it has one, as a card below the text; default true),
-`item_url_text` and `summary`, as `telegram`'s; Chat has no link preview to
-control.
+Every `telegram` and `telegram_artifacts` use needs a `bot_token` and a
+`chat_id`, its own or its type's section's (`telegram` and
+`telegram_artifacts` have one each), which hold their defaults and are
+optional: uses can post with different bots, and a workflow can give its
+entries both with no section at all. The `googlechat` section or entry gives
+the webhook as `url`, or as `channel` (the space id) and `token`. It takes
+`item_image` (the item's image, when it has one, as a card below the text;
+default true), `item_url_text` and `summary`, as `telegram`'s; Chat has no
+link preview to control.
 
 ```yaml
 plugins:
   telegram:
     bot_token: ${TELEGRAM_BOT_TOKEN}
     chat_id: ${TELEGRAM_CHAT_ID}
+  telegram_artifacts:
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
   googlechat:
     url: ${GOOGLECHAT_WEBHOOK_URL}
-deliver:
-  - {sink: telegram, options: {interval: 30}}
-  - {sink: telegram_artifacts, options: {artifacts: [digest]}}
-  - googlechat
+sinks:
+  - {sink: telegram, id: chat, options: {interval: 30}}
+  - {sink: telegram_artifacts, id: digests, options: {artifacts: [digest]}}
+  - {sink: googlechat, id: space}
+workflows:
+  - {name: channels, sources: [castellonplaza], deliver: [chat, digests, space]}
 ```
 
 How `deliver` behaves:
@@ -511,15 +527,15 @@ databases (back up first):
   `telegram/state` artifact into deliveries. Run it before the first
   `deliver telegram`, or the last `lookback` hours are posted again.
 - `sqlite3 -bail data.db < scripts/migrate_annotation_keys.sql`: keys
-  processing state and annotations by annotation key (the `process` section),
+  processing state and annotations by annotation key,
   keeping every row and id. Run it before the first `process` on the new
   schema.
 
-Workflows and keyed remix and deliver entries need no migration: existing
-artifacts and deliveries are those of the `default` entries with the
-remixer's or sink's name as key. Configurations need updating, though:
-remixers and sinks run only when `remix` and `deliver` list them, and the
-`telegram` subsections become deliver entries.
+The plugin catalog (decision 0010) needs a new database and a rewritten
+configuration: `process`, `remix` and `deliver` move to `processors`,
+`remixers` and `sinks` (or to workflows), deliveries to named workflows,
+`default: false` becomes `skip_default: true`, LLMs are listed in `llms`,
+and `plugins.telegram` splits into `telegram` and `telegram_artifacts`.
 
 Commands that write take a lock next to the database (`data.db.lock`), so
 a second one fails at once instead of running alongside the first.

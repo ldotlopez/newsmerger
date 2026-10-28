@@ -317,7 +317,7 @@ def process_cmd(
     scope: ProcessingScope,
     force: bool,
 ) -> None:
-    """Run every `process:` entry of the workflow in order, or only
+    """Run every process run of the workflow in order, or only
     PROCESSOR's."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
@@ -340,7 +340,7 @@ def process_cmd(
 def remix_cmd(
     ctx: click.Context, key: str | None, workflow: str, scope: ProcessingScope
 ) -> None:
-    """Run the `remix:` entry KEY, or every one of the workflow in order."""
+    """Run the remix run KEY, or every one of the workflow in order."""
     app = app_from_context(ctx, write=True)
     with progress_rows() as progress:
         produced = run_each(
@@ -378,9 +378,9 @@ def deliver_cmd(
     requeue: bool,
     force: bool,
 ) -> None:
-    """Run the workflow's `deliver:` entry KEY, or every one in order.
+    """Run the workflow's delivery KEY, or every one in order.
 
-    Without --since or --item, an entry queues what is new in its lookback
+    Without --since or --item, a delivery queues what is new in its lookback
     window, then delivers what is due.
     """
     if force and key is None:

@@ -11,16 +11,20 @@ import requests
 
 from newsmerger.db import Database, DeliveryStatus, ProcessingStatus
 from newsmerger.models import SourceData, SourceItem
-from newsmerger.plugins import Services, googlechat
+from newsmerger.plugins import Services, googlechat, merge_options
 from newsmerger.plugins.googlechat import (
     WEBHOOK_KEY,
     GoogleChatSink,
-    Options,
     WebhookOptions,
 )
-from newsmerger.sinks import Sink
+from newsmerger.sinks import SinkType
 
 SOURCE = SourceData(id="a", name="A", url="https://a.test/", provider="plaza")
+
+
+def webhook_options(section: dict[str, Any], overrides: dict[str, Any]) -> Any:
+    """A use's options over its plugin section, as the core merges them."""
+    return WebhookOptions.model_validate(merge_options(section, overrides))
 
 
 class OptionsTests(unittest.TestCase):
@@ -47,18 +51,17 @@ class OptionsTests(unittest.TestCase):
                 WebhookOptions.model_validate(options)
 
     def test_an_entry_overrides_the_section(self) -> None:
-        sink = GoogleChatSink(Options(channel="AAAA", token="t"))
-        self.assertEqual(sink.use_options({}).channel, "AAAA")
-        self.assertEqual(sink.use_options({"channel": "BBBB"}).channel, "BBBB")
+        section = {"channel": "AAAA", "token": "t"}
+        self.assertEqual(webhook_options(section, {}).channel, "AAAA")
+        self.assertEqual(webhook_options(section, {"channel": "BBBB"}).channel, "BBBB")
         with self.assertRaises(pydantic.ValidationError):
-            GoogleChatSink(Options()).use_options({})
+            webhook_options({}, {})
 
-    def test_entry_point_registers_the_sink(self) -> None:
-        ((name, protocol, sink),) = googlechat.__newsmerger_plugin__(
-            Services(), url="https://chat.test/hook"
+    def test_entry_point_registers_the_sink_class(self) -> None:
+        ((name, protocol, cls),) = googlechat.__newsmerger_plugin__()
+        self.assertEqual(
+            (name, protocol, cls), ("googlechat", SinkType, GoogleChatSink)
         )
-        self.assertEqual((name, protocol), ("googlechat", Sink))
-        self.assertIsInstance(sink, GoogleChatSink)
 
 
 @patch("newsmerger.plugins.googlechat.requests.post")
@@ -69,7 +72,7 @@ class GoogleChatSinkTests(unittest.TestCase):
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
         )
         self.add_summarized("h1")
-        self.sink = GoogleChatSink(Options(channel="AAAA", token="secret"))
+        self.section = {"channel": "AAAA", "token": "secret"}
 
     def add_summarized(self, uid: str, key: str = "summary", **data: Any) -> None:
         item = SourceItem(
@@ -88,9 +91,8 @@ class GoogleChatSinkTests(unittest.TestCase):
         )
 
     def deliver(self, **options: Any) -> None:
-        self.sink.deliver(
-            self.db, key="googlechat", options=self.sink.use_options(options)
-        )
+        sink = GoogleChatSink(webhook_options(self.section, options), Services())
+        sink.deliver(self.db, key="googlechat")
 
     def tearDown(self) -> None:
         self.db.close()

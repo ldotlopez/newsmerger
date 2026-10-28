@@ -21,12 +21,12 @@ class SourceData(BaseModel):
     name: str
     url: HttpUrl
     provider: str
-    # Validated by the provider's `use_options` and passed to its
-    # `retrieve_items`. Config only, like `default`: the database stores
+    # Over the provider's `plugins` section, the options its provider is
+    # built with. Config only, like `skip_default`: the database stores
     # neither.
     options: dict[str, JsonCompatible] = Field(default_factory=dict)
-    # Whether the `default` workflow uses it; workflows name it explicitly.
-    default: bool = True
+    # Left out of the `default` workflow; workflows that name it use it.
+    skip_default: bool = False
 
     def __hash__(self) -> int:
         # The id is the identity (decision 0001), and the options are a dict.
@@ -98,7 +98,7 @@ class SourceItem:
 class Artifact:
     """A remixer output derived from many items (an RSS feed, a newsletter).
 
-    Unique per (remixer, name), where `remixer` holds the `remix:` entry's
+    Unique per (remixer, name), where `remixer` holds the remix run's
     key (by default the remixer's name); the timestamps are set by the
     database.
     """

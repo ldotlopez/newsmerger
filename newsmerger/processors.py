@@ -4,14 +4,13 @@ import dataclasses
 import logging
 import time
 from abc import abstractmethod
-from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 import pydantic
 
 from .db import Database, ProcessingStatus
 from .models import ProcessingScope, SourceItem
-from .plugins import NoOptions, PluginOptions, merge_options
+from .plugins import PluginOptions, Services
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,65 +33,42 @@ class RunSummary:
 
 
 @runtime_checkable
-class Processor[O: pydantic.BaseModel](Protocol):
-    """Annotates items. Each `process:` entry runs it with its options,
-    validated once, at startup, by `use_options`. Every run writes one
-    annotation key, which also keys its processing state."""
-
-    def use_options(self, overrides: Mapping[str, Any]) -> O:
-        """An entry's options over the plugin section's defaults. Raise
-        `pydantic.ValidationError` for options the processor does not take."""
-        ...
-
-    def output_key(self, options: O) -> str:
-        """The key a run with `options` writes unless the entry names one."""
-        ...
+class Processor(Protocol):
+    """Annotates items. Each run writes one annotation key, which also keys
+    its processing state."""
 
     def process(
         self,
         db: Database,
         *,
         key: str,
-        options: O,
         scope: ProcessingScope | None = None,
         force: bool = False,
     ) -> RunSummary: ...
 
 
-class UnavailableProcessor:
-    """Stands in for a processor that cannot run, such as one whose LLM is
-    not loaded: `process` logs why and leaves every item pending. Options
-    and keys are the real processor's, so its entries are still checked."""
+@runtime_checkable
+class ProcessorType(Protocol):
+    """A Processor class, as plugins register it: each configured use builds
+    one with its options, validated at startup with `options_model`."""
 
-    def __init__(
-        self,
-        name: str,
-        reason: str,
-        processor: type[BaseProcessor],
-        defaults: PluginOptions,
-    ) -> None:
-        self.name = name
-        self.reason = reason
-        self.processor = processor
-        self.defaults = defaults
+    options_model: type[pydantic.BaseModel]
 
-    def use_options(self, overrides: Mapping[str, Any]) -> pydantic.BaseModel:
-        return merge_options(self.processor.options_model, self.defaults, overrides)
+    def __call__(self, options: Any, services: Services) -> Processor: ...
 
     def output_key(self, options: Any) -> str:
-        return self.processor.output_key(options)
+        """The key a run with `options` writes unless its entry names one."""
+        ...
 
-    def process(
-        self,
-        db: Database,
-        *,
-        key: str,
-        options: Any,
-        scope: ProcessingScope | None = None,
-        force: bool = False,
-    ) -> RunSummary:
-        LOGGER.error(f"{self.name}: {self.reason}; nothing processed")
-        return RunSummary()
+    def required_key(self, options: Any) -> str | None:
+        """The key a run with `options` reads, if any."""
+        ...
+
+
+class ProcessorOptions(PluginOptions):
+    """Options every processor takes."""
+
+    max_retries: int = 3
 
 
 class BaseProcessor:
@@ -101,47 +77,39 @@ class BaseProcessor:
     `key` is the annotation it writes by default. Changing `version` makes
     items it finished eligible again. `requires` names the annotation key
     this one reads: only items whose run of it finished on their current
-    content are picked up. `options_model` declares the per-use options,
-    whose defaults come from `defaults`, the plugin section.
+    content are picked up. `options_model` declares its options.
     """
 
     name: str
     key: str
     version: str | None = None
     requires: str | None = None
-    options_model: type[pydantic.BaseModel] = NoOptions
+    options_model: type[ProcessorOptions] = ProcessorOptions
 
-    def __init__(
-        self, defaults: PluginOptions | None = None, *, max_retries: int = 3
-    ) -> None:
-        self.defaults = defaults or NoOptions()
-        self.max_retries = max_retries
-
-    def use_options(self, overrides: Mapping[str, Any]) -> pydantic.BaseModel:
-        return merge_options(self.options_model, self.defaults, overrides)
+    def __init__(self, options: ProcessorOptions, services: Services) -> None:
+        self.options = options
 
     @classmethod
     def output_key(cls, options: Any) -> str:
         return cls.key
 
-    def required_key(self, options: Any) -> str | None:
-        """The key a run with `options` reads, if any."""
-        return self.requires
+    @classmethod
+    def required_key(cls, options: Any) -> str | None:
+        return cls.requires
 
     def process(
         self,
         db: Database,
         *,
         key: str,
-        options: Any,
         scope: ProcessingScope | None = None,
         force: bool = False,
     ) -> RunSummary:
-        requires = self.required_key(options)
+        requires = self.required_key(self.options)
         items = db.get_unprocessed_items(
             key,
             version=self.version,
-            max_retries=self.max_retries,
+            max_retries=self.options.max_retries,
             force=force,
             scope=scope,
             requires=requires,
@@ -157,7 +125,7 @@ class BaseProcessor:
         for position, item in enumerate(items, start=1):
             LOGGER.info(f"{key}: [{position}/{total}] '{item.title}' ({item.uri})")
             item_started = time.monotonic()
-            status, value, error = self._run_item(db, item, options)
+            status, value, error = self._run_item(db, item)
             LOGGER.debug(
                 f"{key}: '{item.uri}' {status.value}"
                 f" in {time.monotonic() - item_started:.2f}s"
@@ -187,11 +155,11 @@ class BaseProcessor:
         return summary
 
     def _run_item(
-        self, db: Database, item: SourceItem, options: Any
+        self, db: Database, item: SourceItem
     ) -> tuple[ProcessingStatus, Any, str | None]:
         """Run `process_item` and translate its outcome into a result."""
         try:
-            return ProcessingStatus.DONE, self.process_item(db, item, options), None
+            return ProcessingStatus.DONE, self.process_item(db, item), None
         except SkipItem as e:
             LOGGER.info(f"{self.name} ignored '{item.uri}': {e}")
             return ProcessingStatus.IGNORED, None, None
@@ -208,8 +176,8 @@ class BaseProcessor:
         return value
 
     @abstractmethod
-    def process_item(self, db: Database, item: SourceItem, options: Any) -> Any:
-        """Return the annotation's value; `options` is an `options_model`.
+    def process_item(self, db: Database, item: SourceItem) -> Any:
+        """Return the annotation's value.
 
         Raise `SkipItem` if the item doesn't apply. Any other exception marks
         the item `error`.

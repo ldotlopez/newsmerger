@@ -5,13 +5,12 @@ import dataclasses
 import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from ..db import Database
-from ..llms import LLM, LLMUnavailableError, strip_code_fence
+from ..llms import strip_code_fence
 from ..models import ProcessingScope, SourceData, SourceItem
-from ..remixers import BaseRemixer, Remixer, UnavailableRemixer
-from . import PluginObjects, PluginOptions, Services
+from ..remixers import BaseRemixer, RemixerType
+from . import PluginTypes, Services, UsesLLMOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,18 +30,12 @@ Articles:
 """
 
 
-class DigestOptions(PluginOptions):
-    """Per `remix:` entry; the section sets their defaults."""
-
+class DigestOptions(UsesLLMOptions):
     model: str | None = None
     days: int = 7  # scope when it sets no `since`
     max_items: int = 50  # newest items per source
     max_article_chars: int = 3000  # each article's markdown is cut to this
     context_length: int = 32768  # the model's context window, in tokens
-
-
-class Options(DigestOptions):
-    llm: str | None = None
 
 
 class DigestRemixer(BaseRemixer):
@@ -54,14 +47,16 @@ class DigestRemixer(BaseRemixer):
 
     name = "digest"
     options_model = DigestOptions
+    options: DigestOptions
 
-    def __init__(self, llm: LLM, cfg: Options) -> None:
-        super().__init__(cfg)
-        self.llm = llm
+    def __init__(self, options: DigestOptions, services: Services) -> None:
+        super().__init__(options, services)
+        self.llm = services.llm(options.llm)
 
     def produce(
-        self, db: Database, scope: ProcessingScope, options: DigestOptions
+        self, db: Database, scope: ProcessingScope
     ) -> Iterator[tuple[str, str, str]]:
+        options = self.options
         now = datetime.now(UTC)
         since = scope.since or now - timedelta(days=options.days)
         until = scope.until or now
@@ -80,9 +75,7 @@ class DigestRemixer(BaseRemixer):
                 (item, markdowns[item.key])
                 for item in reversed(source_items[: options.max_items])
             ]
-            digest = self._write(
-                source_items[0].source, articles, since, until, options
-            )
+            digest = self._write(source_items[0].source, articles, since, until)
             name = f"{source_id}/{since:%Y-%m-%d}_{until:%Y-%m-%d}"
             yield name, digest, "text/markdown"
 
@@ -92,8 +85,8 @@ class DigestRemixer(BaseRemixer):
         articles: list[tuple[SourceItem, str]],
         since: datetime,
         until: datetime,
-        options: DigestOptions,
     ) -> str:
+        options = self.options
         prompt = DIGEST_PROMPT + "\n\n".join(
             self._article_text(number, item, markdown, options.max_article_chars)
             for number, (item, markdown) in enumerate(articles, start=1)
@@ -119,12 +112,5 @@ class DigestRemixer(BaseRemixer):
         )
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    name = DigestRemixer.name
-    try:
-        remixer = DigestRemixer(services.llm(cfg.llm), cfg)
-    except LLMUnavailableError as e:
-        unavailable = UnavailableRemixer(name, str(e), DigestRemixer, cfg)
-        return [(name, Remixer, unavailable)]
-    return [(name, Remixer, remixer)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(DigestRemixer.name, RemixerType, DigestRemixer)]

@@ -2,7 +2,7 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
-from typing import Any, ClassVar, cast
+from typing import ClassVar, cast
 
 import bs4
 from foundation.scrapelib import (
@@ -15,8 +15,8 @@ from foundation.scrapelib import (
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, Provider
-from . import PluginObjects, PluginOptions, Services
+from ..providers import URI, IndexSiteProvider, ProviderType
+from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -163,6 +163,5 @@ def _extract_href(article: bs4.Tag) -> str:
     return cast(str, a_tag.get("href"))
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    PluginOptions.model_validate(options)
-    return [("prensaiberica_plain", Provider, PrensaIbericaPlainProvider())]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("prensaiberica_plain", ProviderType, PrensaIbericaPlainProvider)]

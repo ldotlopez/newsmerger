@@ -1,10 +1,9 @@
 import hashlib
 import logging
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -12,8 +11,8 @@ import bs4
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import Provider
-from . import NoOptions, PluginObjects, PluginOptions, Services
+from ..providers import BaseProvider, ProviderType
+from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 # A named zone, not the import time's UTC offset: sessions span DST changes.
@@ -48,12 +47,9 @@ class PreparseData:
     title: str
 
 
-class CSJuntasGobiernoProvider:
-    def use_options(self, overrides: Mapping[str, Any]) -> NoOptions:
-        return NoOptions.model_validate(overrides)
-
+class CSJuntasGobiernoProvider(BaseProvider):
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient, options: NoOptions
+        self, source: SourceData, fetcher: HTTPClient
     ) -> Iterator[SourceItemData]:
         index = fetcher.get(str(source.url))
         for protodata in self._iter_pdf_links(index, str(source.url)):
@@ -153,6 +149,5 @@ def get_date_from_text(tag: bs4.Tag, pattern: str | re.Pattern) -> re.Match:
     return m
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    PluginOptions.model_validate(options)
-    return [("csjuntasgobierno", Provider, CSJuntasGobiernoProvider())]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("csjuntasgobierno", ProviderType, CSJuntasGobiernoProvider)]
