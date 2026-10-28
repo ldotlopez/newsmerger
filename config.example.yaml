@@ -125,7 +125,7 @@ remix:
 # workflow. Every entry takes `interval` (minutes between deliveries, oldest
 # first; default 0), `max_per_run` (default 5), `max_retries` and `lookback`.
 deliver:
-  - sink: telegram                   # summarized items (`summary`)
+  - sink: telegram                   # summarized items
     options:
       interval: 30
       item_image: true               # the item's image as a photo, if any
@@ -138,6 +138,7 @@ deliver:
     options:
       item_image: true               # the item's image as a card, if any
       item_url_text: original article # the link to the article
+      summary: summary               # the annotation posted, e.g. summary/es
 
 # More workflows, run with `-w NAME` (one cron line each). A workflow sees only
 # its sources; two workflows may write the same process key only if they

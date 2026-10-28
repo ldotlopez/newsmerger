@@ -432,7 +432,8 @@ delivers is an option. `telegram` bundles two sinks that post through
 default to the section's, which is optional. `item_image` picks
 `sendPhoto` for items with an image, `item_url_text` and
 `item_url_preview` set the article link's text and whether
-`sendMessage` shows its preview. `TelegramSink` reads the `summary` annotation and
+`sendMessage` shows its preview. `TelegramSink` reads the annotation its
+`summary` option names (its `required_key`) and
 `TelegramArtifactSink` sends artifacts with `sendDocument`; both record
 `{"chat_id", "message_id"}`, since a message id is only unique in its chat.
 `googlechat` posts summarized items to the webhook of its entry, with the

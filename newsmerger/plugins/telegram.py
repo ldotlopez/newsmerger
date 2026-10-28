@@ -1,6 +1,7 @@
 """Two Telegram sinks (decision 0007):
 
-- `telegram` posts summarized items (title, summary and link), oldest first.
+- `telegram` posts summarized items (title, the `summary` option's annotation
+  and link), oldest first.
 - `telegram_artifacts` sends every artifact of the remixers listed in
   `artifacts` (e.g. `[digest]`) as a document.
 
@@ -66,6 +67,7 @@ class ItemDeliveryOptions(DeliveryOptions):
     item_image: bool = True  # post the item's image, when it has one, as a photo
     item_url_preview: bool = False  # only for text messages
     item_url_text: str = "original article"
+    summary: str = "summary"  # the annotation key posted as the summary
 
 
 class DocumentDeliveryOptions(ArtifactDeliveryOptions):
@@ -100,13 +102,15 @@ def post(bot_token: SecretStr, method: str, **request: Any) -> int:
 
 class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
     name = "telegram"
-    requires = "summary"
     options_model = ItemDeliveryOptions
+
+    def required_key(self, options: ItemDeliveryOptions) -> str:
+        return options.summary
 
     def send(
         self, db: Database, subject: SourceItem, options: ItemDeliveryOptions
     ) -> dict[str, Any]:
-        summaries = db.get_annotation_values([subject], key="summary")
+        summaries = db.get_annotation_values([subject], key=options.summary)
         caption = build_caption(
             subject.title,
             str(summaries[subject.key]),

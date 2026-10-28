@@ -46,7 +46,7 @@ class TelegramTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def add_summarized(
-        self, source: SourceData, *hours_ago: int, **data: Any
+        self, source: SourceData, *hours_ago: int, key: str = "summary", **data: Any
     ) -> list[SourceItem]:
         now = datetime.now(UTC)
         items = [
@@ -67,9 +67,9 @@ class TelegramTestCase(unittest.TestCase):
             self.db.record_result(
                 item,
                 "summarize",
-                "summary",
+                key,
                 ProcessingStatus.DONE,
-                value=f"Summary {item.uid}",
+                value=f"Summary {item.uid} {key}",
             )
         return items
 
@@ -224,6 +224,16 @@ class TelegramSinkTests(TelegramTestCase):
         payload = post.call_args.kwargs["json"]
         self.assertIn(">Leer &lt;más&gt;</a>", payload["text"])
         self.assertEqual(payload["link_preview_options"], {"is_disabled": False})
+
+    def test_summary_option_picks_the_annotation(self, post: Mock) -> None:
+        post.return_value = ok_response()
+        self.add_summarized(SOURCE_A, 3)
+        self.add_summarized(SOURCE_A, 4, key="summary/ca")
+
+        self.deliver(summary="summary/ca")
+
+        post.assert_called_once()
+        self.assertIn("Summary h4 summary/ca", post.call_args.kwargs["json"]["text"])
 
 
 @patch("newsmerger.plugins.telegram.requests.post")

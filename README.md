@@ -379,7 +379,8 @@ set in the section, as the default, or per entry: `model` (`summarize`,
 `tagger`, `embed`), `prompt` (`summarize`, followed by the article's
 markdown) and `input` (`embed`: `tags`, the default, or `markdown`; one
 entry per input). Consumers read annotations by key:
-`telegram` reads `summary`, `grouping` reads `tags` and
+`telegram` and `googlechat` read `summary` (or their `summary` option's
+key), `grouping` reads `tags` and
 `<embedding>_embedding`, and `digest` and `search` read `markdown`.
 
 ### LLMs
@@ -438,9 +439,10 @@ default 0: no pacing), `max_per_run` (deliveries per run at most, default
 5), `max_retries` (default 3) and `lookback` (hours, default 24).
 `telegram` adds `item_image` (post the item's image, when it has one, as a
 photo with the text as its caption; default true), `item_url_text` (the
-text of the link to the article, default `original article`) and
+text of the link to the article, default `original article`),
 `item_url_preview` (let Telegram show the link's preview on messages
-without an image, default false).
+without an image, default false) and `summary` (the annotation key posted
+as the summary, e.g. `summary/es`; default `summary`).
 `telegram_artifacts` adds `artifacts` (remix keys, default none).
 
 Every `telegram` and `telegram_artifacts` entry needs a `bot_token` and a
@@ -450,9 +452,8 @@ give its entries both with no section at all. The
 `googlechat` section or entry gives the webhook as `url`, or as `channel`
 (the space id) and `token`. Its entries take `item_image` (the item's image,
 when it has one, as a card below the text; default true),
-`item_url_text`, as `telegram`'s, and `summary` (the annotation key posted
-as the summary, e.g. `summary/es`; default `summary`); Chat has no link
-preview to control.
+`item_url_text` and `summary`, as `telegram`'s; Chat has no link preview to
+control.
 
 ```yaml
 plugins:
