@@ -470,6 +470,10 @@ Risks:
   bare `requests` (e.g. `telegram` downloads item images to upload them),
   without the shared `HTTPClient`'s headers and cache. Share one in
   `Services` so every plugin uses it.
+- **Forcing a workflow's process runs** (2026-10-28, idea): find a mechanism
+  to force reprocessing from a workflow. Today `process -w NAME [PROCESSOR]
+  --force` selects by processor, so it forces every entry of that processor
+  (e.g. both `summary` and `summary/ca`), not one key.
 - **PDF text extraction.** `markdownify` skips non-HTML items; PDF items need
   their own extraction step before `summarize`/`tagger` can use them.
 - **Alembic.** Not needed while the database can be rebuilt from the
