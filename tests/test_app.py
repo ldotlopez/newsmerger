@@ -18,7 +18,7 @@ from newsmerger.app import (
     LockedError,
 )
 from newsmerger.config import Config, ConfigError
-from newsmerger.db import DeliveryStatus, ProcessingStatus
+from newsmerger.db import ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceItem
 from newsmerger.plugins import ClassRegister, Services, feedreader, markdownify
 from newsmerger.plugins.markdownify import MarkdownifyProcessor
@@ -169,9 +169,8 @@ cache:
         item = self.import_sample()
         self.app.run_process("markdown")
 
-        self.assertEqual(
-            self.app.delete_annotations(processor="markdownify", item_id=item.id), 1
-        )
+        (annotation,) = self.app.find_annotations(key="markdown")
+        self.assertEqual(self.app.delete_annotations([annotation.id]), 1)
 
         self.assertEqual(self.app.get_annotations(item), {})
         scope = ProcessingScope(source="mediterraneo")
@@ -186,23 +185,6 @@ cache:
         self.app.close()
         other.lock()
         self.app = other
-
-    def test_resolve_settles_interrupted_deliveries(self) -> None:
-        self.import_sample()
-        self.app._db.queue_item_deliveries("telegram", ProcessingScope())
-        ((row, _),) = self.app._db.get_item_deliveries("telegram")
-        row.status = DeliveryStatus.SENDING
-        row.attempts = 1
-        self.app._db.save_delivery(row)
-
-        resolved = self.app.resolve_deliveries("telegram", DeliveryStatus.DONE)
-
-        self.assertEqual(resolved, 1)
-        (row,) = self.app.find_deliveries(sink="telegram")
-        self.assertEqual((row.status, row.attempts), (DeliveryStatus.DONE, 0))
-        self.assertEqual(
-            self.app.resolve_deliveries("telegram", DeliveryStatus.DONE), 0
-        )
 
     def test_only_configured_runs_run(self) -> None:
         with self.assertRaisesRegex(ConfigError, "processor 'nope' does not exist"):

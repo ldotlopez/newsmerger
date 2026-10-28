@@ -199,7 +199,7 @@ class ItemSinkTests(SinkTestCase):
             sink.run(self.db)
 
         self.assertEqual(sink.sent, [])
-        self.assertIn("deliveries resolve", logs.output[0])
+        self.assertIn("delete deliveries --status sending", logs.output[0])
 
     def test_force_resends_the_selected_items_whatever_their_state(self) -> None:
         item = self.add(SOURCE_A, "a1", hours_ago=3)

@@ -197,7 +197,7 @@ workflows:
 name it still run it. Commands run `default` unless given `-w/--workflow
 NAME`, so each workflow is its own cron line (`newsmerger run -w
 juntas-channel`). A workflow only touches its sources: `import` fetches
-them, and `process`, `remix` and `deliver` see only their items.
+them, and `process`, `remix` and its deliveries see only their items.
 
 Annotations belong to items. Within a workflow a key is written by one run;
 on sources that workflows share, one processor type writes it, and other
@@ -239,16 +239,11 @@ uv run newsmerger -c config.yaml process markdownify --source castellonplaza --l
 uv run newsmerger -c config.yaml remix
 uv run newsmerger -c config.yaml remix feedgenerator --since 2026-10-01
 
-# Run every delivery of the workflow in order, or just one, by key
-uv run newsmerger -c config.yaml deliver
-uv run newsmerger -c config.yaml deliver telegram --force --item 4127
-
 # Run import, process, remix and deliver in turn (e.g. from cron)
 uv run newsmerger -c config.yaml run
 
 # The same, for another workflow (every phase command takes -w)
 uv run newsmerger -c config.yaml run -w juntas-channel
-uv run newsmerger -c config.yaml deliver -w juntas-channel telegram
 
 # Inspect what is stored (read-only), as a table or --format json
 uv run newsmerger -c config.yaml inspect items --source castellonplaza --limit 20
@@ -256,6 +251,7 @@ uv run newsmerger -c config.yaml inspect items --item 4127
 uv run newsmerger -c config.yaml inspect content --sha256 <sha256> > item.html
 uv run newsmerger -c config.yaml inspect annotations --item 4127
 uv run newsmerger -c config.yaml inspect annotations --annotation 512
+uv run newsmerger -c config.yaml inspect annotations --key summary/telegram/es
 uv run newsmerger -c config.yaml inspect artifacts
 uv run newsmerger -c config.yaml inspect artifacts --artifact feedgenerator/feed > feed.xml
 uv run newsmerger -c config.yaml inspect deliveries --sink telegram --status error
@@ -263,17 +259,19 @@ uv run newsmerger -c config.yaml inspect deliveries --sink telegram --status err
 # Delete, without asking: the same options as inspect select what goes
 uv run newsmerger -c config.yaml delete items --item 4127
 uv run newsmerger -c config.yaml delete annotations --processor summarize --source castellonplaza
+uv run newsmerger -c config.yaml delete annotations --key summary/telegram/es
 uv run newsmerger -c config.yaml delete artifacts --artifact digest/castellonplaza/2026-10-01_2026-10-08
+uv run newsmerger -c config.yaml delete deliveries --sink telegram --item 4127
 ```
 
 Items and annotations are selected by their numeric id, which `inspect`
 shows; artifacts by `<remix key>/<name>`, and deliveries by their recorded
-key (`<workflow>/<key>`). `process`, `remix`, `deliver`,
+key (`<workflow>/<key>`). `process`, `remix`,
 `inspect` and `delete` accept `--source` (a source id), `--since`,
-`--until`, `--item` (repeatable) and `--limit`; `inspect` adds
-`--processor`, `--key` and `--annotation` for annotations (`delete` only
-`--processor`, and no `--limit`), and both add
-`--remixer`, `--artifact` and `--limit` for artifacts. Filters combine; an
+`--until`, `--item` (repeatable) and `--limit`; `inspect` and `delete` add
+`--processor`, `--key` and `--annotation` for annotations,
+`--remixer`, `--artifact` and `--limit` for artifacts, and `--artifact`,
+`--sink` and `--status` for deliveries. Filters combine; an
 id that the selection does not return is an error.
 
 `inspect` and `delete` sort with `--sort` (default `updated`), always
@@ -310,7 +308,7 @@ them, the level comes from `NEWSMERGER_LOG_LEVEL`, then from `log_level` in
 the config, then `warning`.
 
 Results (tables, `inspect` output, contents, `--help`, and the summaries of
-`run`, `import`, `process`, `remix` and `deliver`) go to stdout; progress and
+`run`, `import`, `process` and `remix`) go to stdout; progress and
 logs go to stderr. Each stream is rich only when it is a terminal, so
 `newsmerger run > summary.txt` keeps the progress rows on screen and writes
 tab-separated tables, and with stderr redirected (cron) there is no progress
@@ -489,27 +487,24 @@ workflows:
   - {name: channels, sources: [castellonplaza], deliver: [chat, digests, space]}
 ```
 
-How `deliver` behaves:
+How delivery (the last phase of `run`) behaves:
 
-- Each run queues what is new, then delivers what is due. Without `--since`
-  or `--item` (`--artifact` for artifact sinks), new means the subjects of
-  the last `lookback` without a delivery yet; `telegram` only queues
-  items whose `summary` run finished. Run `deliver` (or `run`)
-  periodically, e.g. from cron every few minutes.
+- Each run queues what is new, then delivers what is due. New means the
+  subjects of the last `lookback` without a delivery yet; `telegram` only
+  queues items whose `summary` run finished. Run `run` periodically, e.g.
+  from cron every few minutes.
 - Items go out oldest first. With an `interval`, an entry delivers one
   subject once its last delivery is that old, whatever the source; without
   one, every due subject, up to `max_per_run` per run.
 - A failed delivery is retried like a processor's, holding back the rest of
-  its source until it succeeds or runs out of attempts; `--requeue` gives
-  the failed ones in scope fresh attempts.
-- Nothing is delivered twice by the same entry. `--force` with a KEY and
-  `--item` or `--artifact` sends those subjects again, now, whatever their
-  state, with no pacing.
+  its source until it succeeds or runs out of attempts.
+- Nothing is delivered twice by the same entry. `delete deliveries` drops
+  ledger rows, so the next run queues those subjects again while they are
+  within its `lookback`.
 - A delivery is marked `sending` before the call. If a run is interrupted
   there, its outcome is unknown and it is never retried on its own: check
-  the chat, then settle it with
-  `deliveries resolve telegram --as done` (it arrived) or `--as queued`
-  (send it again), with the key `inspect deliveries` shows.
+  the chat, then send it again with `delete deliveries --status sending`
+  (with the key `inspect deliveries` shows as `--sink`), or leave it.
 - `inspect deliveries` shows the ledger: each subject, its state, attempts
   and last error.
 
@@ -530,7 +525,7 @@ databases (back up first):
   reused, which `--item` and `--annotation` rely on.
 - `scripts/migrate_telegram_state.py -c config.yaml`: turns the old
   `telegram/state` artifact into deliveries. Run it before the first
-  `deliver telegram`, or the last `lookback` is posted again.
+  `run`, or the last `lookback` is posted again.
 - `sqlite3 -bail data.db < scripts/migrate_annotation_keys.sql`: keys
   processing state and annotations by annotation key,
   keeping every row and id. Run it before the first `process` on the new

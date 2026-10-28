@@ -183,6 +183,12 @@ What matters is not item versus collection but derived versus recorded:
 
 ## Revisions
 
+- **2026-10-28 (0008).** Discarded: the `deliver` command (with
+  `--requeue` and `--force`) and `deliveries resolve`; delivery runs only
+  as a phase of `run`, and `delete deliveries` drops ledger rows so their
+  subjects are queued again within `lookback`. Remains: the ledger, its
+  states, the delivery cycle, and requeue and forced delivery in
+  `Application.run_delivery`.
 - **2026-10-27.** Discarded: one bot per configuration, its token required
   in the `telegram` section. Remains: the section, now optional, as the
   entries' defaults.

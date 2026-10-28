@@ -351,57 +351,6 @@ def remix_cmd(
     print_remix(produced)
 
 
-@cli.command("deliver")
-@click.argument("key", required=False)
-@workflow_option
-@scope_options
-@artifact_ids_option
-@click.option(
-    "--requeue",
-    is_flag=True,
-    help="Requeue the failed deliveries in scope with fresh attempts",
-)
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Send the selected subjects now, whatever their state (needs KEY and"
-    " --item or --artifact)",
-)
-@click.pass_context
-@report_user_errors
-def deliver_cmd(
-    ctx: click.Context,
-    key: str | None,
-    workflow: str,
-    scope: ProcessingScope,
-    artifact_ids: tuple[tuple[str, str], ...],
-    requeue: bool,
-    force: bool,
-) -> None:
-    """Run the workflow's delivery KEY, or every one in order.
-
-    Without --since or --item, a delivery queues what is new in its lookback
-    window, then delivers what is due.
-    """
-    if force and key is None:
-        raise click.UsageError("--force needs a KEY")
-    app = app_from_context(ctx, write=True)
-    with progress_rows() as progress:
-        summaries = run_each(
-            progress,
-            [key] if key else app.delivery_keys(workflow),
-            lambda name: app.run_delivery(
-                name,
-                workflow=workflow,
-                scope=scope,
-                artifacts=artifact_ids,
-                requeue=requeue,
-                force=force,
-            ),
-        )
-    print_deliver(summaries)
-
-
 @cli.command("run")
 @workflow_option
 @click.pass_context
@@ -498,42 +447,6 @@ def search_cmd(ctx: click.Context, query: str, scope: ProcessingScope) -> None:
     print_table("Matches", ["ID", "Source", "Title", "Match"], rows)
 
 
-@cli.group("deliveries")
-def deliveries_group() -> None:
-    """Settle the delivery ledger (read it with `inspect deliveries`)."""
-
-
-@deliveries_group.command("resolve")
-@click.argument("sink", metavar="LEDGER_KEY")
-@click.option(
-    "--as",
-    "status",
-    type=click.Choice([DeliveryStatus.DONE.value, DeliveryStatus.QUEUED.value]),
-    required=True,
-    help="done: it was delivered; queued: deliver it again",
-)
-@scope_options
-@artifact_ids_option
-@click.pass_context
-@report_user_errors
-def resolve_cmd(
-    ctx: click.Context,
-    sink: str,
-    status: str,
-    scope: ProcessingScope,
-    artifact_ids: tuple[tuple[str, str], ...],
-) -> None:
-    """Settle the interrupted (`sending`) deliveries of LEDGER_KEY (as
-    `inspect deliveries` shows it) in the selection."""
-    resolved = app_from_context(ctx, write=True).resolve_deliveries(
-        sink,
-        DeliveryStatus(status),
-        scope=scope,
-        artifact_names=artifact_ids or None,
-    )
-    click.echo(f"Resolved {resolved} interrupted delivery(ies) of '{sink}' as {status}")
-
-
 # --- Inspection -------------------------------------------------------------
 
 PREVIEW_LENGTH = 80
@@ -580,11 +493,6 @@ def check_found(kind: str, requested: Iterable[Any], found: Iterable[Any]) -> No
         raise click.ClickException(f"no {kind} {listed} in the selection")
 
 
-processor_option = click.option(
-    "--processor", default=None, help="Only this processor's annotations"
-)
-
-
 def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     """Add --processor/--key/--annotation, which narrow an item selection."""
     command = click.option(
@@ -595,7 +503,24 @@ def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
         help="Annotation id (repeatable)",
     )(command)
     command = click.option("--key", default=None, help="Only this key")(command)
-    return processor_option(command)
+    return click.option(
+        "--processor", default=None, help="Only this processor's annotations"
+    )(command)
+
+
+def delivery_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
+    """Add the item scope, --artifact, --sink and --status, which select
+    ledger rows."""
+    command = click.option(
+        "--status",
+        type=click.Choice([status.value for status in DeliveryStatus]),
+        default=None,
+        help="Only deliveries in this state",
+    )(command)
+    command = click.option(
+        "--sink", default=None, help="Only this ledger key's deliveries"
+    )(command)
+    return scope_options(artifact_ids_option(command))
 
 
 def artifact_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
@@ -880,15 +805,7 @@ def inspect_content_cmd(ctx: click.Context, sha256: str) -> None:
 
 
 @inspect_group.command("deliveries")
-@scope_options
-@artifact_ids_option
-@click.option("--sink", default=None, help="Only this ledger key's deliveries")
-@click.option(
-    "--status",
-    type=click.Choice([status.value for status in DeliveryStatus]),
-    default=None,
-    help="Only deliveries in this state",
-)
+@delivery_options
 @sort_option(DELIVERY_SORTS)
 @format_option
 @click.pass_context
@@ -990,36 +907,43 @@ def delete_items_cmd(
 
 @delete_group.command("annotations")
 @scope_options
-@processor_option
+@annotation_options
 @sort_option(ANNOTATION_SORTS)
 @click.pass_context
 @report_user_errors
 def delete_annotations_cmd(
-    ctx: click.Context, scope: ProcessingScope, processor: str | None, sort: str
+    ctx: click.Context,
+    scope: ProcessingScope,
+    processor: str | None,
+    key: str | None,
+    annotation_ids: tuple[int, ...],
+    sort: str,
 ) -> None:
-    """Delete annotations per processor: every key it wrote on the item,
-    with their processing state, so the item becomes pending again for each
-    of its runs.
-
-    --limit is refused: it counts annotations, not processors.
+    """Delete annotations with their processing state, so the run that
+    wrote each key finds its item pending again; --limit counts annotations.
     """
-    if scope.limit is not None:
-        raise click.UsageError(
-            "--limit counts annotations, but they are deleted per processor"
-        )
-    require_selection(scope.source, scope.since, scope.until, scope.item_ids, processor)
+    require_selection(
+        scope.source,
+        scope.since,
+        scope.until,
+        scope.item_ids,
+        processor,
+        key,
+        annotation_ids,
+    )
     app = app_from_context(ctx, write=True)
-    annotations = app.find_annotations(scope, processor=processor, sort=sort)
+    annotations = app.find_annotations(
+        scope,
+        processor=processor,
+        key=key,
+        annotation_ids=annotation_ids or None,
+        sort=sort,
+    )
+    if scope.limit is None:
+        check_found("annotation", annotation_ids, (a.id for a in annotations))
 
-    targets = sorted({(a.item_id, a.processor) for a in annotations})
-    deleted = sum(
-        app.delete_annotations(processor=target, item_id=item_id)
-        for item_id, target in targets
-    )
-    click.echo(
-        f"Deleted {deleted} annotation(s); {len(targets)} (item, processor)"
-        " pair(s) are pending again"
-    )
+    deleted = app.delete_annotations(a.id for a in annotations)
+    click.echo(f"Deleted {deleted} annotation(s); their items are pending again")
 
 
 @delete_group.command("artifacts")
@@ -1072,3 +996,42 @@ def delete_artifacts_cmd(
         if f"{a.remixer}/{a.name}" not in delivered
     )
     click.echo(f"Deleted {deleted} artifact(s)")
+
+
+@delete_group.command("deliveries")
+@delivery_options
+@sort_option(DELIVERY_SORTS)
+@click.pass_context
+@report_user_errors
+def delete_deliveries_cmd(
+    ctx: click.Context,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    sink: str | None,
+    status: str | None,
+    sort: str,
+) -> None:
+    """Delete ledger rows; --limit counts rows.
+
+    A deleted subject is queued again by the next run of its delivery while
+    its lookback still covers it, and is then delivered again.
+    """
+    require_selection(
+        scope.source,
+        scope.since,
+        scope.until,
+        scope.item_ids,
+        artifact_ids,
+        sink,
+        status,
+    )
+    app = app_from_context(ctx, write=True)
+    deliveries = app.find_deliveries(
+        scope,
+        sink=sink,
+        status=DeliveryStatus(status) if status else None,
+        artifact_names=artifact_ids or None,
+        sort=sort,
+    )
+    deleted = app.delete_deliveries(d.id for d in deliveries)
+    click.echo(f"Deleted {deleted} delivery(ies)")
