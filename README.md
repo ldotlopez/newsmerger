@@ -458,8 +458,11 @@ default 0: no pacing), `max_per_run` (deliveries per run at most, default
 photo with the text as its caption; default true), `item_url_text` (the
 text of the link to the article, default `original article`),
 `item_url_preview` (let Telegram show the link's preview on messages
-without an image, default false) and `summary` (the annotation key posted
-as the summary, e.g. `summary/es`; default `summary`).
+without an image, default false), `summary` (the annotation key posted
+as the summary, e.g. `summary/es`; default `summary`) and `markdown`
+(post in Telegram's legacy Markdown, the summary unescaped so that its
+formatting renders, instead of HTML-escaped text; default false). Telegram
+refuses a post whose Markdown does not parse, such as a lone `_` or `*`.
 `telegram_artifacts` adds `artifacts` (remix keys, default none).
 
 Every `telegram` and `telegram_artifacts` use needs a `bot_token` and a
