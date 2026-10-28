@@ -5,9 +5,9 @@
 - `telegram_artifacts` sends every artifact of the remixers listed in
   `artifacts` (e.g. `[digest]`) as a document.
 
-Each `deliver:` entry posts with its `bot_token` to its `chat_id`; the
+Each use posts with its `bot_token` to its `chat_id`; a type's `plugins`
 section, which is optional, holds their defaults, so one bot can post to
-many chats and entries can use different bots. What was delivered is in the
+many chats and uses can use different bots. What was delivered is in the
 ledger (`inspect deliveries`), so nothing is ever posted twice unless forced.
 """
 
@@ -26,9 +26,9 @@ from ..sinks import (
     BaseArtifactSink,
     BaseItemSink,
     DeliveryOptions,
-    Sink,
+    SinkType,
 )
-from . import PluginObjects, PluginOptions, Services
+from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,13 +75,6 @@ class DocumentDeliveryOptions(ArtifactDeliveryOptions):
     chat_id: str
 
 
-class Options(PluginOptions):
-    """Defaults for every entry."""
-
-    bot_token: SecretStr | None = None
-    chat_id: str | None = None
-
-
 def post(bot_token: SecretStr, method: str, **request: Any) -> int:
     """Call the Bot API `method` with `requests.post` keyword arguments;
     return the id of the message sent."""
@@ -104,12 +97,12 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
     name = "telegram"
     options_model = ItemDeliveryOptions
 
-    def required_key(self, options: ItemDeliveryOptions) -> str:
+    @classmethod
+    def required_key(cls, options: ItemDeliveryOptions) -> str:
         return options.summary
 
-    def send(
-        self, db: Database, subject: SourceItem, options: ItemDeliveryOptions
-    ) -> dict[str, Any]:
+    def send(self, db: Database, subject: SourceItem) -> dict[str, Any]:
+        options = self.options
         summaries = db.get_annotation_values([subject], key=options.summary)
         caption = build_caption(
             subject.title,
@@ -155,9 +148,8 @@ class TelegramArtifactSink(BaseArtifactSink[DocumentDeliveryOptions]):
     name = "telegram_artifacts"
     options_model = DocumentDeliveryOptions
 
-    def send(
-        self, db: Database, subject: Artifact, options: DocumentDeliveryOptions
-    ) -> dict[str, Any]:
+    def send(self, db: Database, subject: Artifact) -> dict[str, Any]:
+        options = self.options
         artifact = db.get_artifact(subject.remixer, subject.name)
         if artifact is None or artifact.content is None:
             raise LookupError(f"artifact {subject.remixer}/{subject.name} is gone")
@@ -181,7 +173,6 @@ class TelegramArtifactSink(BaseArtifactSink[DocumentDeliveryOptions]):
         return {"chat_id": options.chat_id, "message_id": message_id}
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    sinks = [TelegramSink(cfg), TelegramArtifactSink(cfg)]
-    return [(sink.name, Sink, sink) for sink in sinks]
+def __newsmerger_plugin__() -> PluginTypes:
+    sinks = [TelegramSink, TelegramArtifactSink]
+    return [(sink.name, SinkType, sink) for sink in sinks]

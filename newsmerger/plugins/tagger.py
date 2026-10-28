@@ -3,15 +3,14 @@ the tags the item came with."""
 
 import json
 import logging
-from typing import Any
 
 import pydantic
 
 from ..db import Database
-from ..llms import LLM, LLMUnavailableError, strip_code_fence
+from ..llms import strip_code_fence
 from ..models import SourceItem
-from ..processors import BaseProcessor, Processor, UnavailableProcessor
-from . import PluginObjects, PluginOptions, Services
+from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
+from . import PluginTypes, Services, UsesLLMOptions
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,15 +52,8 @@ You are an expert entity extraction and content tagging assistant. Your sole tas
 """
 
 
-class TaggerOptions(PluginOptions):
-    """Per `process:` entry; the section sets their defaults."""
-
+class TaggerOptions(ProcessorOptions, UsesLLMOptions):
     model: str | None = None
-
-
-class Options(TaggerOptions):
-    llm: str | None = None
-    max_retries: int = 3
 
 
 class TaggerProcessor(BaseProcessor):
@@ -69,18 +61,17 @@ class TaggerProcessor(BaseProcessor):
     key = "tags"
     requires = "markdown"
     options_model = TaggerOptions
+    options: TaggerOptions
 
-    def __init__(self, llm: LLM, cfg: Options) -> None:
-        super().__init__(cfg, max_retries=cfg.max_retries)
-        self.llm = llm
+    def __init__(self, options: TaggerOptions, services: Services) -> None:
+        super().__init__(options, services)
+        self.llm = services.llm(options.llm)
 
-    def process_item(
-        self, db: Database, item: SourceItem, options: TaggerOptions
-    ) -> list[str]:
+    def process_item(self, db: Database, item: SourceItem) -> list[str]:
         markdown = self.require_annotation(db, item, "markdown")
 
         response = self.llm.prompt(
-            TAGS_PROMPT + markdown, model=options.model, json_mode=True
+            TAGS_PROMPT + markdown, model=self.options.model, json_mode=True
         )
 
         try:
@@ -110,12 +101,5 @@ def merge_tags(existing_tags: list[str], new_tags: list[str]) -> list[str]:
     return list(merged.values())
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    name = TaggerProcessor.name
-    try:
-        processor = TaggerProcessor(services.llm(cfg.llm), cfg)
-    except LLMUnavailableError as e:
-        unavailable = UnavailableProcessor(name, str(e), TaggerProcessor, cfg)
-        return [(name, Processor, unavailable)]
-    return [(name, Processor, processor)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(TaggerProcessor.name, ProcessorType, TaggerProcessor)]

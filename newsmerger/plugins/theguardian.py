@@ -3,7 +3,6 @@ import logging
 import re
 from collections.abc import Iterator
 from datetime import datetime
-from typing import Any
 from urllib.parse import urljoin
 
 import feedparser
@@ -16,8 +15,8 @@ from foundation.scrapelib import (
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, Provider
-from . import PluginObjects, PluginOptions, Services
+from ..providers import URI, IndexSiteProvider, ProviderType
+from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +89,5 @@ class TheGuardianProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    PluginOptions.model_validate(options)
-    return [("theguardian", Provider, TheGuardianProvider())]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("theguardian", ProviderType, TheGuardianProvider)]

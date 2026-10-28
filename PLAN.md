@@ -4,6 +4,34 @@ Ordered smallest-and-most-necessary → biggest-and-least-necessary.
 Update statuses as we progress: `[ ]` todo, `[x]` done, `[~]` in progress.
 Ideas and plans not scheduled yet go to the backlog at the end.
 
+## Plugin classes and the configuration catalog (decision 0010)
+
+Agreed 2026-10-28. Entry points register classes; the core builds one
+object per configured use, with its options. `plugins.<type>` holds
+defaults per type; `llms`, `sources`, `processors`, `remixers` and `sinks`
+are the catalog, with `id`s workflows refer to; `default` is the catalog
+without `skip_default` and delivers nothing. Needs a new database and a
+rewritten configuration.
+
+- [x] **`ClassRegister`** in `newsmerger.plugins`, on foundation's
+  `BaseRegister`: every module registered, classes by type Protocol
+  (`ProviderType`, `ProcessorType`, `RemixerType`, `SinkType`, `LLMType`),
+  several per bundle under different names.
+- [x] **One object per use**: constructors take `(options, services)`;
+  `use_options`, the `Options`/per-use split, the phase methods' `options`
+  and the `Unavailable*` objects go. `ProcessorOptions` (`max_retries`),
+  `UsesLLMOptions` (`llm`), `BaseProvider`.
+- [x] **Config**: catalog entries with `id`, `key`, `options`,
+  `skip_default`; workflow entries as ids, type names or their own entries
+  (no `id`); `default: false` → `skip_default: true`; deep `merge_options`.
+- [x] **`Catalog`** (`catalog.py`): profiles and runs resolved and checked
+  at startup (sections, ids vs type names, keys, what runs read, LLMs);
+  objects built on first use; every ledger key `<workflow>/<key>`.
+- [x] **Tests, docs** (decision 0010, 0003/0006/0007/0009 revised,
+  ARCHITECTURE, SPECIFICATION, README) and **configs**
+  (`config.example.yaml`, the user's `config.yaml`).
+- [ ] **Move `ClassRegister` to foundation.**
+
 ## Workflows, delivery entries and per-use options as pydantic models
 
 Agreed 2026-10-27. A workflow selects sources and runs its own `process`,
@@ -486,19 +514,16 @@ Risks:
   section exists (see the plan above); per-source runs or options are next.
   Proposed shape (2026-10-27, not agreed): the same list format as `process`; an entry
   whose key matches a default entry replaces it, a new key adds a run.
-- **Named deliveries** (2026-10-27, idea): a root section (`delivers`,
-  perhaps `destinations`) defining deliveries by `id` (sink, `bot_token`,
-  `chat_id`...), referenced by id from workflows' `deliver` entries, like
-  `sources`. Open question before building it: is the ledger (and pacing)
-  per workflow, as decision 0009 says (then it only reuses options, and the
-  same item can reach a channel twice), or per destination (one record and
-  one `interval` per channel, however many workflows feed it, which revises
-  0009)? Also its precedence against the plugin section and the entry's
-  `options`. Wait until two workflows share a destination.
-- **Workflow cleanup in the CLI** (2026-10-27, undefined yet): candidates
-  are `inspect/delete orphans` (ledger rows, annotations and artifacts of
-  keys or remixers no longer configured) or deleting what one workflow
-  produced.
+- **Ledger per destination** (2026-10-27, idea; named deliveries came
+  with the catalog's `sinks`, decision 0010): the ledger and pacing are per
+  workflow, so two workflows referring to one sink entry each deliver to its
+  channel. A record and an `interval` per destination would revise 0009.
+  Wait until two workflows share a destination.
+- **`inspect orphans`** (2026-10-28, agreed shape): list the ledger rows,
+  annotations and artifacts of keys, remixers and sources the configuration
+  no longer names, and delete them with the existing `delete` commands.
+  Never delete from the configuration alone: several configurations may
+  share a database.
 - **`deliveries rename OLD NEW`**: renaming a workflow or delivery key
   redelivers its `lookback`; a rename keeps the ledger.
 - **Ledger columns `workflow`, `key`, `sink`** instead of `workflow/key`
@@ -510,13 +535,11 @@ Risks:
 - **summary plugin: per-source prompt**: the prompt is configurable
   globally and per `process` entry; per source is pending.
 - **google chat deliver plugin**
-- **LLM options per use (`llm` + `llm_options`)**, following the provider
-  convention agreed on 2026-10-26: a plugin section holds defaults, each use
-  overrides what its verb declares. Today consumers override `model` (and
-  `digest` `context_length`); `json_mode`/`context_length` stay explicit in
-  the `LLM` protocol. Review decision 0006 first; migrate when a
-  backend-specific option needs a per-use override.
+- **Backend-specific LLM options per use**: each use picks its LLM
+  (`llm`, decision 0010) and `model`; `json_mode`/`context_length` stay
+  explicit in the `LLM` protocol. An `llms` entry with other options covers
+  most needs; revisit when a consumer needs a backend option per call.
 
 ---
 
-*Last updated: 2026-10-27*
+*Last updated: 2026-10-28*

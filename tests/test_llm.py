@@ -5,15 +5,15 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pydantic
 
 from newsmerger.db import Database, ProcessingStatus
-from newsmerger.llms import LLM, LLMUnavailableError
+from newsmerger.llms import LLMType, LLMUnavailableError
 from newsmerger.models import SourceData, SourceItem
 from newsmerger.plugins import Services, embed, ollama, summarize, tagger
-from newsmerger.processors import Processor, UnavailableProcessor
+from newsmerger.processors import Processor, ProcessorType
 
 SOURCE = SourceData(id="s", name="S", url="https://s.test/", provider="plaza")
 
@@ -39,19 +39,29 @@ class StubLLM:
         return [[float(i)] for i, _ in enumerate(texts)]
 
 
+def build(cls: type, llm: StubLLM, **options: object) -> Processor:
+    """A processor of `cls` with `options`, using `llm`."""
+    return cls(cls.options_model(**options), Services(lambda name: llm))
+
+
 class ServicesTests(unittest.TestCase):
-    def test_none_is_the_first_loaded_llm(self) -> None:
-        first, second = StubLLM(), StubLLM()
-        services = Services({"a": first, "b": second})
+    def test_asks_the_factory_for_the_named_llm(self) -> None:
+        llm = StubLLM()
+        names: list[str | None] = []
 
-        self.assertIs(services.llm(), first)
-        self.assertIs(services.llm("b"), second)
+        def factory(name: str | None) -> StubLLM:
+            names.append(name)
+            return llm
 
-    def test_unavailable_llms_raise(self) -> None:
-        with self.assertRaisesRegex(LLMUnavailableError, "no llm is loaded"):
+        services = Services(factory)
+
+        self.assertIs(services.llm(), llm)
+        self.assertIs(services.llm("b"), llm)
+        self.assertEqual(names, [None, "b"])
+
+    def test_without_llms_it_raises(self) -> None:
+        with self.assertRaisesRegex(LLMUnavailableError, "no llm is configured"):
             Services().llm()
-        with self.assertRaisesRegex(LLMUnavailableError, "llm 'b' is not loaded"):
-            Services({"a": StubLLM()}).llm("b")
 
 
 class ProcessorTestCase(unittest.TestCase):
@@ -86,11 +96,9 @@ class ProcessorTestCase(unittest.TestCase):
         self.db.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def annotation(self, processor: Processor, key: str, **options) -> object:
-        """Run `processor` with `options`, writing `key`; return its value."""
-        summary = processor.process(
-            self.db, key=key, options=processor.use_options(options), force=True
-        )
+    def annotation(self, processor: Processor, key: str) -> object:
+        """Run `processor`, writing `key`; return its value."""
+        summary = processor.process(self.db, key=key, force=True)
         self.assertEqual(summary.done, 1)
         return self.db.get_annotations(self.item, key=key)[key]
 
@@ -98,24 +106,27 @@ class ProcessorTestCase(unittest.TestCase):
 class SummarizeTests(ProcessorTestCase):
     def test_summarizes_with_the_backend_model_unless_overridden(self) -> None:
         llm = StubLLM(" A summary. ")
-        processor = summarize.SummarizeProcessor(llm, summarize.Options())
+        processor = build(summarize.SummarizeProcessor, llm)
 
         self.assertEqual(self.annotation(processor, "summary"), "A summary.")
         self.assertEqual(llm.calls[0][2], {"model": None, "json_mode": False})
 
-        self.annotation(processor, "summary", model="small")
+        self.annotation(
+            build(summarize.SummarizeProcessor, llm, model="small"), "summary"
+        )
         self.assertEqual(llm.calls[1][2]["model"], "small")
 
-    def test_run_options_override_the_section_and_write_their_own_key(
-        self,
-    ) -> None:
+    def test_each_use_writes_its_key_with_its_options(self) -> None:
         llm = StubLLM("Resumen.")
-        processor = summarize.SummarizeProcessor(
-            llm, summarize.Options(model="small", prompt="Summarize: ")
+        default = build(
+            summarize.SummarizeProcessor, llm, model="small", prompt="Summarize: "
+        )
+        spanish = build(
+            summarize.SummarizeProcessor, llm, model="big", prompt="Resume: "
         )
 
-        self.annotation(processor, "summary")
-        self.annotation(processor, "summary/es", prompt="Resume: ", model="big")
+        self.annotation(default, "summary")
+        self.annotation(spanish, "summary/es")
 
         self.assertEqual(
             [(call[1], call[2]["model"]) for call in llm.calls],
@@ -127,18 +138,16 @@ class SummarizeTests(ProcessorTestCase):
         )
 
     def test_rejects_options_the_processor_does_not_take(self) -> None:
-        processor = summarize.SummarizeProcessor(StubLLM(), summarize.Options())
-        options = processor.use_options({})
-        self.assertEqual(processor.output_key(options), "summary")
-        for invalid in ({"temperature": 1}, {"llm": "other"}):
-            with self.subTest(invalid), self.assertRaises(pydantic.ValidationError):
-                processor.use_options(invalid)
+        options = summarize.SummarizeOptions()
+        self.assertEqual(summarize.SummarizeProcessor.output_key(options), "summary")
+        with self.assertRaises(pydantic.ValidationError):
+            summarize.SummarizeOptions.model_validate({"temperature": 1})
 
 
 class TaggerTests(ProcessorTestCase):
     def test_merges_json_tags_with_the_item_tags(self) -> None:
         llm = StubLLM('```json\n{"items": ["BCE", "Pleno"]}\n```')
-        processor = tagger.TaggerProcessor(llm, tagger.Options(model="small"))
+        processor = build(tagger.TaggerProcessor, llm, model="small")
 
         self.assertEqual(self.annotation(processor, "tags"), ["BCE", "Pleno"])
         self.assertEqual(llm.calls[0][2], {"model": "small", "json_mode": True})
@@ -147,66 +156,56 @@ class TaggerTests(ProcessorTestCase):
 class EmbedTests(ProcessorTestCase):
     def test_embeds_the_tags_text_by_default(self) -> None:
         llm = StubLLM()
-        processor = embed.EmbedProcessor(llm, embed.Options(model="embedder"))
+        processor = build(embed.EmbedProcessor, llm, model="embedder")
 
         self.assertEqual(self.annotation(processor, "tags_embedding"), [0.0])
         self.assertEqual(llm.calls, [("embed", ["BCE, pleno"], {"model": "embedder"})])
 
-    def test_embeds_the_input_each_run_names(self) -> None:
+    def test_embeds_the_input_its_options_name(self) -> None:
         llm = StubLLM()
-        processor = embed.EmbedProcessor(llm, embed.Options())
+        processor = build(embed.EmbedProcessor, llm, input="markdown")
 
-        self.annotation(processor, "markdown_embedding", input="markdown")
+        self.annotation(processor, "markdown_embedding")
 
         self.assertEqual(llm.calls, [("embed", ["# T\n\nBody"], {"model": None})])
-        options = processor.use_options({"input": "markdown"})
-        self.assertEqual(processor.required_key(options), "markdown")
+        options = embed.EmbedOptions(input="markdown")
+        self.assertEqual(embed.EmbedProcessor.required_key(options), "markdown")
 
     def test_output_key_follows_the_input(self) -> None:
-        processor = embed.EmbedProcessor(StubLLM(), embed.Options())
         for overrides, key in (
             ({}, "tags_embedding"),
             ({"input": "markdown"}, "markdown_embedding"),
         ):
-            options = processor.use_options(overrides)
-            self.assertEqual(processor.output_key(options), key)
+            options = embed.EmbedOptions.model_validate(overrides)
+            self.assertEqual(embed.EmbedProcessor.output_key(options), key)
         with self.assertRaises(pydantic.ValidationError):
-            processor.use_options({"input": "title"})
+            embed.EmbedOptions.model_validate({"input": "title"})
 
 
 class ConsumerPluginTests(unittest.TestCase):
     def test_consumers_use_the_requested_llm(self) -> None:
-        first, second = StubLLM(), StubLLM()
-        services = Services({"a": first, "b": second})
-
+        llm = StubLLM()
         for plugin, options, expected in (
-            (summarize, {}, first),
-            (tagger, {"llm": "b"}, second),
-            (embed, {"llm": "a", "model": "e"}, first),
+            (summarize, {}, None),
+            (tagger, {"llm": "b"}, "b"),
+            (embed, {"llm": "a", "model": "e"}, "a"),
         ):
             with self.subTest(plugin=plugin.__name__):
-                ((_, protocol, processor),) = plugin.__newsmerger_plugin__(
-                    services, **options
-                )
-                self.assertIs(protocol, Processor)
-                self.assertIs(processor.llm, expected)
+                factory = Mock(return_value=llm)
 
-    def test_consumers_without_their_llm_are_unavailable(self) -> None:
-        for plugin, name in (
-            (summarize, "summarize"),
-            (tagger, "tagger"),
-            (embed, "embed"),
-        ):
-            with self.subTest(plugin=name):
-                ((object_name, _, processor),) = plugin.__newsmerger_plugin__(
-                    Services({"a": StubLLM()}), llm="missing"
-                )
-                self.assertEqual(object_name, name)
-                self.assertIsInstance(processor, UnavailableProcessor)
-                self.assertIn("llm 'missing' is not loaded", processor.reason)
-                # Its entries are still checked like the real processor's.
-                with self.assertRaises(pydantic.ValidationError):
-                    processor.use_options({"temperature": 1})
+                ((_, protocol, cls),) = plugin.__newsmerger_plugin__()
+                processor = cls(cls.options_model(**options), Services(factory))
+
+                self.assertIs(protocol, ProcessorType)
+                self.assertIs(processor.llm, llm)
+                factory.assert_called_once_with(expected)
+
+    def test_consumers_cannot_be_built_without_an_llm(self) -> None:
+        for plugin in (summarize, tagger, embed):
+            with self.subTest(plugin=plugin.__name__):
+                ((_, _, cls),) = plugin.__newsmerger_plugin__()
+                with self.assertRaises(LLMUnavailableError):
+                    cls(cls.options_model(), Services())
 
 
 class OllamaTests(unittest.TestCase):
@@ -214,7 +213,9 @@ class OllamaTests(unittest.TestCase):
         client = Mock()
         client.generate.return_value = Mock(response="ok")
         client.embed.return_value = Mock(embeddings=[(1.0, 2.0)])
-        llm = ollama.OllamaLLM(client, "chat", "embedder")
+        options = ollama.Options(chat_model="chat", embed_model="embedder")
+        with patch.object(ollama, "ollama_client", return_value=client):
+            llm = ollama.OllamaLLM(options, Services())
 
         self.assertEqual(llm.prompt("hi"), "ok")
         llm.prompt("hi", model="other", json_mode=True, context_length=8192)
@@ -241,12 +242,11 @@ class OllamaTests(unittest.TestCase):
         )
         client.embed.assert_called_once_with(model="embedder", input=["text"])
 
-    def test_provides_one_llm_named_ollama(self) -> None:
-        ((name, protocol, llm),) = ollama.__newsmerger_plugin__(
-            Services(), chat_model="chat"
-        )
+    def test_registers_one_llm_class_named_ollama(self) -> None:
+        ((name, protocol, cls),) = ollama.__newsmerger_plugin__()
+        llm = cls(ollama.Options(chat_model="chat"), Services())
 
-        self.assertEqual((name, protocol), ("ollama", LLM))
+        self.assertEqual((name, protocol, cls), ("ollama", LLMType, ollama.OllamaLLM))
         self.assertEqual(
             (llm.chat_model, llm.embed_model), ("chat", ollama.DEFAULT_EMBED_MODEL)
         )

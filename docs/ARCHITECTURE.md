@@ -31,124 +31,110 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 
 | Module | Responsibility |
 | :--- | :--- |
-| `app.py` | `Application`, the single entry point: loads the configured plugins, wires config, HTTP cache and database, runs the phases one unit at a time, each on its workflow's sources (`import_source`, `run_process`, `run_remix`, `run_delivery`; `sources()`, `process_keys()`, `remix_keys()` and `delivery_keys()` list a workflow's units in configuration order, `workflows` the workflows and `processors` the loaded processors), validates every source's and entry's options at start-up, answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
+| `app.py` | `Application`, the single entry point: registers the plugin classes, resolves the configuration into a `Catalog`, wires config, HTTP cache and database, builds each profile's object on first use (`_object`), runs the phases one unit at a time, each on its workflow's sources (`import_source`, `run_process`, `run_remix`, `run_delivery`; `sources()`, `process_keys()`, `remix_keys()` and `delivery_keys()` list a workflow's units in configuration order, `workflows` the workflows), answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
 | `cli.py` | Click commands only: the phases (`import`, `process`, `remix`, `deliver`, and `run` for all four), each for one workflow (`-w`, default `default`), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
-| `config.py` | Pydantic models for `config.yaml` (log level, sources, plugins, the `process`, `remix` and `deliver` entries, `workflows`, cache, database); `Config.all_workflows()` builds `default` from the root keys and `Workflow.ledger_key` names a workflow's delivery records. `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of option errors with their config path. |
+| `catalog.py` | `Catalog`: the configuration resolved against the registered classes, at start-up. Every use becomes a `Profile` (class, validated options), every workflow's runs a `Run` (workflow, key, profile), with every check of decision 0010 (sections, ids, keys, what runs read, LLMs). Builds nothing. |
+| `config.py` | Pydantic models for `config.yaml` (log level, `plugins` defaults per type, the catalog: `llms`, `sources`, `processors`, `remixers`, `sinks`; `workflows`, cache, database); `Config.all_workflows()` adds `default` (the sources without `skip_default`) and `Workflow.ledger_key` names a workflow's delivery records. `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of option errors with their config path. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope` (`sources` holds a workflow's). |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
-| `providers.py` | The `Provider` protocol and `IndexSiteProvider`, an optional base class. |
-| `processors.py` | The `Processor` protocol, `BaseProcessor`, `UnavailableProcessor`, `SkipItem` and `RunSummary`. |
-| `remixers.py` | The `Remixer` protocol, `BaseRemixer` and `UnavailableRemixer`. |
-| `sinks.py` | The `Sink` protocol, `BaseItemSink`, `BaseArtifactSink`, the per-entry `DeliveryOptions` and `ArtifactDeliveryOptions`, and `SelectionRequiredError`. |
-| `llms.py` | The `LLM` protocol, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
-| `plugins/` | The plugin bundles: one module per site provider (`telegram_channel` included), `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `feedgenerator`, `telegram` (the `telegram` and `telegram_artifacts` sinks) and `googlechat`. `PluginOptions`, `NoOptions`, `merge_options`, `PluginObjects` and `Services` live in its `__init__`. |
+| `providers.py` | The `Provider` and `ProviderType` protocols, `BaseProvider` and `IndexSiteProvider`, optional base classes. |
+| `processors.py` | The `Processor` and `ProcessorType` protocols, `ProcessorOptions`, `BaseProcessor`, `SkipItem` and `RunSummary`. |
+| `remixers.py` | The `Remixer` and `RemixerType` protocols and `BaseRemixer`. |
+| `sinks.py` | The `Sink` and `SinkType` protocols, `BaseItemSink`, `BaseArtifactSink`, `DeliveryOptions` and `ArtifactDeliveryOptions`, and `SelectionRequiredError`. |
+| `llms.py` | The `LLM` and `LLMType` protocols, `LLMUnavailableError` and `strip_code_fence`, for answers wrapped in a code fence. |
+| `plugins/` | The plugin bundles: one module per site provider (`telegram_channel` included), `markdownify`, the `ollama` LLM, `summarize`, `tagger`, `embed`, `digest`, `grouping` (`singlelink`, `avglink`, `embeddings`), `feedgenerator`, `telegram` (the `telegram` and `telegram_artifacts` sinks) and `googlechat`. `PluginOptions`, `NoOptions`, `UsesLLMOptions`, `merge_options`, `PluginTypes`, `Services` and `ClassRegister` live in its `__init__`. |
 | `scripts/` | The one-shot migrations `migrate_autoincrement.py`, `migrate_telegram_state.py` and `migrate_annotation_keys.sql`. |
 
 ## Plugins
 
-Plugins are loaded with `foundation.plugin.Register` (decision 0003). The
-core knows only the protocols in `providers.py`, `processors.py`,
-`remixers.py`, `sinks.py` and `llms.py`, never a plugin's code or option
-models:
+Plugins register classes; the core builds one object per configured use
+(decision 0010). The core knows only the protocols in `providers.py`,
+`processors.py`, `remixers.py`, `sinks.py` and `llms.py`, never a plugin's
+code:
 
-1. `Application.__init__` calls `register(name, services, **section)` for
-   every entry of `plugins:`, in order, on the `newsmerger.plugins`
-   namespace. An empty section is `{}`. Then, for every source's
-   `provider` and every workflow's processor, remixer and sink that no
-   registered plugin provides yet, it registers the plugin of the same name
-   with `register(name, services)`, its defaults (`load_plugins`, with the
-   names from `referenced_plugins`); a missing module is a `ConfigError`
-   with the config path. A plugin that nothing names and has no section is
-   never imported.
-2. The module's `__newsmerger_plugin__(services, **options)` validates the options
-   with its own pydantic model (a `PluginOptions` subclass, so unknown keys
-   are errors), builds its objects with the validated model and returns
-   `[(name, Protocol, object), ...]`: one triple per object, declared under
-   `Provider`, `Processor`, `Remixer`, `Sink` or `LLM`. Objects are
-   instances: a class is a `PluginError`.
-3. `Application` indexes the objects by name per protocol, with
-   `get_by_protocol`, and checks that names are unique per protocol, that
-   every source's provider and every entry's object is loaded, and that
-   each one's `use_options` accepts its options (see *Per-use options*).
+1. `Application.__init__` registers every module of the `newsmerger.plugins`
+   namespace with `ClassRegister.register_found()`. Each module's
+   `__newsmerger_plugin__()` returns `[(type name, type Protocol, class),
+   ...]`, declared under `ProviderType`, `ProcessorType`, `RemixerType`,
+   `SinkType` or `LLMType`. `ClassRegister.classes(protocol)` indexes them
+   by type name, checks that names are unique per protocol, that each is a
+   class (an instance is a `PluginError`) and that it conforms
+   (`isinstance(cls, protocol)`, else `ProtocolConformanceError`). A module
+   that fails to import fails every command.
+2. `Catalog` resolves the configuration (see *The catalog*): a `Profile`
+   per use, with its options validated, and a `Run` per workflow unit. Every
+   error is a `ConfigError` with its config path, before the database is
+   opened.
+3. A run builds its profile's object on first use, `cls(options,
+   services)`, and keeps it for the other runs of the profile.
 
-Everything fails at construction, before the database is opened, so a broken
-plugin fails every command. A `pydantic.ValidationError` from an entry point
-(wrapped by foundation in `EntryPointError`) becomes a `ConfigError` with one
-`plugins.<plugin>.<path>: <message>` line per error; other plugin failures
-are `PluginError`s. Both are user errors in the CLI. `name` and `self`
-cannot be options, because they are `register()`'s own parameters.
+A type protocol declares `options_model` and `__call__(options, services)`;
+`ProcessorType` adds `output_key(options)` and `required_key(options)`, and
+`SinkType` `required_key(options)`, as class methods, so keys are worked
+out without objects. An object keeps its options (`self.options`) and
+receives what each task needs as method arguments: providers the source
+and the `HTTPClient`, processors, remixers and sinks the `Database`, the
+scope and the run's key. Each protocol has its own method
+(`retrieve_items`, `process`, `remix`, `deliver`). Processors, remixers and
+sinks own their name, a class attribute that records who wrote an
+annotation; entry points register each class under it. Annotations and
+processing state are keyed by the process run's key, artifacts by the
+remix run's and deliveries by the delivery run's (see *Workflows*), never
+by the type name, which is only their default.
 
-The objects are built once and receive what each task needs as method
-arguments: providers get the source, the `HTTPClient` and the source's
-options, processors, remixers and sinks the `Database`, the scope, the
-entry's key and its options.
-Each protocol has its own method (`retrieve_items`, `process`, `remix`,
-`deliver`) and none declares `name` (decision 0003 explains why).
-Processors, remixers and sinks own their name, a class attribute that
-records who wrote an annotation; entry points register each one under
-`obj.name`. Annotations and processing state are keyed by the process
-entry's key, artifacts by the remix entry's and deliveries by the deliver
-entry's (see *Workflows*), never by the object's name, which is only their
-default. Providers' names exist only in their triples.
+`services` is what the core shares with objects: `services.llm(name)`
+returns the LLM `name` refers to (an `llms` id or an LLM type; `None`, the
+first `llms` entry), built on first use by `Application._llm`. Objects that
+use one take `UsesLLMOptions` and ask for it in their constructor.
 
-`services` is what the core shares with entry points (decision 0006): the
-LLMs of the plugins registered so far, by name, in configuration order.
-`services.llm(name)` returns the named one, or the first for `None`, and
-raises `LLMUnavailableError` if it is not loaded. An LLM consumer catches it
-and returns an `UnavailableProcessor` (or `UnavailableRemixer`) under its
-name, whose `process` (or `remix`) logs the reason as an error and does
-nothing.
+A bundle may register several classes per protocol under different names:
+`grouping` registers its three remixers, `telegram` its two sinks.
 
-Bundles return several objects. `grouping` gives each one a subsection of
-its options: with none, the entry point enables every object with its
-defaults; with some, only those, in their order. This is the plugins'
-convention, not the core's: an entry point is free to decide what its
-options enable. `telegram` always returns both its sinks, sharing the bot.
+### The catalog
 
-### Per-use options
-
-Every use of an object (a source of a provider, an entry of a processor,
-remixer or sink) may override options, validated once at start-up (decision
-0003). Each object implements `use_options(overrides)`, which returns a
-pydantic model of its per-use options, and each method that runs it takes
-that model (`retrieve_items(source, fetcher, options)`, `process(db, *,
-key, options, ...)`, `remix(...)`, `deliver(...)`). A plugin splits its
-options in two models: the per-use ones, and its section's `Options`, which
-usually subclasses them and adds the instance-only ones (`llm`,
-`max_retries`, a bot token). `merge_options(model, section, overrides)`
-validates `overrides` over the values the section sets for `model`'s
-fields; `BaseProcessor`, `BaseRemixer` and `BaseSink` implement
-`use_options` with it from their `options_model` and the section they are
-built with, and objects without per-use options take `NoOptions`. A
-rejected option is a `ConfigError` with its path
+`plugins.<type>` holds the defaults of a type's options for every use. It
+builds nothing; `Catalog` checks its keys and each value against the
+type's `options_model` (`check_section`), and rules across options when a
+use is validated. The catalog lists the uses: `llms`, `sources`,
+`processors`, `remixers` and `sinks`, each a type name or `{<type>, id,
+key, options}`. A use's options are `merge_options(section, options)`,
+merged key by key in nested mappings, any other value replacing, validated
+with `options_model`. A rejected option is a `ConfigError` with its path
 (`workflows.<name>.deliver.0.options.chat_id: Field required`).
+
+An `id` lets workflows refer to a catalog entry; it cannot be a type's name
+of its kind. A workflow entry is an id, a type name (the type with its
+section's options: one profile per type), or an entry of the workflow's own
+(no `id`, no `skip_default`). Every profile of the catalog is validated,
+whether a workflow runs it or not.
 
 ## Workflows
 
-`config.all_workflows()` returns `default`, built from the root `process`,
-`remix` and `deliver` with every source not marked `default: false`, then
-the `workflows` list. `Application` checks every entry at start-up
-(`process_runs`, `remix_runs`, `delivery_runs`) and keeps a `Run` per entry
-(its workflow, object name and validated options), and every phase method
-restricts the scope to the entry's workflow's sources (`workflow_scope`,
-`ProcessingScope.sources`).
+`config.all_workflows()` returns `default`, with every source not marked
+`skip_default`, then the `workflows` list. `Catalog` gives `default` the
+catalog's processors and remixers without `skip_default`, in order, and no
+deliveries; the other workflows resolve their entries. Each run is a `Run`
+(workflow, key, profile, location), and every phase method restricts the
+scope to its workflow's sources (`workflow_scope`, `ProcessingScope.sources`).
 
 Identity follows ownership:
 
-- Process entries are keyed `(workflow, key)`. Two entries may write the
-  same annotation key only in workflows with no source in common, since
-  annotations and processing state are per `(item, key)`.
-- Remix entries are keyed by their key, unique across workflows, since an
-  artifact belongs to no source. It is stored as the artifact's `remixer`.
-- Deliver entries are keyed by `Workflow.ledger_key(key)`: `<workflow>/<key>`,
-  or the bare key in `default`, stored as the delivery's `sink`. A key is
-  unique within its workflow; the prefix keeps workflows apart, and `/` is
-  not allowed in workflow names or keys.
+- Process runs are keyed `(workflow, key)`, one per key in a workflow. On
+  shared sources, two processor types cannot write one key (each would see
+  the other's `processor_version` and process every item again); the same
+  type with other options gets a warning, since the first run to process an
+  item writes it. Annotations and processing state are per `(item, key)`.
+- Remix runs are keyed by their key, which belongs to one workflow, since
+  an artifact belongs to no source. It is stored as the artifact's
+  `remixer`.
+- Delivery runs are keyed by `Workflow.ledger_key(key)`, `<workflow>/<key>`,
+  stored as the delivery's `sink`. A key is unique within its workflow; `/`
+  is not allowed in workflow names or keys.
 
-The bare keys of `default` are the object names the earlier configuration
-used, so existing artifacts and deliveries belong to its entries without a
-migration.
+Every key a process or delivery run reads (`required_key`) must be written
+by a process run on its workflow's sources, in any workflow, so a workflow
+may deliver what others process.
 
 Bundles never import each other. `grouping.embeddings` reads the vectors
 `embed` stores as `<input>_embedding` annotations, the same way every
@@ -156,14 +142,14 @@ grouping remixer reads `tags`.
 
 ## Providers
 
-`Provider.retrieve_items(source, fetcher, options)` yields
-`SourceItemData`. Most sites are `IndexSiteProvider`s, which take no
-options: fetch `index_url(source)` (the source's URL unless the provider
+`Provider.retrieve_items(source, fetcher)` yields `SourceItemData`. Each
+source builds its own provider object, with the source's options. Most
+sites are `IndexSiteProvider`s, which take no options: fetch `index_url(source)` (the source's URL unless the provider
 overrides it), `parse_index` it into article URLs, fetch each article and
 `parse_item` it.
 
-A source's `options` go through the provider's `use_options` (see
-*Per-use options*), over its plugin section, so the source's value wins:
+A source's `options` override its provider's plugin section (see *The
+catalog*):
 
 ```yaml
 sources:
@@ -175,7 +161,7 @@ sources:
 
 An unknown or invalid option fails every command at start-up as a
 configuration error (`sources.<id>.options.<option>`). The options live in
-the configuration only, like `default`; the database stores neither.
+the configuration only, like `skip_default`; the database stores neither.
 
 HTML providers keep the article's cleaned HTML rather than converting it:
 `foundation.scrapelib.prune_to_spine` keeps the main node and its ancestors,
@@ -189,24 +175,22 @@ always UTF-8 and no charset is stored.
 ### Writing a plugin
 
 A plugin is a module in `newsmerger/plugins/` that exposes
-`__newsmerger_plugin__(**options) -> PluginObjects`; the module name is its
-key under `plugins:`, and the name sources and `process:` entries load it by
-when it has no section, so a provider or processor is named after its
-module and builds with no options. A provider for a site with an index page (a section,
-an RSS feed) that links to one article per item:
+`__newsmerger_plugin__() -> PluginTypes`, the classes it provides under
+their type names, which are what `plugins:` sections, sources and entries
+name. A provider for a site with an index page (a section, an RSS feed)
+that links to one article per item:
 
 ```python
 import hashlib
 from collections.abc import Iterator
-from typing import Any
 
 import bs4
 from foundation.scrapelib import drop_selectors, prune_to_spine
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, Provider
-from . import PluginObjects, PluginOptions
+from ..providers import URI, IndexSiteProvider, ProviderType
+from . import PluginTypes
 
 
 class ExampleProvider(IndexSiteProvider):
@@ -234,35 +218,34 @@ class ExampleProvider(IndexSiteProvider):
             content=str(prune_to_spine(article)).encode("utf-8"),
             mimetype="text/html",
             published_at=...,  # optional
-            modified_at=...,   # optional
+            modified_at=...,  # optional
             data={"author": ..., "image": ...},  # any JSON-compatible extras
         )
 
 
-def __newsmerger_plugin__(**options: Any) -> PluginObjects:
-    PluginOptions.model_validate(options)  # no options: reject any
-    return [("example", Provider, ExampleProvider())]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("example", ProviderType, ExampleProvider)]
 ```
 
 `retrieve_items` fetches the index and each article; a `ValueError` from
 `parse_item` is logged and that article is skipped, so raise it for pages
 that aren't articles. For anything else (several items in one page, binary
-files), implement `use_options(overrides)` and
-`retrieve_items(source, fetcher, options)` yourself, fetching with
+files), subclass `BaseProvider` and implement
+`retrieve_items(source, fetcher)` yourself, fetching with
 `fetcher.get(url)`; `csjuntasgobierno` is an example, and `feedreader` and
-`telegram_channel` ones with per-source options.
+`telegram_channel` ones with options (`self.options`).
 
-A plugin with options declares a `PluginOptions` subclass with defaults for
-the general case, so an empty section is enough to enable it, and passes the
-validated model to its objects' constructors; `markdownify`, `feedgenerator` and
-`telegram` are examples, `grouping` shows a bundle with subsections and
-`summarize` an LLM consumer. Use `pydantic.SecretStr` for secrets, so they never show in a
-`repr` or a traceback. Processors, remixers and sinks usually subclass
-`BaseProcessor` (`process_item(db, item, options)`, plus `key` and
-`requires` class attributes), `BaseRemixer` (`produce(db, scope, options)`)
-or `BaseItemSink`/`BaseArtifactSink` (`send(db, subject, options)`), set
-`name` and `options_model` as class attributes, pass their section to the
-base constructor and are returned as `(obj.name, Processor, obj)`.
+A class with options sets `options_model` to a `PluginOptions` subclass
+with defaults for the general case, so a use needs no options; its
+constructor takes `(options, services)`. `feedgenerator` and `telegram` are
+examples, `grouping` shows a bundle with several classes and `summarize` an
+LLM consumer (`UsesLLMOptions`). Use `pydantic.SecretStr` for secrets, so
+they never show in a `repr` or a traceback. Processors, remixers and sinks
+usually subclass `BaseProcessor` (`process_item(db, item)`, plus `key` and
+`requires` class attributes, options from `ProcessorOptions`),
+`BaseRemixer` (`produce(db, scope)`) or `BaseItemSink`/`BaseArtifactSink`
+(`send(db, subject)`), set `name` and `options_model` as class attributes
+and are returned as `(cls.name, ProcessorType, cls)`.
 
 Rules every provider follows:
 
@@ -342,17 +325,16 @@ touch `modified_at` (spec §4.1).
 
 The eligibility and retry rules are in spec §4.2; this is where they live:
 
-- A workflow's `process` lists the runs: a processor, an optional `key`
-  and its options. At start-up `app.process_runs` validates the options
-  with the processor's `use_options`, asks it for its `output_key(options)`
-  when the entry names no key, and rejects malformed keys and keys written
-  twice on the same sources (see *Workflows*).
+- A workflow's process runs come from the catalog or its own entries: a
+  processor, an optional `key` and its options. At start-up `Catalog`
+  validates the options, asks the class for its `output_key(options)` when
+  the entry names no key, and checks the keys (see *Workflows*).
   `run_process(key, workflow=...)` calls
-  `processor.process(db, key=key, options=..., scope=..., force=...)`.
-- `BaseProcessor.process_item(db, item, options)` returns the value of
-  one annotation for one item, `options` being its `options_model`.
+  `processor.process(db, key=key, scope=..., force=...)`.
+- `BaseProcessor.process_item(db, item)` returns the value of one
+  annotation for one item, with its options in `self.options`.
   `Database.get_unprocessed_items(key, ...)` selects the eligible items
-  (backoff in `backoff_seconds`, `max_retries` from the plugin's options,
+  (backoff in `backoff_seconds`, `max_retries` from `ProcessorOptions`,
   version in `version`). Raising `SkipItem` marks the item `ignored`; any
   other exception marks it `error`. `process()` returns a `RunSummary`
   (done, ignored, failed).
@@ -424,12 +406,12 @@ sends them whatever their state, without pacing.
 `Application.resolve_deliveries` settles `sending` rows of a ledger key as
 `done` or `queued`.
 
-The per-entry options are a `DeliveryOptions` subclass (`interval`,
+A sink's options are a `DeliveryOptions` subclass (`interval`,
 `max_per_run`, `max_retries`, `lookback`; `ArtifactDeliveryOptions` adds
-`artifacts`, remix keys), so one sink object serves every entry: where it
-delivers is an option. `telegram` bundles two sinks that post through
-`post(bot_token, method, ...)`; each entry's `bot_token` and `chat_id`
-default to the section's, which is optional. `item_image` picks
+`artifacts`, remix keys), and each use builds its own sink object: where
+it delivers is an option. `telegram` bundles two sinks that post through
+`post(bot_token, method, ...)`; each use's `bot_token` and `chat_id`
+default to its type's section, which is optional. `item_image` picks
 `sendPhoto` for items with an image, `item_url_text` and
 `item_url_preview` set the article link's text and whether
 `sendMessage` shows its preview. `TelegramSink` reads the annotation its

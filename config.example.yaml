@@ -7,6 +7,54 @@
 # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set a level.
 # log_level: info
 
+cache:
+  expiration: 21600
+
+# Plugin types and the defaults of their options in every use of the type:
+# the catalog entries and the workflows' own entries below override them
+# (nested mappings key by key; any other value, lists included, whole).
+# Options left out take the type's defaults. A section builds nothing.
+plugins:
+  ollama:
+    api_base: http://localhost:11434
+    api_key: ${OLLAMA_API_KEY}
+    chat_model: gemma4:12b
+    embed_model: mxbai-embed-large:latest
+
+  # A provider's options, for every source of it.
+  # feedreader:
+  #   article_selector: article  # fetch the full article
+
+  # `llm:` names the LLM by id or type (default: the first in `llms`) and
+  # `model:` overrides its default model.
+  tagger:
+    model: gemma4:12b
+
+  feedgenerator:
+    title: Castelló news
+  digest:                            # sends a week of articles per source
+    days: 7
+
+  telegram:                          # summarized items; uses may name their
+    bot_token: ${TELEGRAM_BOT_TOKEN} # own bot and chat
+  telegram_artifacts:                # artifacts, as documents
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+  googlechat:                        # summarized items, by incoming webhook
+    url: ${GOOGLECHAT_WEBHOOK_URL}   # or `channel` (space id) and `token`
+
+# The catalog: every configured use of a plugin type, with its `options` over
+# the type's section, validated at startup and built only when a workflow
+# runs it. An `id` names an entry so that workflows can refer to it; it
+# cannot be a type's name.
+#
+# The `default` workflow runs, in order, every source, processor and remixer
+# without `skip_default: true`; it delivers nothing. `skip_default` only
+# leaves an entry out of `default`: the workflows that name it still run it.
+
+# LLMs, for the processors and remixers that use one.
+llms:
+  - ollama
+
 sources:
   - id: elperiodicomediterraneo-castello
     name: El Periódico Mediterraneo (Castelló ciudad)
@@ -33,7 +81,7 @@ sources:
     name: Junta de Gobierno Local
     provider: csjuntasgobierno
     url: https://www.castello.es/es/sesiones
-    default: false
+    skip_default: true
 
   # Any RSS or Atom feed. `options` override, for this source only, the
   # options in the provider's plugin section.
@@ -44,55 +92,11 @@ sources:
   #   options:
   #     article_selector: article .post-body  # fetch the full article
 
-cache:
-  expiration: 21600
-
-# Plugins and their options; options left out take the plugin's defaults, so
-# an empty section enables a plugin as is. Providers, processors, remixers
-# and sinks that sources and entries name load on their own, with their
-# defaults, after the plugins listed here: list them only to give them
-# options. Only the `process`, `remix` and `deliver` entries run.
-plugins:
-  # Providers with options.
-  # feedreader:
-  #   article_selector: article  # default for every feedreader source
-
-  # LLMs, for the processors that use them. Without any, those processors
-  # log an error and do nothing.
-  ollama:
-    api_base: http://localhost:11434
-    api_key: ${OLLAMA_API_KEY}
-    chat_model: gemma4:12b
-    embed_model: mxbai-embed-large:latest
-
-  # LLM processors: `llm:` picks the LLM (default: the first listed) and
-  # `model:` overrides its default model, for every run of the processor.
-  # summarize and embed, without a section: the first LLM and its
-  # chat_model or embed_model.
-  tagger:
-    llm: ollama
-    model: gemma4:12b
-
-  # Remixers: the defaults of their `remix` entries.
-  feedgenerator:
-    title: Castelló news
-  grouping:                          # singlelink, avglink and embeddings
-  digest:                            # sends a week of articles per source
-    days: 7
-
-  # Sinks: the defaults of their `deliver` entries.
-  telegram:                          # the telegram and telegram_artifacts sinks
-    bot_token: ${TELEGRAM_BOT_TOKEN} # optional, like the section: entries
-    chat_id: ${TELEGRAM_CHAT_ID}     # may name their own bot and chat
-  googlechat:                        # summarized items, by incoming webhook
-    url: ${GOOGLECHAT_WEBHOOK_URL}   # or `channel` (space id) and `token`
-
-# The `default` workflow: every source without `default: false`.
-#
-# The runs of `process`, in order. Each writes one annotation key, the
-# processor's own unless the entry names another with `key`; a key is written
-# by one entry per item. `options` override the plugin section for that run.
-process:
+# Each processor run writes one annotation key, the processor's own unless the
+# entry names another with `key`. On shared sources a key is written by one
+# processor type; other options for it only get a warning (the first run to
+# process an item writes it).
+processors:
   - markdownify                      # markdown
   - summarize                        # summary
   - tagger                           # tags
@@ -100,17 +104,19 @@ process:
   - processor: embed
     options:
       input: markdown                # markdown_embedding
-  # A second summary, in Spanish, with its own prompt and model:
+  # A second summary, in Spanish, with its own prompt and model, for the
+  # workflows that name it:
   # - processor: summarize
+  #   id: summary-es
   #   key: summary/es
+  #   skip_default: true
   #   options:
   #     prompt: "Resume en español el siguiente artículo:\n\n"
   #     model: gemma4:27b
 
-# The runs of `remix`, in order. Each saves its artifacts under its key, the
-# remixer's own unless the entry names another; keys are unique across
-# workflows.
-remix:
+# Each remix run saves its artifacts under its key, the remixer's own unless
+# the entry names another; a key belongs to one workflow.
+remixers:
   - feedgenerator                    # feedgenerator/feed
   - singlelink
   - avglink
@@ -120,30 +126,45 @@ remix:
   #   key: short
   #   options: {title: Headlines, max_items: 10}
 
-# The runs of `deliver`, in order. Each records its deliveries under its key,
-# the sink's own unless the entry names another; keys are unique per
-# workflow. Every entry takes `interval` (minutes between deliveries, oldest
+# Each delivery records what it sent under `<workflow>/<key>`, the key being
+# the sink's name unless the entry names another; keys are unique per
+# workflow. Every sink takes `interval` (minutes between deliveries, oldest
 # first; default 0), `max_per_run` (default 5), `max_retries` and `lookback`.
-deliver:
+sinks:
   - sink: telegram                   # summarized items
+    id: telegram-main
     options:
+      chat_id: ${TELEGRAM_CHAT_ID}
       interval: 30
       item_image: true               # the item's image as a photo, if any
       item_url_text: original article # the link to the article
       summary: summary               # the annotation posted, e.g. summary/es
       item_url_preview: false        # Telegram's link preview, text posts only
-  - sink: telegram_artifacts         # artifacts, as documents
-    options: {artifacts: [digest]}
+  - sink: telegram_artifacts
+    id: telegram-digests
+    options:
+      chat_id: ${TELEGRAM_CHAT_ID}
+      artifacts: [digest]
   - sink: googlechat
+    id: chat-main
     options:
       item_image: true               # the item's image as a card, if any
       item_url_text: original article # the link to the article
       summary: summary               # the annotation posted, e.g. summary/es
 
-# More workflows, run with `-w NAME` (one cron line each). A workflow sees only
-# its sources; two workflows may write the same process key only if they
-# share no source. Its deliveries are recorded as `<name>/<key>`.
+# Workflows, run with `-w NAME` (one cron line each). A workflow sees only its
+# sources. Entries are catalog ids, type names (the type with its section's
+# options) or entries of the workflow's own, which have no `id`. A workflow
+# may only deliver what others process on its sources.
 workflows:
+  - name: main-channels
+    sources:
+      - elperiodicomediterraneo-castello
+      - castelloninformacion-castello
+      - castellonplaza
+      - the-guardian-spain
+    deliver: [telegram-main, telegram-digests, chat-main]
+
   - name: juntas-channel
     sources: [juntagobiernolocal]
     process: [markdownify, summarize]

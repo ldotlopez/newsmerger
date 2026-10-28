@@ -5,7 +5,6 @@ import dataclasses
 import logging
 import time
 from abc import abstractmethod
-from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
@@ -14,7 +13,7 @@ from foundation.jsonlib import JsonCompatible
 
 from .db import Database, DeliveryStatus, backoff_seconds
 from .models import Artifact, Delivery, ProcessingScope, SourceItem
-from .plugins import NoOptions, PluginOptions, merge_options
+from .plugins import PluginOptions, Services
 from .processors import RunSummary
 
 LOGGER = logging.getLogger(__name__)
@@ -27,7 +26,7 @@ class SelectionRequiredError(ValueError):
 
 
 class DeliveryOptions(PluginOptions):
-    """Per `deliver:` entry, for every sink."""
+    """Options every sink takes."""
 
     # Minutes between the entry's deliveries, oldest subject first; 0: no
     # pacing.
@@ -45,27 +44,34 @@ class ArtifactDeliveryOptions(DeliveryOptions):
 
 
 @runtime_checkable
-class Sink[O: DeliveryOptions](Protocol):
-    """Delivers subjects to the outside world. Each `deliver:` entry runs it
-    with its options, validated once, at startup, by `use_options`, under
-    its ledger key: the rows of that key are the entry's record."""
-
-    def use_options(self, overrides: Mapping[str, Any]) -> O:
-        """An entry's options over the plugin section's defaults. Raise
-        `pydantic.ValidationError` for options the sink does not take."""
-        ...
+class Sink(Protocol):
+    """Delivers subjects to the outside world under a ledger key: the rows of
+    that key are the run's record."""
 
     def deliver(
         self,
         db: Database,
         *,
         key: str,
-        options: O,
         scope: ProcessingScope | None = None,
         artifacts: ArtifactNames = (),
         requeue: bool = False,
         force: bool = False,
     ) -> RunSummary: ...
+
+
+@runtime_checkable
+class SinkType(Protocol):
+    """A Sink class, as plugins register it: each configured use builds one
+    with its options, validated at startup with `options_model`."""
+
+    options_model: type[pydantic.BaseModel]
+
+    def __call__(self, options: Any, services: Services) -> Sink: ...
+
+    def required_key(self, options: Any) -> str | None:
+        """The annotation key a run with `options` delivers, if any."""
+        ...
 
 
 class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
@@ -80,26 +86,25 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
        with the external reference, or `error`.
 
     Rows left `sending` by an interrupted run are never retried.
-    `options_model` declares the per-use options, whose defaults come from
-    `defaults`, the plugin section.
+    `options_model` declares its options.
     """
 
     name: str
     selection_hint: str  # what a forced delivery must name
     options_model: type[O]
 
-    def __init__(self, defaults: PluginOptions | None = None) -> None:
-        self.defaults = defaults or NoOptions()
+    def __init__(self, options: O, services: Services) -> None:
+        self.options = options
 
-    def use_options(self, overrides: Mapping[str, Any]) -> O:
-        return merge_options(self.options_model, self.defaults, overrides)
+    @classmethod
+    def required_key(cls, options: Any) -> str | None:
+        return None
 
     def deliver(
         self,
         db: Database,
         *,
         key: str,
-        options: O,
         scope: ProcessingScope | None = None,
         artifacts: ArtifactNames = (),
         requeue: bool = False,
@@ -113,9 +118,9 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         if force:
             if not self.is_explicit(scope, artifacts):
                 raise SelectionRequiredError(f"{key}: {self.selection_hint}")
-            self.queue_selected(db, key, options, scope, artifacts)
+            self.queue_selected(db, key, scope, artifacts)
             rows = self.rows(db, key, scope, artifacts)
-            return self._send_all(db, key, options, rows)
+            return self._send_all(db, key, rows)
 
         if requeue:
             errors = self.rows(db, key, scope, artifacts, [DeliveryStatus.ERROR])
@@ -123,7 +128,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
                 delivery.status = DeliveryStatus.QUEUED
                 delivery.attempts = 0
                 db.save_delivery(delivery)
-        self.queue(db, key, options, scope, artifacts, now)
+        self.queue(db, key, scope, artifacts, now)
 
         rows = self.rows(
             db,
@@ -143,11 +148,11 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
             if delivery.status == DeliveryStatus.QUEUED
             or (
                 delivery.status == DeliveryStatus.ERROR
-                and delivery.attempts < options.max_retries
+                and delivery.attempts < self.options.max_retries
             )
         ]
-        selected = self.pace(db, key, options, self.select(pending, now), now)
-        return self._send_all(db, key, options, selected)
+        selected = self.pace(db, key, self.select(pending, now), now)
+        return self._send_all(db, key, selected)
 
     def is_due(self, delivery: Delivery, now: datetime) -> bool:
         """Queued rows are due; failed ones once their backoff has passed."""
@@ -170,21 +175,21 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         self,
         db: Database,
         key: str,
-        options: O,
         selected: list[tuple[Delivery, S]],
         now: datetime,
     ) -> list[tuple[Delivery, S]]:
         """With an `interval`, the first selected row once the key's last
         delivery is that old; then at most `max_per_run` rows."""
-        if options.interval:
+        interval = self.options.interval
+        if interval:
             last = db.last_delivered_at(key)
-            if last is not None and now - last < timedelta(minutes=options.interval):
+            if last is not None and now - last < timedelta(minutes=interval):
                 return []
             selected = selected[:1]
-        return selected[: options.max_per_run]
+        return selected[: self.options.max_per_run]
 
     def _send_all(
-        self, db: Database, key: str, options: O, rows: list[tuple[Delivery, S]]
+        self, db: Database, key: str, rows: list[tuple[Delivery, S]]
     ) -> RunSummary:
         LOGGER.info(f"{key}: {len(rows)} to deliver")
         started = time.monotonic()
@@ -193,7 +198,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
             delivery.status = DeliveryStatus.SENDING
             db.save_delivery(delivery)
             try:
-                external_ref = self.send(db, subject, options)
+                external_ref = self.send(db, subject)
             except Exception as e:
                 LOGGER.exception(f"{key}: could not deliver {self.label(subject)}")
                 delivery.status = DeliveryStatus.ERROR
@@ -224,7 +229,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         self,
         db: Database,
         key: str,
-        options: O,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         now: datetime,
@@ -236,7 +240,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         self,
         db: Database,
         key: str,
-        options: O,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
     ) -> None:
@@ -258,7 +261,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         """How logs name a subject."""
 
     @abstractmethod
-    def send(self, db: Database, subject: S, options: O) -> JsonCompatible:
+    def send(self, db: Database, subject: S) -> JsonCompatible:
         """Deliver one subject; return its external reference. Raise on
         failure; the error is logged with its traceback, so it must not
         chain an exception that holds a secret (raise it `from None`)."""
@@ -277,29 +280,27 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
     def is_explicit(self, scope: ProcessingScope, artifacts: ArtifactNames) -> bool:
         return bool(scope.item_ids)
 
-    def required_key(self, options: O) -> str | None:
-        """The annotation key an entry with `options` reads, if any."""
-        return self.requires
+    @classmethod
+    def required_key(cls, options: Any) -> str | None:
+        return cls.requires
 
     def queue(
         self,
         db: Database,
         key: str,
-        options: O,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         now: datetime,
     ) -> None:
         if scope.since is None and scope.item_ids is None:
-            since = now - timedelta(hours=options.lookback)
+            since = now - timedelta(hours=self.options.lookback)
             scope = dataclasses.replace(scope, since=since)
-        db.queue_item_deliveries(key, scope, requires=self.required_key(options))
+        db.queue_item_deliveries(key, scope, requires=self.required_key(self.options))
 
     def queue_selected(
         self,
         db: Database,
         key: str,
-        options: O,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
     ) -> None:
@@ -347,26 +348,25 @@ class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
         self,
         db: Database,
         key: str,
-        options: O,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         now: datetime,
     ) -> None:
+        remixers = self.options.artifacts
         if artifacts:
-            db.queue_artifact_deliveries(key, options.artifacts, names=artifacts)
+            db.queue_artifact_deliveries(key, remixers, names=artifacts)
         else:
-            since = scope.since or now - timedelta(hours=options.lookback)
-            db.queue_artifact_deliveries(key, options.artifacts, since=since)
+            since = scope.since or now - timedelta(hours=self.options.lookback)
+            db.queue_artifact_deliveries(key, remixers, since=since)
 
     def queue_selected(
         self,
         db: Database,
         key: str,
-        options: O,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
     ) -> None:
-        db.queue_artifact_deliveries(key, options.artifacts, names=artifacts)
+        db.queue_artifact_deliveries(key, self.options.artifacts, names=artifacts)
 
     def rows(
         self,

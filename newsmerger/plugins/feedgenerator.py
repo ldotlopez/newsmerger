@@ -7,13 +7,12 @@ Produces one artifact named "feed".
 import dataclasses
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from typing import Any
 from xml.sax.saxutils import escape
 
 from ..db import Database
 from ..models import ProcessingScope, SourceItem
-from ..remixers import BaseRemixer, Remixer
-from . import PluginObjects, PluginOptions, Services
+from ..remixers import BaseRemixer, RemixerType
+from . import PluginOptions, PluginTypes
 
 RFC822 = "%a, %d %b %Y %H:%M:%S %z"
 
@@ -26,23 +25,23 @@ class Options(PluginOptions):
 
 
 class FeedGeneratorRemixer(BaseRemixer):
-    """Every option is per `remix:` entry; the section sets their defaults."""
-
     name = "feedgenerator"
     options_model = Options
+    options: Options
 
     def produce(
-        self, db: Database, scope: ProcessingScope, options: Options
+        self, db: Database, scope: ProcessingScope
     ) -> Iterator[tuple[str, str, str]]:
         if scope.limit is None:
-            scope = dataclasses.replace(scope, limit=options.max_items)
+            scope = dataclasses.replace(scope, limit=self.options.max_items)
         yield (
             "feed",
-            self._build_feed(db.get_items(scope, newest_first=True), options),
+            self._build_feed(db.get_items(scope, newest_first=True)),
             "application/rss+xml",
         )
 
-    def _build_feed(self, items: list[SourceItem], options: Options) -> str:
+    def _build_feed(self, items: list[SourceItem]) -> str:
+        options = self.options
         entries = "\n".join(self._build_entry(item) for item in items)
         description = options.description or options.title
         return (
@@ -71,6 +70,5 @@ class FeedGeneratorRemixer(BaseRemixer):
         )
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    remixer = FeedGeneratorRemixer(Options.model_validate(options))
-    return [(remixer.name, Remixer, remixer)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(FeedGeneratorRemixer.name, RemixerType, FeedGeneratorRemixer)]

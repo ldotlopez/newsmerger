@@ -1,12 +1,9 @@
 """Summarizes the article's markdown with an LLM."""
 
-from typing import Any
-
 from ..db import Database
-from ..llms import LLM, LLMUnavailableError
 from ..models import SourceItem
-from ..processors import BaseProcessor, Processor, UnavailableProcessor
-from . import PluginObjects, PluginOptions, Services
+from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
+from . import PluginTypes, Services, UsesLLMOptions
 
 SUMMARY_PROMPT = """Summarize the following news article in the same language as the
 article. Return only a concise summary of 3 to 5 sentences.
@@ -15,17 +12,10 @@ Article:
 """
 
 
-class SummarizeOptions(PluginOptions):
-    """Per `process:` entry; the section sets their defaults."""
-
+class SummarizeOptions(ProcessorOptions, UsesLLMOptions):
     model: str | None = None
     # Followed by the article's markdown.
     prompt: str = SUMMARY_PROMPT
-
-
-class Options(SummarizeOptions):
-    llm: str | None = None
-    max_retries: int = 3
 
 
 class SummarizeProcessor(BaseProcessor):
@@ -33,18 +23,17 @@ class SummarizeProcessor(BaseProcessor):
     key = "summary"
     requires = "markdown"
     options_model = SummarizeOptions
+    options: SummarizeOptions
 
-    def __init__(self, llm: LLM, cfg: Options) -> None:
-        super().__init__(cfg, max_retries=cfg.max_retries)
-        self.llm = llm
+    def __init__(self, options: SummarizeOptions, services: Services) -> None:
+        super().__init__(options, services)
+        self.llm = services.llm(options.llm)
 
-    def process_item(
-        self, db: Database, item: SourceItem, options: SummarizeOptions
-    ) -> str:
+    def process_item(self, db: Database, item: SourceItem) -> str:
         markdown = self.require_annotation(db, item, "markdown")
 
         summary = self.llm.prompt(
-            options.prompt + markdown, model=options.model
+            self.options.prompt + markdown, model=self.options.model
         ).strip()
         if not summary:
             raise ValueError("LLM returned an empty summary")
@@ -52,12 +41,5 @@ class SummarizeProcessor(BaseProcessor):
         return summary
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    name = SummarizeProcessor.name
-    try:
-        processor = SummarizeProcessor(services.llm(cfg.llm), cfg)
-    except LLMUnavailableError as e:
-        unavailable = UnavailableProcessor(name, str(e), SummarizeProcessor, cfg)
-        return [(name, Processor, unavailable)]
-    return [(name, Processor, processor)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(SummarizeProcessor.name, ProcessorType, SummarizeProcessor)]

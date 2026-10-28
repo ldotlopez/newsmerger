@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import string
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +16,10 @@ from foundation.jsonlib import JsonCompatible
 from .consts import PACKAGE_NAME
 from .models import SourceData
 
-# The workflow whose `sources`, `process`, `remix` and `deliver` are the
-# config's root keys.
+# The workflow built from the catalog (`Config.default_workflow`).
 DEFAULT_WORKFLOW = "default"
-# Workflow names and delivery keys, which form ledger keys as `<workflow>/<key>`.
+# Ids, workflow names, and remix and delivery keys, which form ledger keys as
+# `<workflow>/<key>`.
 NAME_PATTERN = re.compile(r"[a-z0-9_-]+")
 
 
@@ -56,127 +56,186 @@ class DatabaseConfig(pydantic.BaseModel):
     )
 
 
-class ProcessEntry(pydantic.BaseModel):
-    """One run of a processor in the process phase. `key` names the
-    annotation it writes (default: the processor's own for `options`), which
-    are passed to it as keyword arguments."""
+class Entry(pydantic.BaseModel):
+    """A configured use of a plugin type: its `options` over the type's
+    `plugins` section. `id` names it in the catalog, so that workflows can
+    refer to it; the entries of a workflow have none."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+    id: str | None = None
+    options: dict[str, JsonCompatible] = {}
+
+    @pydantic.field_validator("id")
+    @classmethod
+    def id_is_valid(cls, value: str | None) -> str | None:
+        if value is not None and not NAME_PATTERN.fullmatch(value):
+            raise ValueError(f"invalid id '{value}'")
+        return value
+
+    @property
+    def type_name(self) -> str:
+        """The plugin type it uses."""
+        raise NotImplementedError
+
+
+class LLMEntry(Entry):
+    """An LLM. Objects that use one name it by `id`, or by type; the first
+    entry serves those that name none."""
+
+    llm: str
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def from_name(cls, value: Any) -> Any:
+        """A bare type name is the type with its section's options."""
+        return {"llm": value} if isinstance(value, str) else value
+
+    @property
+    def type_name(self) -> str:
+        return self.llm
+
+
+class ProcessEntry(Entry):
+    """A processor run. `key` names the annotation it writes (default: the
+    processor's own for its options)."""
+
     processor: str
     key: str | None = None
-    options: dict[str, JsonCompatible] = {}
+    skip_default: bool = False  # catalog only: left out of `default`
 
     @pydantic.model_validator(mode="before")
     @classmethod
     def from_name(cls, value: Any) -> Any:
-        """A bare processor name runs it with its defaults."""
+        """A bare type name is the type with its section's options."""
         return {"processor": value} if isinstance(value, str) else value
 
+    @property
+    def type_name(self) -> str:
+        return self.processor
 
-class RemixEntry(pydantic.BaseModel):
-    """One remix of a workflow: `remixer` run with `options` (passed to it),
-    its artifacts under `key` (default: the remixer's name), which is unique
-    across workflows, since artifacts are not per source."""
 
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+class RemixEntry(Entry):
+    """A remixer run, its artifacts under `key` (default: the remixer's
+    name), which belongs to one workflow: artifacts are not per source."""
+
     remixer: str
     key: str | None = None
-    options: dict[str, JsonCompatible] = {}
+    skip_default: bool = False  # catalog only: left out of `default`
 
     @pydantic.model_validator(mode="before")
     @classmethod
     def from_name(cls, value: Any) -> Any:
-        """A bare remixer name runs it with its defaults."""
+        """A bare type name is the type with its section's options."""
         return {"remixer": value} if isinstance(value, str) else value
 
     @property
-    def name(self) -> str:
-        return self.key or self.remixer
+    def type_name(self) -> str:
+        return self.remixer
 
 
-class DeliveryEntry(pydantic.BaseModel):
-    """One delivery of a workflow: `sink` run with `options` (passed to it),
-    its ledger rows under `key` (default: the sink's name), which is unique
-    within the workflow."""
+class DeliveryEntry(Entry):
+    """A sink run, its ledger rows under `key` (default: the sink's name),
+    which is unique within its workflow."""
 
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
     sink: str
     key: str | None = None
-    options: dict[str, JsonCompatible] = {}
 
     @pydantic.model_validator(mode="before")
     @classmethod
     def from_name(cls, value: Any) -> Any:
-        """A bare sink name runs it with its defaults."""
+        """A bare type name is the type with its section's options."""
         return {"sink": value} if isinstance(value, str) else value
 
     @property
-    def name(self) -> str:
-        return self.key or self.sink
+    def type_name(self) -> str:
+        return self.sink
 
 
 class Workflow(pydantic.BaseModel):
-    """Which sources to use and what to run on them, in phase order. The
-    config's root keys are the `default` workflow."""
+    """Which sources to use and what to run on them, in phase order. A
+    string refers to a catalog entry by `id`, or else to a type with its
+    section's options; a mapping is an entry of the workflow's own.
+    `default`, built from the catalog, has no entries of its own."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
     name: str
     sources: list[str]  # source ids
-    process: list[ProcessEntry] = []
-    remix: list[RemixEntry] = []
-    deliver: list[DeliveryEntry] = []
+    process: list[str | ProcessEntry] = []
+    remix: list[str | RemixEntry] = []
+    deliver: list[str | DeliveryEntry] = []
 
     @pydantic.model_validator(mode="after")
-    def names_are_valid(self) -> Workflow:
+    def entries_are_valid(self) -> Workflow:
         if not NAME_PATTERN.fullmatch(self.name):
             raise ValueError(f"invalid workflow name '{self.name}'")
-        for entry in self.remix:
-            if not NAME_PATTERN.fullmatch(entry.name):
+        own: list[tuple[str, int, Entry]] = [
+            *own_entries("process", self.process),
+            *own_entries("remix", self.remix),
+            *own_entries("deliver", self.deliver),
+        ]
+        for section, index, entry in own:
+            if entry.id is not None:
                 raise ValueError(
-                    f"workflow '{self.name}': invalid remix key '{entry.name}'"
+                    f"workflow '{self.name}': {section}.{index} has an id;"
+                    " only catalog entries do"
                 )
-        keys = [entry.name for entry in self.deliver]
-        for key in keys:
-            if not NAME_PATTERN.fullmatch(key):
+        for section, index, entry in own:
+            if isinstance(entry, ProcessEntry | RemixEntry) and entry.skip_default:
                 raise ValueError(
-                    f"workflow '{self.name}': invalid delivery key '{key}'"
+                    f"workflow '{self.name}': {section}.{index} sets"
+                    " skip_default; only catalog entries do"
                 )
-        if duplicated := sorted({key for key in keys if keys.count(key) > 1}):
-            raise ValueError(
-                f"workflow '{self.name}': delivery key(s) {', '.join(duplicated)}"
-                " used twice; give the entries distinct `key`s"
-            )
         return self
 
     def ledger_key(self, key: str) -> str:
         """Where a delivery key's rows live: its workflow asked for them."""
-        return key if self.name == DEFAULT_WORKFLOW else f"{self.name}/{key}"
+        return f"{self.name}/{key}"
+
+
+def own_entries(
+    section: str, entries: Sequence[str | Entry]
+) -> list[tuple[str, int, Entry]]:
+    """The `(section, index, entry)` of a workflow section's own entries."""
+    return [
+        (section, index, entry)
+        for index, entry in enumerate(entries)
+        if not isinstance(entry, str)
+    ]
 
 
 class Config(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
     # Used when neither --log-level, -v/-q nor NEWSMERGER_LOG_LEVEL set one.
     log_level: str = "warning"
-    sources: list[SourceData] = []
-    # Plugin module name -> its options, validated by the plugin itself. An
-    # empty section enables its defaults. Providers and processors named by
-    # `sources` or `process` but provided by no section load the plugin of
-    # the same name with its defaults.
+    # Plugin type name -> the defaults of its options in every use of the
+    # type. Nothing is built from a section.
     plugins: dict[str, dict[str, Any] | None] = {}
-    # The default workflow's runs, in order; what is not listed never runs.
-    process: list[ProcessEntry] = []
-    remix: list[RemixEntry] = []
-    deliver: list[DeliveryEntry] = []
-    # More workflows, run by name; a list, since YAML drops duplicate keys.
+    # The catalog: every configured use, built when a workflow runs it.
+    llms: list[LLMEntry] = []
+    sources: list[SourceData] = []
+    processors: list[ProcessEntry] = []
+    remixers: list[RemixEntry] = []
+    sinks: list[DeliveryEntry] = []
+    # Workflows, run by name; a list, since YAML drops duplicate keys.
     workflows: list[Workflow] = []
     cache: CacheConfig = CacheConfig()
     db: DatabaseConfig = DatabaseConfig()
 
     @pydantic.model_validator(mode="after")
-    def source_ids_are_unique(self) -> Config:
-        ids = [source.id for source in self.sources]
-        if len(ids) != len(set(ids)):
+    def catalog_ids_are_unique(self) -> Config:
+        source_ids = [source.id for source in self.sources]
+        if len(source_ids) != len(set(source_ids)):
             raise ValueError("source ids must be unique")
+        catalog: dict[str, Sequence[Entry]] = {
+            "llms": self.llms,
+            "processors": self.processors,
+            "remixers": self.remixers,
+            "sinks": self.sinks,
+        }
+        for section, entries in catalog.items():
+            ids = [entry.id for entry in entries if entry.id is not None]
+            if duplicated := sorted({id for id in ids if ids.count(id) > 1}):
+                raise ValueError(f"{section}: id(s) {', '.join(duplicated)} used twice")
         return self
 
     @pydantic.model_validator(mode="after")
@@ -195,16 +254,18 @@ class Config(pydantic.BaseModel):
                 )
         return self
 
-    def all_workflows(self) -> list[Workflow]:
-        """Every workflow, `default` (from the root keys) first."""
-        default = Workflow(
+    def default_workflow(self) -> Workflow:
+        """The `default` workflow: the sources without `skip_default`. Its
+        runs are the catalog's processors and remixers without it; it
+        delivers nothing."""
+        return Workflow(
             name=DEFAULT_WORKFLOW,
-            sources=[source.id for source in self.sources if source.default],
-            process=self.process,
-            remix=self.remix,
-            deliver=self.deliver,
+            sources=[source.id for source in self.sources if not source.skip_default],
         )
-        return [default, *self.workflows]
+
+    def all_workflows(self) -> list[Workflow]:
+        """Every workflow, `default` first."""
+        return [self.default_workflow(), *self.workflows]
 
     def get_source(self, source_id: str) -> SourceData:
         for source in self.sources:

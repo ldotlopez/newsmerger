@@ -5,7 +5,8 @@
 - **Supersedes:** 0005
 - **Amends:** 0003 (a fourth plugin type and phase)
 - **Revised:** 2026-10-23, by 0008; 2026-10-27, by 0009; 2026-10-27, the
-  bot per entry (see *Revisions*)
+  bot per entry (see *Revisions*); 2026-10-28, by 0010 (one sink object
+  per use, built with its options)
 
 ## Context
 

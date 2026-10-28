@@ -3,7 +3,6 @@ import logging
 import re
 from collections.abc import Iterator
 from datetime import datetime
-from typing import Any
 from urllib.parse import urljoin
 
 import bs4
@@ -18,8 +17,8 @@ from foundation.scrapelib import (
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, Provider
-from . import PluginObjects, PluginOptions, Services
+from ..providers import URI, IndexSiteProvider, ProviderType
+from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -99,6 +98,5 @@ class PlazaProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    PluginOptions.model_validate(options)
-    return [("plaza", Provider, PlazaProvider())]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("plaza", ProviderType, PlazaProvider)]

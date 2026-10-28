@@ -1,8 +1,15 @@
-from typing import Protocol, runtime_checkable
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+import pydantic
+
+if TYPE_CHECKING:
+    from .plugins import Services
 
 
 class LLMUnavailableError(LookupError):
-    """The LLM a plugin asked for is not loaded."""
+    """The LLM a plugin asked for is not configured."""
 
 
 @runtime_checkable
@@ -26,6 +33,16 @@ class LLM(Protocol):
     def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]:
         """One embedding per text, in order."""
         ...
+
+
+@runtime_checkable
+class LLMType(Protocol):
+    """An LLM class, as plugins register it: each `llms` entry builds one
+    with its options, validated with `options_model`."""
+
+    options_model: type[pydantic.BaseModel]
+
+    def __call__(self, options: Any, services: Services) -> LLM: ...
 
 
 def strip_code_fence(text: str) -> str:

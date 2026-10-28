@@ -8,6 +8,7 @@ import pydantic
 
 from newsmerger.db import Database, DBDelivery, DeliveryStatus, ProcessingStatus
 from newsmerger.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newsmerger.plugins import Services
 from newsmerger.processors import RunSummary
 from newsmerger.sinks import (
     ArtifactDeliveryOptions,
@@ -27,15 +28,14 @@ class RecordingItemSink(BaseItemSink[DeliveryOptions]):
     options_model = DeliveryOptions
 
     def __init__(self, failing: set[str] | None = None, **options) -> None:
-        super().__init__()
-        self.options = self.use_options(options)
+        super().__init__(DeliveryOptions.model_validate(options), Services())
         self.failing = failing or set()
         self.sent: list[str] = []
 
     def run(self, db: Database, **kwargs) -> RunSummary:
-        return self.deliver(db, key="recorder", options=self.options, **kwargs)
+        return self.deliver(db, key="recorder", **kwargs)
 
-    def send(self, db: Database, subject: SourceItem, options: DeliveryOptions) -> dict:
+    def send(self, db: Database, subject: SourceItem) -> dict:
         if subject.uid in self.failing:
             raise RuntimeError(f"{subject.uid} rejected")
         self.sent.append(subject.uid)
@@ -47,16 +47,14 @@ class RecordingArtifactSink(BaseArtifactSink[ArtifactDeliveryOptions]):
     options_model = ArtifactDeliveryOptions
 
     def __init__(self, **options) -> None:
-        super().__init__()
-        self.options = self.use_options({"artifacts": ["digest"], **options})
+        options = {"artifacts": ["digest"], **options}
+        super().__init__(ArtifactDeliveryOptions.model_validate(options), Services())
         self.sent: list[str] = []
 
     def run(self, db: Database, **kwargs) -> RunSummary:
-        return self.deliver(db, key="artifacts", options=self.options, **kwargs)
+        return self.deliver(db, key="artifacts", **kwargs)
 
-    def send(
-        self, db: Database, subject: Artifact, options: ArtifactDeliveryOptions
-    ) -> dict:
+    def send(self, db: Database, subject: Artifact) -> dict:
         self.sent.append(subject.name)
         return {"message_id": len(self.sent)}
 

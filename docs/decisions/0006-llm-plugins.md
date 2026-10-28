@@ -2,7 +2,9 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-20
-- **Revised:** 2026-10-27 (LLMs load before autoloaded consumers; decision 0003)
+- **Revised:** 2026-10-27 (LLMs load before autoloaded consumers; decision 0003);
+  2026-10-28, by 0010 (LLMs are an `llms` catalog, built on first use; a
+  missing LLM is a configuration error, not an `Unavailable*` object)
 
 ## Context
 

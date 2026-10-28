@@ -1,26 +1,20 @@
 """Extracts the article's markdown from HTML and PDF items, for downstream
 processors. PDFs give plain text, which is valid markdown."""
 
-from typing import Any
-
 import pymupdf
 import trafilatura
 
 from ..db import Database
 from ..models import SourceItem
-from ..processors import BaseProcessor, Processor, SkipItem
-from . import NoOptions, PluginObjects, PluginOptions, Services
-
-
-class Options(PluginOptions):
-    max_retries: int = 3
+from ..processors import BaseProcessor, ProcessorType, SkipItem
+from . import PluginTypes
 
 
 class MarkdownifyProcessor(BaseProcessor):
     name = "markdownify"
     key = "markdown"
 
-    def process_item(self, db: Database, item: SourceItem, options: NoOptions) -> str:
+    def process_item(self, db: Database, item: SourceItem) -> str:
         match item.mimetype:
             case "text/html":
                 markdown = self.extract_html(db.get_content(item))
@@ -53,7 +47,5 @@ class MarkdownifyProcessor(BaseProcessor):
             return "\n".join(page.get_text() for page in doc).strip()
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    processor = MarkdownifyProcessor(max_retries=cfg.max_retries)
-    return [(processor.name, Processor, processor)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(MarkdownifyProcessor.name, ProcessorType, MarkdownifyProcessor)]

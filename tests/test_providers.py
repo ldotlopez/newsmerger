@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pydantic
 
 from newsmerger.models import SourceData, SourceItemData
+from newsmerger.plugins import NoOptions, Services, merge_options
 from newsmerger.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
 from newsmerger.plugins.feedreader import FeedReaderProvider, Options
 from newsmerger.plugins.prensaiberica import PrensaIbericaProvider
@@ -33,7 +34,8 @@ class TestCSJuntasGobierno(unittest.TestCase):
         <li>Sesi\xc3\xb3n del d\xc3\xada 3 de diciembre de 2026
             <a href="/b.pdf/1">Descargar extracto</a></li>
         </ul>"""
-        links = CSJuntasGobiernoProvider()._iter_pdf_links(index, "https://x.test/")
+        provider = CSJuntasGobiernoProvider(NoOptions(), Services())
+        links = provider._iter_pdf_links(index, "https://x.test/")
 
         summer, winter = (link.dt.utcoffset() for link in links)
         self.assertEqual(summer, datetime.timedelta(hours=2))
@@ -46,10 +48,12 @@ class TestFeedReader(unittest.TestCase):
     ) -> list[SourceItemData]:
         pages = {"https://x.test/feed": feed, "https://x.test/1": ARTICLE_PAGE}
         source = Mock(id="src", url="https://x.test/feed")
-        provider = FeedReaderProvider(Options(article_selector=default_selector))
+        # The source's options over the plugin section, as the core merges them.
+        section = {"article_selector": default_selector}
+        options = Options.model_validate(merge_options(section, provider_options))
+        provider = FeedReaderProvider(options, Services())
         fetcher = Mock(get=lambda url: pages[url])
-        options = provider.use_options(provider_options)
-        return list(provider.retrieve_items(source, fetcher, options))
+        return list(provider.retrieve_items(source, fetcher))
 
     def test_rss_with_encoded_content(self) -> None:
         feed = b"""<?xml version="1.0"?>
@@ -153,8 +157,8 @@ class TestFeedReader(unittest.TestCase):
         source = Mock(id="src", url="https://x.test/")
         fetcher = Mock(get=lambda url: pages[url])
 
-        (item,) = FeedReaderProvider(Options()).retrieve_items(
-            source, fetcher, Options()
+        (item,) = FeedReaderProvider(Options(), Services()).retrieve_items(
+            source, fetcher
         )
 
         self.assertEqual(item.content, b"hi")
@@ -171,7 +175,7 @@ ARTICLE_PAGE = (
 
 class TestPrensaIberica(unittest.TestCase):
     def setUp(self) -> None:
-        self.provider = PrensaIbericaProvider()
+        self.provider = PrensaIbericaProvider(NoOptions(), Services())
 
     def check_parser(self, filename: str, expected: SourceItemData):
         buff = read_sample(filename)
@@ -387,8 +391,8 @@ class TestTelegramChannel(unittest.TestCase):
 
         with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
             items = list(
-                TelegramChannelProvider(ChannelOptions()).retrieve_items(
-                    self.source(), fetcher, ChannelOptions()
+                TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
+                    self.source(), fetcher
                 )
             )
 
@@ -418,8 +422,8 @@ class TestTelegramChannel(unittest.TestCase):
 
         with self.assertLogs("newsmerger.plugins.telegram_channel", "ERROR"):
             items = list(
-                TelegramChannelProvider(ChannelOptions()).retrieve_items(
-                    self.source(), fetcher, ChannelOptions()
+                TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
+                    self.source(), fetcher
                 )
             )
 
@@ -432,8 +436,8 @@ class TestTelegramChannel(unittest.TestCase):
         fetcher.get.return_value = b"<html><head></head><body></body></html>"
         with self.assertRaises(ValueError):
             list(
-                TelegramChannelProvider(ChannelOptions()).retrieve_items(
-                    self.source(), fetcher, ChannelOptions()
+                TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
+                    self.source(), fetcher
                 )
             )
 

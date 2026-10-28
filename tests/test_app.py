@@ -9,23 +9,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from foundation.plugin import PluginError, PluginNotFoundError, Register
+from foundation.plugin import PluginError, ProtocolConformanceError
 
 from newsmerger.app import (
     PLUGIN_ENTRY_POINT,
     PLUGINS_NAMESPACE,
     Application,
     LockedError,
-    objects_by_name,
 )
 from newsmerger.config import Config, ConfigError
 from newsmerger.db import DeliveryStatus, ProcessingStatus
 from newsmerger.models import ProcessingScope, SourceItem
-from newsmerger.plugins import Services, feedreader
+from newsmerger.plugins import ClassRegister, Services, feedreader, markdownify
 from newsmerger.plugins.markdownify import MarkdownifyProcessor
 from newsmerger.plugins.ollama import OllamaLLM
-from newsmerger.processors import Processor, RunSummary
-from newsmerger.providers import Provider
+from newsmerger.processors import ProcessorOptions, ProcessorType
 
 SAMPLE = Path(__file__).parent / "samples" / "prensaiberica-item-132310503.html"
 SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
@@ -42,9 +40,9 @@ class ApplicationTests(unittest.TestCase):
 
     def make_app(
         self,
-        plugins: str = "  markdownify:\n  feedgenerator: {title: Test feed}\n",
-        process: str = "process: [markdownify]\n",
-        workflows: str = "remix: [feedgenerator]\n",
+        plugins: str = "  feedgenerator: {title: Test feed}\n",
+        catalog: str = "processors: [markdownify]\nremixers: [feedgenerator]\n",
+        workflows: str = "",
     ) -> Application:
         config = Config.from_text(
             f"""
@@ -59,9 +57,8 @@ sources:
     url: https://www.castello.es/es/sesiones
 plugins:
   prensaiberica:
-  csjuntasgobierno:
 {plugins}
-{process}
+{catalog}
 {workflows}
 db:
   uri: sqlite:///{self.tmp_dir}/data.db
@@ -72,8 +69,13 @@ cache:
         )
         return Application(config)
 
+    def object_of(self, workflow: str, key: str) -> object:
+        """The object of the workflow's process run that writes `key`."""
+        run = self.app._catalog.process[workflow, key]
+        return self.app._object(run.profile)
+
     def import_sample(self) -> SourceItem:
-        provider = self.app._providers["prensaiberica"]
+        provider = self.app._object(self.app._catalog.sources["mediterraneo"])
         item_data = provider.parse_item(SAMPLE.read_bytes())
         with patch.object(provider, "retrieve_items", return_value=iter([item_data])):
             (item,) = self.app.import_source("mediterraneo")
@@ -88,18 +90,26 @@ cache:
         self.assertEqual(item.key, stored.key)
         self.assertEqual(item.id, stored.id)
 
-    def test_provider_options_reach_the_provider(self) -> None:
-        app = self.make_rss_app("{article_selector: .body}")
-        provider = app._providers["feedreader"]
-        with patch.object(provider, "retrieve_items", return_value=iter([])) as call:
-            app.import_source("blog")
-        app.close()
+    def test_source_options_over_the_section_build_its_provider(self) -> None:
+        for options, expected in (
+            ("{}", "nav"),
+            ("{article_selector: .body}", ".body"),
+        ):
+            with self.subTest(options=options):
+                app = self.make_rss_app(options)
+                provider = app._object(app._catalog.sources["blog"])
+                with patch.object(
+                    provider, "retrieve_items", return_value=iter([])
+                ) as call:
+                    app.import_source("blog")
+                app.close()
 
-        call.assert_called_once_with(
-            app.config.get_source("blog"),
-            app._fetcher,
-            feedreader.Options(article_selector=".body"),
-        )
+                self.assertEqual(
+                    provider.options, feedreader.Options(article_selector=expected)
+                )
+                call.assert_called_once_with(
+                    app.config.get_source("blog"), app._fetcher
+                )
 
     def test_unknown_provider_option_is_a_config_error(self) -> None:
         with self.assertRaisesRegex(
@@ -118,7 +128,7 @@ sources:
     url: https://blog.test/feed
     options: {options}
 plugins:
-  feedreader:
+  feedreader: {{article_selector: nav}}
 db:
   uri: sqlite:///{self.tmp_dir}/rss.db
   content_dir: {self.tmp_dir}/rss-content
@@ -131,6 +141,16 @@ cache:
     def test_unknown_source_is_a_config_error(self) -> None:
         with self.assertRaises(ConfigError):
             self.app.import_source("missing")
+
+    def test_objects_are_built_when_a_run_needs_them(self) -> None:
+        self.assertEqual(self.app._objects, {})
+        self.import_sample()
+        self.app.run_process("markdown")
+
+        self.assertEqual(
+            sorted(profile.name for profile in self.app._objects),
+            ["markdownify", "prensaiberica"],
+        )
 
     def test_process_then_remix(self) -> None:
         item = self.import_sample()
@@ -184,37 +204,45 @@ cache:
             self.app.resolve_deliveries("telegram", DeliveryStatus.DONE), 0
         )
 
-    def test_only_loaded_plugins_run(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "processor 'summarize' is not loaded"):
-            self.app.process_keys("summarize")
+    def test_only_configured_runs_run(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "processor 'nope' does not exist"):
+            self.app.process_keys("nope")
         with self.assertRaisesRegex(
-            ConfigError, "no process entry of workflow 'default' writes the key"
+            ConfigError, "no process run of workflow 'default' writes the key"
         ):
             self.app.run_process("summary")
         with self.assertRaisesRegex(
-            ConfigError, "no workflow has a remix entry 'avglink'"
+            ConfigError, "no workflow has a remix run 'avglink'"
         ):
             self.app.run_remix("avglink")
         with self.assertRaisesRegex(ConfigError, "has no delivery 'telegram'"):
             self.app.run_delivery("telegram")
-        with self.assertRaisesRegex(ConfigError, "workflow 'nope' is not loaded"):
+        with self.assertRaisesRegex(ConfigError, "workflow 'nope' is not configured"):
             self.app.process_keys(workflow="nope")
 
-    def test_remix_entries_follow_configuration_order(self) -> None:
+    def test_default_runs_the_catalog_in_order_without_skip_default(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            "  feedgenerator:\n  grouping: {avglink: {}, singlelink: {}}\n  markdownify:\n",
-            workflows="remix: [singlelink, feedgenerator]\n",
+            catalog="""
+processors:
+  - markdownify
+  - {processor: markdownify, key: markdown/copy, skip_default: true}
+remixers:
+  - singlelink
+  - {remixer: feedgenerator, skip_default: true}
+  - {remixer: feedgenerator, key: short}
+"""
         )
 
-        self.assertEqual(self.app.processors, ["markdownify"])
-        self.assertEqual(self.app.remix_keys(), ["singlelink", "feedgenerator"])
+        self.assertEqual(self.app.process_keys(), ["markdown"])
+        self.assertEqual(self.app.remix_keys(), ["singlelink", "short"])
+        self.assertEqual(self.app.delivery_keys(), [])
 
     def test_remix_entries_save_their_artifacts_under_their_key(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            workflows="""
-remix:
+            catalog="""
+remixers:
   - feedgenerator
   - {remixer: feedgenerator, key: short, options: {title: Short, max_items: 1}}
 """
@@ -228,28 +256,39 @@ remix:
         )
         self.assertIsNone(self.app.get_artifact("feedgenerator", "feed"))
 
-    def test_invalid_workflow_entries_are_config_errors(self) -> None:
+    def test_invalid_entries_are_config_errors(self) -> None:
         workflow = "workflows:\n  - {name: w, sources: [juntas], %s}\n"
         for workflows, message in (
-            ("remix: [nope]\n", r"remix\.0\.remixer: no plugin provides 'nope'"),
             (
-                "remix: [{remixer: feedgenerator, options: {color: red}}]\n",
-                r"remix\.0\.options\.color: Extra inputs are not permitted",
+                "remixers: [nope]\n",
+                r"remixers\.0: no plugin provides the remixer 'nope'",
             ),
             (
-                "remix: [feedgenerator]\n" + workflow % "remix: [feedgenerator]",
+                "remixers: [{remixer: feedgenerator, options: {color: red}}]\n",
+                r"remixers\.0\.options\.color: Extra inputs are not permitted",
+            ),
+            (
+                workflow % "remix: [feedgenerator]",
                 (
-                    r"workflows\.w\.remix\.0: key 'feedgenerator' is used by"
-                    r" another remix entry; give one a `key`"
+                    r"workflows\.w\.remix\.0: remix key 'feedgenerator' is used by"
+                    r" remixers\.0 too \(workflow 'default'\); a remix key belongs to"
+                    r" one workflow"
                 ),
             ),
             (
-                workflow % "process: [{processor: summarize, key: markdown}]",
-                r"workflows\.w\.process\.0: key 'markdown' is written differently",
+                workflow % "process: [{processor: tagger, key: markdown}]",
+                (
+                    r"workflows\.w\.process\.0: key 'markdown' is written by"
+                    r" markdownify too \(processors\.0\) on the same sources"
+                ),
             ),
             (
-                workflow % "deliver: [{sink: feedgenerator}]",
-                r"workflows\.w\.deliver\.0: sink 'feedgenerator' is not loaded",
+                workflow % "deliver: [feedgenerator]",
+                r"workflows\.w\.deliver\.0: no sink has the id or type 'feedgenerator'",
+            ),
+            (
+                "processors:\n  - {processor: markdownify, id: tagger}\n",
+                r"processors\.0: the id 'tagger' is a processor type's name",
             ),
         ):
             with (
@@ -265,14 +304,21 @@ remix:
         post.return_value.json.return_value = {"ok": True, "result": {"message_id": 1}}
         self.app.close()
         self.app = self.make_app(
-            "  markdownify:\n  feedgenerator:\n  telegram: {bot_token: t}\n",
-            process="",
+            "  telegram: {bot_token: t}\n",
+            catalog="""
+llms: [ollama]
+processors: [markdownify, summarize]
+sinks:
+  - {sink: telegram, id: main, options: {chat_id: main}}
+""",
             workflows="""
-deliver: [{sink: telegram, options: {chat_id: main}}]
 workflows:
+  - name: channel
+    sources: [mediterraneo]
+    deliver: [main]
   - name: juntas-channel
     sources: [juntas]
-    process: [markdownify]
+    process: [markdownify, summarize]
     deliver:
       - {sink: telegram, options: {chat_id: juntas, interval: 30, max_per_run: 1}}
 """,
@@ -282,8 +328,11 @@ workflows:
             item, "summarize", "summary", ProcessingStatus.DONE, value="S"
         )
 
-        self.assertEqual(self.app.process_keys(), [])
-        self.assertEqual(self.app.process_keys(workflow="juntas-channel"), ["markdown"])
+        self.assertEqual(self.app.process_keys(), ["markdown", "summary"])
+        self.assertEqual(self.app.process_keys(workflow="channel"), [])
+        self.assertEqual(self.app.delivery_keys(), [])
+        # An id names the profile; the key is still the sink's.
+        self.assertEqual(self.app.delivery_keys("channel"), ["telegram"])
         # The item is not of the workflow's sources.
         self.assertEqual(
             self.app.run_process("markdown", workflow="juntas-channel").done, 0
@@ -299,30 +348,50 @@ workflows:
             ).done,
             0,
         )
-        self.assertEqual(self.app.run_delivery("telegram", scope=scope).done, 1)
+        self.assertEqual(
+            self.app.run_delivery("telegram", workflow="channel", scope=scope).done, 1
+        )
         (row,) = self.app.find_deliveries()
-        self.assertEqual(row.sink, "telegram")
+        self.assertEqual(row.sink, "channel/telegram")
         self.assertEqual(row.external_ref, {"chat_id": "main", "message_id": 1})
 
-    def test_workflows_with_disjoint_sources_may_write_the_same_key(self) -> None:
-        self.app.close()
-        # `default` uses both sources, so it shares `juntas` with `a`.
-        with self.assertRaisesRegex(
-            ConfigError,
-            r"workflows\.a\.process\.0: key 'markdown' is written differently by"
-            r" another entry \(workflow 'default'\) on the same sources",
+    def test_what_runs_read_must_be_written_on_their_sources(self) -> None:
+        for catalog, workflows, message in (
+            (
+                "llms: [ollama]\nprocessors: [summarize]\n",
+                "",
+                (
+                    r"processors\.0: summarize reads 'markdown', and no process run"
+                    r" writes it on the sources of workflow 'default'"
+                ),
+            ),
+            (
+                "processors: [markdownify]\n",
+                (
+                    "workflows:\n  - {name: w, sources: [juntas], deliver:"
+                    " [{sink: telegram, options: {bot_token: t, chat_id: c}}]}\n"
+                ),
+                r"workflows\.w\.deliver\.0: telegram reads 'summary'",
+            ),
         ):
-            self.make_app(
-                process="process: [markdownify]\n",
-                workflows="workflows:\n  - {name: a, sources: [juntas], process:"
-                " [{processor: summarize, key: markdown}]}\n",
-            )
+            with (
+                self.subTest(catalog=catalog),
+                self.assertRaisesRegex(ConfigError, message),
+            ):
+                self.make_app(catalog=catalog, workflows=workflows)
+
+    def test_workflows_with_disjoint_sources_may_write_a_key_differently(
+        self,
+    ) -> None:
+        self.app.close()
         self.app = self.make_app(
-            process="",
+            catalog="",
             workflows="""
 workflows:
   - {name: a, sources: [juntas], process: [markdownify]}
-  - {name: b, sources: [mediterraneo], process: [markdownify]}
+  - name: b
+    sources: [mediterraneo]
+    process: [{processor: markdownify, options: {max_retries: 1}}]
 """,
         )
         item = self.import_sample()  # a `mediterraneo` item
@@ -331,26 +400,42 @@ workflows:
         self.assertEqual(self.app.run_process("markdown", workflow="b").done, 1)
         self.assertIn("markdown", self.app.get_annotations(item))
 
-    def test_workflows_sharing_a_source_share_identical_entries(self) -> None:
+    def test_other_options_for_a_key_on_shared_sources_are_a_warning(self) -> None:
+        self.app.close()
+        with self.assertLogs("newsmerger.catalog", "WARNING") as logs:
+            self.app = self.make_app(
+                workflows="workflows:\n  - name: a\n    sources: [mediterraneo]\n"
+                "    process: [{processor: markdownify, options: {max_retries: 5}}]\n"
+            )
+
+        self.assertIn(
+            "workflows.a.process.0: key 'markdown' is written with other options"
+            " too (processors.0) on the same sources",
+            logs.output[0],
+        )
+
+    def test_references_to_an_entry_share_its_run(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            process="process: [markdownify]\n",
-            workflows="workflows:\n"
-            "  - {name: a, sources: [mediterraneo], process: [markdownify]}\n",
+            catalog="processors: [{processor: markdownify, id: md}]\n",
+            workflows="workflows:\n  - {name: a, sources: [mediterraneo], process: [md]}\n",
         )
         item = self.import_sample()  # a `mediterraneo` item
 
+        self.assertIs(
+            self.object_of("a", "markdown"), self.object_of("default", "markdown")
+        )
         self.assertEqual(self.app.run_process("markdown", workflow="a").done, 1)
         # The same run: `default` finds it done.
         self.assertEqual(self.app.run_process("markdown").done, 0)
         self.assertIn("markdown", self.app.get_annotations(item))
 
-    def test_default_uses_the_sources_not_opted_out(self) -> None:
+    def test_default_uses_the_sources_not_skipped(self) -> None:
         config = Config.from_text(
             """
 sources:
   - {id: a, name: A, url: 'https://a.test/', provider: plaza}
-  - {id: b, name: B, url: 'https://b.test/', provider: plaza, default: false}
+  - {id: b, name: B, url: 'https://b.test/', provider: plaza, skip_default: true}
 workflows:
   - {name: only-b, sources: [b]}
 """
@@ -360,12 +445,11 @@ workflows:
             [("default", ["a"]), ("only-b", ["b"])],
         )
         self.assertEqual(config.workflows[0].ledger_key("telegram"), "only-b/telegram")
-        self.assertEqual(config.all_workflows()[0].ledger_key("telegram"), "telegram")
 
     def test_process_entries_run_in_order_each_with_its_key(self) -> None:
         self.app.close()
         self.app = self.make_app(
-            process="process:\n  - markdownify\n"
+            catalog="processors:\n  - markdownify\n"
             "  - {processor: markdownify, key: markdown/copy}\n"
         )
         item = self.import_sample()
@@ -379,117 +463,116 @@ workflows:
         self.assertEqual(annotations["markdown"], annotations["markdown/copy"])
 
     def test_invalid_process_entries_are_config_errors(self) -> None:
-        for process, message in (
-            ("process: [grouping]\n", "processor 'grouping' is not loaded"),
+        for processors, message in (
             (
-                "process: [{processor: markdownify, options: {model: m}}]\n",
-                r"process\.0\.options\.model: Extra inputs are not permitted",
+                "[grouping]",
+                r"processors\.0: no plugin provides the processor 'grouping'",
             ),
             (
-                "process: [{processor: markdownify, options: {key: copy}}]\n",
-                r"process\.0\.options\.key: Extra inputs are not permitted",
+                "[{processor: markdownify, options: {model: m}}]",
+                r"processors\.0\.options\.model: Extra inputs are not permitted",
             ),
             (
-                "process: [{processor: markdownify, key: Mark Down}]\n",
-                r"process\.0: invalid key 'Mark Down'",
+                "[{processor: markdownify, options: {key: copy}}]",
+                r"processors\.0\.options\.key: Extra inputs are not permitted",
             ),
             (
-                "process: [markdownify, markdownify]\n",
-                r"process\.1: key 'markdown' is written by another entry",
+                "[{processor: markdownify, key: Mark Down}]",
+                r"processors\.0: invalid key 'Mark Down'",
+            ),
+            (
+                "[markdownify, markdownify]",
+                r"processors\.1: key 'markdown' is written by another entry",
             ),
         ):
             with (
-                self.subTest(process=process),
+                self.subTest(processors=processors),
                 self.assertRaisesRegex(ConfigError, message),
             ):
-                self.make_app(process=process)
+                self.make_app(catalog=f"processors: {processors}\n")
 
-    def test_unlisted_processors_load_but_never_run(self) -> None:
-        self.app.close()
-        self.app = self.make_app(process="")
-
-        self.assertEqual(self.app.processors, ["markdownify"])
-        self.assertEqual(self.app.process_keys(), [])
-
-    def test_invalid_plugin_options_report_their_config_path(self) -> None:
+    def test_invalid_plugin_sections_report_their_config_path(self) -> None:
         with self.assertRaisesRegex(
             ConfigError,
-            r"plugins\.markdownify\.max_retries: Input should be a valid integer.*\n"
-            r"plugins\.markdownify\.version: Extra inputs are not permitted",
+            r"plugins\.markdownify\.version: no such option\n"
+            r"plugins\.markdownify\.max_retries: Input should be a valid integer",
         ):
             self.make_app("  markdownify: {version: '2', max_retries: many}\n")
-
-    def test_register_parameters_are_reserved_plugin_options(self) -> None:
-        for option in ("name", "self"):
-            with (
-                self.subTest(option=option),
-                self.assertRaisesRegex(
-                    ConfigError, f"'{option}' is a reserved option name"
-                ),
-            ):
-                self.make_app(f"  feedgenerator: {{{option}: feed}}\n")
-
-    def test_llm_consumers_get_the_llm_of_a_plugin_listed_before(self) -> None:
-        self.app.close()
-        self.app = self.make_app(
-            "  ollama:\n  summarize:\n  embed: {llm: ollama}\n", process=""
-        )
-
-        llm = self.app._processors["summarize"].llm
-        self.assertIsInstance(llm, OllamaLLM)
-        self.assertIs(self.app._processors["embed"].llm, llm)
-
-    def test_llm_consumers_without_their_llm_load_but_process_nothing(self) -> None:
-        self.app.close()
-        self.app = self.make_app(
-            "  markdownify:\n  tagger:\n  ollama:\n",
-            process="process: [markdownify, tagger]\n",
-        )
-        self.import_sample()
-
-        with self.assertLogs("newsmerger.processors", "ERROR") as logs:
-            summaries = {key: self.app.run_process(key) for key in ("markdown", "tags")}
-
-        self.assertEqual(summaries["markdown"].done, 1)
-        self.assertEqual(summaries["tags"], RunSummary())
-        self.assertIn(
-            "tagger: no llm is loaded (llm plugins must be listed before the plugins that use them); nothing processed",
-            logs.output[0],
-        )
-
-    def test_missing_plugin_module_is_a_plugin_error(self) -> None:
-        with self.assertRaises(PluginNotFoundError):
+        with self.assertRaisesRegex(
+            ConfigError, r"plugins\.nonexistent: no plugin provides 'nonexistent'"
+        ):
             self.make_app("  nonexistent:\n")
 
-    def test_unprovided_providers_and_processors_load_their_plugin(self) -> None:
-        config = Config.from_text(
-            f"""
-sources:
-  - {{id: a, name: A, url: 'https://a.test/', provider: plaza}}
-process: [markdownify, tagger]
-db:
-  uri: sqlite:///{self.tmp_dir}/auto.db
-  content_dir: {self.tmp_dir}/auto-content
-"""
-        )
-        with Application(config) as app:
-            self.assertEqual(list(app._providers), ["plaza"])
-            self.assertEqual(app.processors, ["markdownify", "tagger"])
-            self.assertEqual(app.process_keys(), ["markdown", "tags"])
-
-    def test_autoloaded_plugins_come_after_the_listed_ones(self) -> None:
+    def test_sections_hold_the_defaults_of_every_use(self) -> None:
         self.app.close()
-        self.app = self.make_app("  ollama:\n", process="process: [summarize]\n")
+        self.app = self.make_app(
+            "  markdownify: {max_retries: 7}\n",
+            catalog="processors:\n  - markdownify\n"
+            "  - {processor: markdownify, key: copy, options: {max_retries: 1}}\n",
+        )
 
-        self.assertIsInstance(self.app._processors["summarize"].llm, OllamaLLM)
+        self.assertEqual(self.object_of("default", "markdown").options.max_retries, 7)
+        self.assertEqual(self.object_of("default", "copy").options.max_retries, 1)
+
+    def test_llm_consumers_get_the_llm_they_name(self) -> None:
+        self.app.close()
+        self.app = self.make_app(
+            "  ollama: {chat_model: small}\n",
+            catalog="""
+llms:
+  - ollama
+  - {llm: ollama, id: big, options: {chat_model: big}}
+processors:
+  - markdownify
+  - summarize
+  - {processor: summarize, key: summary/big, options: {llm: big}}
+  - {processor: tagger, options: {llm: ollama}}
+""",
+        )
+
+        default = self.object_of("default", "summary").llm
+        self.assertIsInstance(default, OllamaLLM)
+        self.assertEqual(default.chat_model, "small")
+        self.assertEqual(self.object_of("default", "summary/big").llm.chat_model, "big")
+        # A type name: the type with its section's options, built once.
+        by_type = self.object_of("default", "tags").llm
+        self.assertEqual(by_type.chat_model, "small")
+        self.assertIs(self.app._llm("ollama"), by_type)
+
+    def test_a_missing_llm_is_a_config_error(self) -> None:
+        for catalog, message in (
+            (
+                "processors: [markdownify, summarize]\n",
+                r"processors\.1: uses an llm, and `llms` is empty",
+            ),
+            (
+                (
+                    "llms: [ollama]\nprocessors:\n  - markdownify\n"
+                    "  - {processor: summarize, options: {llm: nope}}\n"
+                ),
+                r"processors\.1: no llm has the id or type 'nope'",
+            ),
+        ):
+            with (
+                self.subTest(catalog=catalog),
+                self.assertRaisesRegex(ConfigError, message),
+            ):
+                self.make_app(catalog=catalog)
 
     def test_a_name_no_plugin_provides_is_a_config_error(self) -> None:
         for config, message in (
             (
                 "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: nope}\n",
-                r"sources\.a\.provider: no plugin provides 'nope'",
+                r"sources\.a: no plugin provides the provider 'nope'",
             ),
-            ("process: [nope]\n", r"process\.0\.processor: no plugin provides 'nope'"),
+            (
+                "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: singlelink}\n",
+                r"sources\.a: no plugin provides the provider 'singlelink'",
+            ),
+            (
+                "processors: [nope]\n",
+                r"processors\.0: no plugin provides the processor 'nope'",
+            ),
         ):
             with (
                 self.subTest(config=config),
@@ -497,43 +580,35 @@ db:
             ):
                 Application(Config.from_text(config))
 
-    def test_a_listed_plugin_without_the_object_is_not_loaded_again(self) -> None:
-        config = Config.from_text(
-            "sources:\n  - {id: a, name: A, url: 'https://a.test/', provider: grouping}\n"
-            "plugins:\n  grouping:\n"
+
+class ClassRegisterTests(unittest.TestCase):
+    def register(self, registered: list) -> ClassRegister:
+        register = ClassRegister(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
+        with patch.object(markdownify, PLUGIN_ENTRY_POINT, return_value=registered):
+            register.register("markdownify")
+        return register
+
+    def test_every_module_registers_conforming_classes(self) -> None:
+        register = ClassRegister(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
+        register.register_found()
+
+        self.assertEqual(
+            sorted(register.classes(ProcessorType)),
+            ["embed", "markdownify", "summarize", "tagger"],
         )
-        with self.assertRaisesRegex(ConfigError, "provider 'grouping' is not loaded"):
-            Application(config)
 
-    def test_entry_points_must_return_instances(self) -> None:
-        plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
-        with (
-            patch.object(
-                plugins,
-                "get_by_protocol",
-                return_value=[("markdownify", "markdownify", MarkdownifyProcessor)],
-            ),
-            self.assertRaisesRegex(PluginError, "the class of Processor 'markdownify'"),
-        ):
-            objects_by_name(plugins, Processor)
+    def test_entry_points_must_return_classes(self) -> None:
+        instance = MarkdownifyProcessor(ProcessorOptions(), Services())
+        register = self.register([("markdownify", ProcessorType, instance)])
 
-    def test_providers_and_processors_load_with_defaults_under_their_module_name(
-        self,
-    ) -> None:
-        # Autoloading registers them with no options, by the name they are used with.
-        plugins = Register(PLUGINS_NAMESPACE, PLUGIN_ENTRY_POINT)
-        for module in plugins.discover():
-            if module == "telegram":  # it needs its bot token
-                continue
-            with self.subTest(module=module):
-                plugins.register(module, Services())
-                names = {
-                    name
-                    for protocol in (Provider, Processor)
-                    for plugin, name, _ in plugins.get_by_protocol(protocol)
-                    if plugin == module
-                }
-                self.assertIn(names, (set(), {module}))
+        with self.assertRaisesRegex(PluginError, "as an instance, not a class"):
+            register.classes(ProcessorType)
+
+    def test_classes_must_conform_to_their_protocol(self) -> None:
+        register = self.register([("markdownify", ProcessorType, object)])
+
+        with self.assertRaisesRegex(ProtocolConformanceError, "does not conform"):
+            register.classes(ProcessorType)
 
 
 if __name__ == "__main__":

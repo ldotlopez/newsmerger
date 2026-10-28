@@ -5,7 +5,10 @@
 - **Revised:** 2026-10-20 (plugin bundles loaded with `Register`);
   2026-10-26 (per-use options); 2026-10-27 (autoloading, `process`;
   per-use options as models, `remix` and `deliver` entries; see
-  *Revisions*)
+  *Revisions*); 2026-10-28, by 0010 (entry points register classes, one
+  object per use, `plugins` holds defaults per type; *Loading*,
+  *Enabling*, *Options*, *Per-use options*, *Objects* and *Bundles* below
+  are superseded)
 - **Amended by:** 0006 (LLM plugins and the `services` argument), 0007
   (sinks and the `deliver` phase)
 

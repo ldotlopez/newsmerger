@@ -4,6 +4,11 @@
 - **Date:** 2026-10-27
 - **Revises:** 0002 (where an annotation key may be written), 0003
   (`remix` and `deliver` entries), 0007 (the ledger key, pacing)
+- **Revised:** 2026-10-28, by 0010 (`default` is built from the catalog
+  and delivers nothing; entries are catalog references or the workflow's
+  own; `default: false` is `skip_default: true`; every ledger key is
+  `<workflow>/<key>`; other options for a process key on shared sources
+  are a warning, other processor types an error)
 
 ## Context
 

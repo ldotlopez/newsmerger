@@ -21,47 +21,53 @@ and reach it only through the `Application` class.
 | Term | Definition |
 | --- | --- |
 | **Source** | An entry of the `sources` configuration section, with `id`, `name`, `provider` and `url`. Its identity is its `id`. |
-| **Workflow** | Which sources to use and the process, remix and deliver entries to run on them. The configuration's root keys are the `default` workflow; `workflows` adds more. |
-| **Plugin** | A bundle enabled by an entry of the `plugins` configuration section. It provides one or more named providers, processors, remixers and sinks. |
+| **Workflow** | Which sources to use and the process, remix and deliver runs on them. `default` is built from the catalog; `workflows` adds more. |
+| **Plugin** | A bundle of plugin types: named classes of providers, processors, remixers, sinks and LLMs. Every bundle is loaded; nothing is built until a run needs it. |
+| **Catalog** | The configured uses of the plugin types (`llms`, `sources`, `processors`, `remixers`, `sinks`), each with its options; an `id` lets workflows refer to one. |
 | **Provider** | Object that knows how to handle one kind of site. One implementation serves every URL with the same structure. |
 | **Item** | A unit of acquired content. Key: `(source id, uid)`. Its `uri` is just another field and is not unique. It also has a numeric id, a local handle to select it that is never reused but changes if the database is rebuilt. |
 | **uid** | The item's identifier within its source, produced by the provider. It must be deterministic and stable across runs; how it is computed is up to the provider. |
 | **Annotation** | Data derived from an item by a processor run. Key: `(item, key)`; the processor that wrote it is recorded but is not part of the key. |
-| **Processor** | Object that produces annotations for one item at a time. Each `process` entry is a run of a processor with its own options, and writes one key. |
-| **Remixer** | Object that builds artifacts from many items. Each `remix` entry is a run of a remixer with its own options, under its own key. |
-| **Artifact** | Aggregated output of a remix entry (newsletter, RSS, web page...). Key: `(remix key, name)`. |
-| **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). Each `deliver` entry is a use of a sink with its own options (where to deliver, how often), under its own key. |
-| **Delivery** | The record of a deliver entry delivering one subject, an item or an artifact. Key: `(ledger key, subject)`, the ledger key naming who asked for it: `<workflow>/<key>`, or the bare key in `default`. It records an external fact and is never regenerated. |
+| **Processor** | Object that produces annotations for one item at a time. Each process run uses a processor with its own options, and writes one key. |
+| **Remixer** | Object that builds artifacts from many items. Each remix run uses a remixer with its own options, under its own key. |
+| **Artifact** | Aggregated output of a remix run (newsletter, RSS, web page...). Key: `(remix key, name)`. |
+| **Sink** | Object that delivers items or artifacts to the outside world (e.g. posts them to a chat). Each delivery run uses a sink with its own options (where to deliver, how often), under its own key. |
+| **Delivery** | The record of a delivery run delivering one subject, an item or an artifact. Key: `(ledger key, subject)`, the ledger key naming who asked for it: `<workflow>/<key>`. It records an external fact and is never regenerated. |
 
 ## 3. Configuration
 
-A single YAML file with the sections `sources`, `plugins`, `process`,
-`remix`, `deliver`, `workflows`, `cache` and `db`.
-All of them are optional. Each source names its provider explicitly:
+A single YAML file with the sections `plugins`, `llms`, `sources`,
+`processors`, `remixers`, `sinks`, `workflows`, `cache` and `db`. All of
+them are optional. Each source names its provider explicitly:
 
 ```yaml
+plugins:
+  <type>: {...}            # defaults of the type's options in every use
+llms:
+  - <llm type>             # the first serves the uses that name none, or
+  - {llm: <type>, id: <id>, options: {...}}
 sources:
   - id: <stable id>        # required
     name: <readable name>
-    provider: <provider name>
+    provider: <provider type>
     url: <url>
-    options: {...}         # passed to the provider, overriding its plugin's
-    default: true          # false: only the workflows that name it use it
-plugins:
-  <plugin>: {...}          # its options; empty for the plugin's defaults
-process:
-  - <processor>            # a run with the defaults, or
-  - processor: <processor>
+    options: {...}         # over the provider's plugin section
+    skip_default: false    # true: only the workflows that name it use it
+processors:
+  - <processor type>       # a run with the section's options, or
+  - processor: <processor type>
+    id: <id>               # lets workflows refer to it
     key: <annotation key>  # default: the processor's own
-    options: {...}         # passed to the processor, overriding its plugin's
-remix:
-  - <remixer>              # or {remixer, key, options}, as process entries
-deliver:
-  - <sink>                 # or {sink, key, options}, as process entries
+    options: {...}         # over the processor's plugin section
+    skip_default: false    # true: left out of `default`
+remixers:
+  - <remixer type>         # or {remixer, id, key, options, skip_default}
+sinks:
+  - <sink type>            # or {sink, id, key, options}
 workflows:
   - name: <name>
     sources: [<source id>, ...]
-    process: [...]         # as the root sections
+    process: [...]         # catalog ids, type names or entries without id
     remix: [...]
     deliver: [...]
 cache:
@@ -75,42 +81,45 @@ db:
 the file is loaded; comments and keys are not expanded. Secrets (API keys,
 tokens) are always passed this way.
 
-Plugins with an entry in `plugins` are loaded, in its order. A provider that
-a source names, or a processor, remixer or sink that an entry names, that
-none of them provides loads the plugin of the same name with its defaults;
-a name that no plugin provides is a configuration error. Each plugin
-validates its own options and fills in defaults for the missing ones;
-invalid options are a configuration error that names their path
-(`plugins.<plugin>.<option>`). A plugin decides which of its objects its
-options enable; the built-in bundles enable all of them unless the options
-name some. Provider, processor, remixer and sink names are unique per type
-across the loaded plugins; sources and entries refer to them by those
-names.
+Every plugin is loaded; its types are named, uniquely per kind, and
+`plugins.<type>` sets the defaults of the type's options for every use. A
+use's options are the type's defaults, then its section, then its own
+`options`, merged key by key in nested mappings (any other value, lists
+included, replaces). Every section and use is checked at start-up, whatever
+the workflow, so a bad option fails every command with its path
+(`plugins.<type>.<option>`, `sources.<id>.options.<option>`,
+`workflows.<name>.deliver.<n>.options.<option>`). An object is built only
+when a run needs it.
 
-A source's or an entry's `options` override, for that use only, the
-options of its plugin section that the object declares per use; anything
-else is a configuration error that names its path
-(`workflows.<name>.deliver.<n>.options.<option>`). All of them are checked
-at start-up, so a bad option fails every command.
+An `id` names a catalog entry so that workflows can refer to it; it cannot
+be a type's name. A workflow entry is a catalog id, a type name (the type
+with its section's options) or an entry of its own, without `id`; a
+reference cannot change the entry's options. An object that uses an LLM
+names it by id or type (`llm:`), or takes the first of `llms`; a name that
+resolves to none is a configuration error.
 
 ### 3.1 Workflows
 
-The root `process`, `remix` and `deliver` are the `default` workflow, which
-uses every source not marked `default: false`. Each entry of `workflows`
-names its sources and its own entries. A command runs one workflow,
-`default` unless another is named, and each phase only touches that
-workflow's sources: their items, and in remix the artifacts built from them.
+`default` uses every source without `skip_default: true` and runs, in
+order, every catalog processor and remixer without it; it delivers
+nothing. Each entry of `workflows` names its sources and its runs. A command
+runs one workflow, `default` unless another is named, and each phase only
+touches that workflow's sources: their items, and in remix the artifacts
+built from them.
 
-- A process key is written by one entry within a workflow and across
-  workflows that share a source; workflows with disjoint sources may write
-  the same key, since annotations belong to items.
-- A remix key is unique across all workflows, since artifacts belong to no
-  source.
+- A process key is written by one run within a workflow. On sources shared
+  by workflows, one processor type writes it; other options for it are a
+  warning (the first run to process an item writes it). Workflows with
+  disjoint sources may write the same key, since annotations belong to
+  items.
+- A remix key belongs to one workflow, since artifacts belong to no source.
 - A deliver key is unique within its workflow; its deliveries are recorded
   under its ledger key, so two workflows delivering the same item each
   deliver it, and renaming a workflow or a key starts its record anew.
-- Workflow names and remix and deliver keys are lowercase letters, digits,
-  `_` and `-`; `default` is reserved.
+- Every key a run reads must be written by a process run on its workflow's
+  sources, in any workflow: a workflow may deliver what others process.
+- Ids, workflow names and remix and deliver keys are lowercase letters,
+  digits, `_` and `-`; `default` is reserved.
 
 A source's `id` is part of its items' key, so it must be stable; its `url`
 and `provider` can change without losing items.
@@ -144,11 +153,10 @@ article.
 
 ### 4.2 Processing
 
-Processors create annotations on items. `process` runs the entries of the
-`process` section in order; each run writes one key, by default the
-processor's own, and keeps its own processing state per item under that
-key. A key is written by one entry per item (§3.1). A run's options
-override those of the processor's plugin section for that run.
+Processors create annotations on items. `process` runs the workflow's
+process runs in order; each run writes one key, by default the processor's
+own, and keeps its own processing state per item under that key (§3.1). A
+run's options override those of the processor's plugin section.
 
 - **Dependencies:** a run declares the key it reads. It only picks up items
   whose run of that key finished successfully on their current content; the
@@ -175,7 +183,7 @@ override those of the processor's plugin section for that run.
 - Changing a processor's or an entry's configuration regenerates
   **nothing**. Annotations are kept until the item changes, the processor's
   version is bumped, or they are regenerated or deleted from `Application`.
-- A loaded processor that no entry lists never runs.
+- A processor that no workflow runs is never built.
 
 ### 4.3 Remix
 

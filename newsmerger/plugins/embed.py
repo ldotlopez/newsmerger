@@ -1,25 +1,17 @@
 """Embeds the item's tags or markdown with an LLM, for the `embeddings`
 grouping remixer."""
 
-from typing import Any, Literal
+from typing import Literal
 
 from ..db import Database
-from ..llms import LLM, LLMUnavailableError
 from ..models import SourceItem
-from ..processors import BaseProcessor, Processor, UnavailableProcessor
-from . import PluginObjects, PluginOptions, Services
+from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
+from . import PluginTypes, Services, UsesLLMOptions
 
 
-class EmbedOptions(PluginOptions):
-    """Per `process:` entry; the section sets their defaults."""
-
+class EmbedOptions(ProcessorOptions, UsesLLMOptions):
     input: Literal["tags", "markdown"] = "tags"  # the annotation embedded
     model: str | None = None
-
-
-class Options(EmbedOptions):
-    llm: str | None = None
-    max_retries: int = 3
 
 
 class EmbedProcessor(BaseProcessor):
@@ -30,24 +22,24 @@ class EmbedProcessor(BaseProcessor):
     name = "embed"
     key = "tags_embedding"
     options_model = EmbedOptions
+    options: EmbedOptions
 
-    def __init__(self, llm: LLM, cfg: Options) -> None:
-        super().__init__(cfg, max_retries=cfg.max_retries)
-        self.llm = llm
+    def __init__(self, options: EmbedOptions, services: Services) -> None:
+        super().__init__(options, services)
+        self.llm = services.llm(options.llm)
 
     @classmethod
     def output_key(cls, options: EmbedOptions) -> str:
         return f"{options.input}_embedding"
 
-    def required_key(self, options: EmbedOptions) -> str | None:
+    @classmethod
+    def required_key(cls, options: EmbedOptions) -> str | None:
         return options.input
 
-    def process_item(
-        self, db: Database, item: SourceItem, options: EmbedOptions
-    ) -> list[float]:
-        value = self.require_annotation(db, item, options.input)
-        text = tags_text(value) if options.input == "tags" else value
-        return self.llm.embed([text], model=options.model)[0]
+    def process_item(self, db: Database, item: SourceItem) -> list[float]:
+        value = self.require_annotation(db, item, self.options.input)
+        text = tags_text(value) if self.options.input == "tags" else value
+        return self.llm.embed([text], model=self.options.model)[0]
 
 
 def tags_text(tags: list[str]) -> str:
@@ -55,12 +47,5 @@ def tags_text(tags: list[str]) -> str:
     return ", ".join(sorted(tags, key=str.lower))
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    cfg = Options.model_validate(options)
-    name = EmbedProcessor.name
-    try:
-        processor = EmbedProcessor(services.llm(cfg.llm), cfg)
-    except LLMUnavailableError as e:
-        unavailable = UnavailableProcessor(name, str(e), EmbedProcessor, cfg)
-        return [(name, Processor, unavailable)]
-    return [(name, Processor, processor)]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [(EmbedProcessor.name, ProcessorType, EmbedProcessor)]

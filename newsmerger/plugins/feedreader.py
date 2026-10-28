@@ -1,8 +1,7 @@
 import hashlib
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from datetime import UTC, datetime
-from typing import Any
 from urllib.parse import urljoin
 
 import feedparser
@@ -11,31 +10,27 @@ from foundation.scrapelib import soupify
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import Provider
-from . import PluginObjects, PluginOptions, Services, merge_options
+from ..providers import BaseProvider, ProviderType
+from . import PluginOptions, PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
 
 class Options(PluginOptions):
     # CSS selector of the article body, for feeds that only carry a summary:
-    # the item's content is then fetched from its link. The default for every
-    # source; a source overrides it in its `options`.
+    # the item's content is then fetched from its link.
     article_selector: str | None = None
 
 
-class FeedReaderProvider:
-    def __init__(self, cfg: Options) -> None:
-        self.cfg = cfg
-
-    def use_options(self, overrides: Mapping[str, Any]) -> Options:
-        return merge_options(Options, self.cfg, overrides)
+class FeedReaderProvider(BaseProvider):
+    options_model = Options
+    options: Options
 
     def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient, options: Options
+        self, source: SourceData, fetcher: HTTPClient
     ) -> Iterator[SourceItemData]:
         feed = fetch_feed(str(source.url), fetcher)
-        selector = options.article_selector
+        selector = self.options.article_selector
         for entry in feed["entries"]:
             try:
                 item = parse_entry(entry)
@@ -129,7 +124,5 @@ def fetch_article(url: str, selector: str, fetcher: HTTPClient) -> bytes:
     return str(article).encode("utf-8")
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    return [
-        ("feedreader", Provider, FeedReaderProvider(Options.model_validate(options)))
-    ]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("feedreader", ProviderType, FeedReaderProvider)]

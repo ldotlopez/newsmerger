@@ -2,7 +2,6 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
-from typing import Any
 
 import bs4
 import feedparser
@@ -16,8 +15,8 @@ from foundation.scrapelib import (
 
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, Provider
-from . import PluginObjects, PluginOptions, Services
+from ..providers import URI, IndexSiteProvider, ProviderType
+from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +70,5 @@ class CastellonInformacionProvider(IndexSiteProvider):
         )
 
 
-def __newsmerger_plugin__(services: Services, **options: Any) -> PluginObjects:
-    PluginOptions.model_validate(options)
-    return [("castelloninformacion", Provider, CastellonInformacionProvider())]
+def __newsmerger_plugin__() -> PluginTypes:
+    return [("castelloninformacion", ProviderType, CastellonInformacionProvider)]
