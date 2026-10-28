@@ -71,7 +71,12 @@ class DeleteCommandTests(unittest.TestCase):
         self.assertEqual(self.db.find_deliveries(), [])
 
     def test_a_selection_without_filters_is_refused(self) -> None:
-        for args in (("items", "--limit", "1"), ("annotations",), ("artifacts",)):
+        for args in (
+            ("items", "--limit", "1"),
+            ("annotations", "--limit", "1"),
+            ("artifacts",),
+            ("deliveries", "--limit", "1"),
+        ):
             with self.subTest(command=args[0]):
                 result = self.run_cli("delete", *args)
 
@@ -93,24 +98,53 @@ class DeleteCommandTests(unittest.TestCase):
             pending = self.db.get_unprocessed_items(key, version=None, max_retries=3)
             self.assertEqual([item.uid for item in pending], ["i1"])
 
-    def test_single_annotation_keys_cannot_be_deleted(self) -> None:
-        for option, value in (("--key", "tags"), ("--annotation", "1")):
-            with self.subTest(option=option):
-                result = self.run_cli("delete", "annotations", option, value)
+    def test_annotations_are_deleted_by_key_without_a_processor(self) -> None:
+        args = ("annotations", "--key", "tags_embedding")
+        listed = self.run_cli("inspect", *args)
+        self.assertEqual(listed.output.count("embed.tags_embedding"), 2)
 
-                self.assertEqual(result.exit_code, 2)
-                self.assertIn("No such option", result.output)
-                self.assertIn(option, result.output)
-        self.assertEqual(len(self.db.find_annotations()), 4)
+        result = self.run_cli("delete", *args)
 
-    def test_annotations_refuse_a_limit(self) -> None:
-        result = self.run_cli(
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Deleted 2 annotation(s)", result.stdout)
+        self.assertEqual(
+            {a.key for a in self.db.find_annotations()}, {"markdown_embedding"}
+        )
+        for key, uids in (("tags_embedding", ["i1", "i2"]), ("markdown_embedding", [])):
+            pending = self.db.get_unprocessed_items(key, version=None, max_retries=3)
+            self.assertEqual([item.uid for item in pending], uids)
+
+    def test_annotations_are_deleted_by_id_and_limit(self) -> None:
+        by_id = self.run_cli("delete", "annotations", "--annotation", "1")
+        missing = self.run_cli("delete", "annotations", "--annotation", "1")
+        limited = self.run_cli(
             "delete", "annotations", "--processor", "embed", "--limit", "1"
         )
 
-        self.assertEqual(result.exit_code, 2)
-        self.assertIn("deleted per processor", result.output)
-        self.assertEqual(len(self.db.find_annotations()), 4)
+        self.assertIn("Deleted 1 annotation(s)", by_id.stdout)
+        self.assertEqual(missing.exit_code, 1)
+        self.assertIn("no annotation 1 in the selection", missing.output)
+        self.assertIn("Deleted 1 annotation(s)", limited.stdout)
+        self.assertEqual(len(self.db.find_annotations()), 2)
+
+    def test_deliveries_are_deleted_with_the_inspect_selection(self) -> None:
+        for item in self.items:
+            self.deliver(item)
+        self.db.queue_item_deliveries("other", ProcessingScope())
+        args = ("deliveries", "--sink", "telegram", "--item", "1")
+        listed = self.run_cli("inspect", *args)
+        self.assertIn("item 1", listed.output)
+        self.assertNotIn("item 2", listed.output)
+
+        result = self.run_cli("delete", *args)
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Deleted 1 delivery(ies)", result.stdout)
+        self.assertEqual(
+            sorted((d.sink, d.item_id) for d in self.db.find_deliveries()),
+            [("other", 1), ("other", 2), ("telegram", 2)],
+        )
+        self.assertEqual(len(self.db.get_items()), 2)
 
     def test_artifacts_with_deliveries_are_skipped_unless_forced(self) -> None:
         for name in ("a/1", "a/2"):

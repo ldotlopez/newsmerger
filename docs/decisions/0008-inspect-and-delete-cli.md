@@ -134,3 +134,14 @@ the newest rows lets their ids be reused.
 - `delete` needs the ledger of decision 0007 to know what was delivered,
   so it comes after it; `inspect` comes before it, and `inspect
   deliveries` with it.
+
+## Revisions
+
+- **2026-10-28.** Discarded: deleting annotations per processor, and
+  `delete annotations` without `--key`, `--annotation` and `--limit`; it
+  takes the whole `inspect annotations` selection (`--key
+  summary/telegram/es`, no processor needed) and deletes exactly the
+  annotations it lists, each with the processing state of its (item, key)
+  (decision 0002). Added: `delete deliveries`, with the `inspect
+  deliveries` selection, which drops ledger rows. Removed: `deliver` and
+  `deliveries resolve` (decision 0007). Remains: everything else.

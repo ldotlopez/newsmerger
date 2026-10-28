@@ -228,11 +228,11 @@ remix, so they see freshly built artifacts.
   `max_per_run` in a run, so a new entry does not flood its destination.
 - **Forced delivery** sends explicitly selected subjects now, whatever their
   state, with no backoff and no pacing. It needs an explicit selection.
-- A subject is delivered at most once per entry, unless an interrupted
-  delivery is settled as `queued` or a delivery is forced.
-- `deliver` runs the workflow's entries, in the order of the YAML; `run`
-  runs the four phases in turn, and a failure in one does not stop the
-  next.
+- A subject is delivered at most once per entry, unless its delivery
+  record is deleted (it is queued again while within `lookback`) or a
+  delivery is forced.
+- `run` runs the four phases in turn, the workflow's delivery entries in
+  the order of the YAML, and a failure in one does not stop the next.
 
 ## 5. API: the `Application` class
 

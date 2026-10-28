@@ -539,13 +539,12 @@ class AnnotationTests(DatabaseTestCase):
         )
         self.assertEqual(len(found(ProcessingScope(limit=3))), 3)
 
-    def test_delete_by_item_and_processor_makes_the_item_pending(self):
+    def test_delete_by_id_makes_the_item_pending_for_that_key(self):
         self.annotate(self.item, "markdownify", "markdown", "# Title")
         self.annotate(self.item, "tagger", "tags", ["a"])
+        (markdown,) = self.db.find_annotations(key="markdown")
 
-        deleted = self.db.delete_annotations(
-            processor="markdownify", item_id=self.item.id
-        )
+        deleted = self.db.delete_annotations([markdown.id])
 
         self.assertEqual(deleted, 1)
         self.assertEqual(self.db.get_annotations(self.item), {"tags": ["a"]})
@@ -561,18 +560,19 @@ class AnnotationTests(DatabaseTestCase):
         self.assertEqual(self.count(DBProcessingState), 1)
         self.assertEqual(len(self.stored_contents()), 2)  # item content + tags
 
-    def test_delete_by_processor_covers_every_item(self):
+    def test_delete_keeps_the_same_key_on_other_items(self):
         other = make_source("other")
         self.db.upsert_source_items([make_item(other, uid="b1", content=b"x")])
         for item in self.db.get_items():
             self.annotate(item, "tagger", "tags", [item.uid])
+        first, _ = self.db.find_annotations(key="tags")
 
-        self.assertEqual(self.db.delete_annotations(processor="tagger"), 2)
-        self.assertEqual(self.count(DBProcessingState), 0)
+        self.assertEqual(self.db.delete_annotations([first.id]), 1)
+        self.assertEqual(self.db.delete_annotations([]), 0)
 
-    def test_delete_needs_a_processor_or_an_item(self):
-        with self.assertRaises(ValueError):
-            self.db.delete_annotations()
+        (kept,) = self.db.find_annotations()
+        self.assertNotEqual(kept.item_id, first.item_id)
+        self.assertEqual(self.count(DBProcessingState), 1)
 
 
 class ArtifactTests(DatabaseTestCase):
@@ -799,6 +799,21 @@ class DeleteTests(DatabaseTestCase):
         self.assertEqual([a.name for a in self.db.list_artifacts()], ["a/2"])
         self.assertEqual(self.count(DBDelivery), 1)
         self.assertEqual(len(self.stored_contents()), 1)
+
+    def test_deleting_deliveries_keeps_their_subjects(self):
+        self.db.upsert_source_items([make_item(make_source(), uid="a1")])
+        self.db.queue_item_deliveries("telegram", ProcessingScope())
+        self.db.queue_item_deliveries("other", ProcessingScope())
+        (row,) = self.db.find_deliveries(sink="telegram")
+
+        self.assertEqual(self.db.delete_deliveries([row.id]), 1)
+        self.assertEqual(self.db.delete_deliveries([]), 0)
+
+        self.assertEqual([d.sink for d in self.db.find_deliveries()], ["other"])
+        self.assertEqual(len(self.db.get_items()), 1)
+        self.assertEqual(
+            self.db.queue_item_deliveries("telegram", ProcessingScope()), 1
+        )
 
 
 if __name__ == "__main__":

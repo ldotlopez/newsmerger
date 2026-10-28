@@ -141,7 +141,8 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         if interrupted := sum(row.status == DeliveryStatus.SENDING for row, _ in rows):
             LOGGER.warning(
                 f"{key}: {interrupted} interrupted delivery(ies) stay"
-                " `sending`; settle them with `deliveries resolve`"
+                " `sending`; `delete deliveries --status sending` to deliver"
+                " them again"
             )
         pending = [
             (delivery, subject)

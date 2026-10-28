@@ -32,7 +32,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | Module | Responsibility |
 | :--- | :--- |
 | `app.py` | `Application`, the single entry point: registers the plugin classes, resolves the configuration into a `Catalog`, wires config, HTTP cache and database, builds each profile's object on first use (`_object`), runs the phases one unit at a time, each on its workflow's sources (`import_source`, `run_process`, `run_remix`, `run_delivery`; `sources()`, `process_keys()`, `remix_keys()` and `delivery_keys()` list a workflow's units in configuration order, `workflows` the workflows), answers queries and deletes. The database is private to it. `write_lock`, the exclusive lock every writing command takes. |
-| `cli.py` | Click commands only: the phases (`import`, `process`, `remix`, `deliver`, and `run` for all four), each for one workflow (`-w`, default `default`), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts` and `deliveries resolve`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
+| `cli.py` | Click commands only: the phases (`import`, `process`, `remix`, and `run` for those plus delivery), each for one workflow (`-w`, default `default`), read-only `inspect items\|annotations\|artifacts\|content\|deliveries`, `delete items\|annotations\|artifacts\|deliveries`; builds an `Application` per invocation, locked for the commands that write, and runs each unit through it with its own progress row. `inspect` and `delete` share their selection options, so `inspect` is `delete`'s dry run. Results go to stdout and progress and logs to stderr, each rich only when it is a terminal (`RICH_STDOUT_*`/`RICH_STDERR_*` from `foundation.clilib`); summaries print after the progress ends. Global logging options and the log handler come from `foundation.clilib` and `foundation.loglib`. |
 | `catalog.py` | `Catalog`: the configuration resolved against the registered classes, at start-up. Every use becomes a `Profile` (class, validated options), every workflow's runs a `Run` (workflow, key, profile), with every check of decision 0010 (sections, ids, keys, what runs read, LLMs). Builds nothing. |
 | `config.py` | Pydantic models for `config.yaml` (log level, `plugins` defaults per type, the catalog: `llms`, `sources`, `processors`, `remixers`, `sinks`; `workflows`, cache, database); `Config.all_workflows()` adds `default` (the sources without `skip_default`) and `Workflow.ledger_key` names a workflow's delivery records. `Duration`, a length of time as seconds or with a unit suffix (`5m`, `2h`, `3d`), parsed to seconds at load. `${VAR}` expansion from the environment and a `.env` next to the config file, and the formatting of option errors with their config path. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope` (`sources` holds a workflow's). |
@@ -345,9 +345,9 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
   `require_annotation()` reads its value.
 - Dependencies: `summarize` and `tagger` read `markdown`; `embed` reads
   `tags` or `markdown`.
-- `Database.delete_annotations` removes annotations by processor, item id
-  or both, together with their processing state, so the items become
-  pending. `delete annotations` calls it per (item, processor).
+- `Database.delete_annotations` removes annotations by id, each with the
+  processing state of its (item, key), so their runs find the items
+  pending. `delete annotations` passes what `find_annotations` selects.
 
 ## Remixers
 
@@ -403,8 +403,8 @@ that is not due holds back the rest of its source. `--requeue` turns the
 `error` rows in scope back into `queued`; `force` needs an explicit
 selection (`SelectionRequiredError`), gives the selected subjects a row and
 sends them whatever their state, without pacing.
-`Application.resolve_deliveries` settles `sending` rows of a ledger key as
-`done` or `queued`.
+`Database.delete_deliveries` drops ledger rows (`delete deliveries`), so
+their subjects can be queued again.
 
 A sink's options are a `DeliveryOptions` subclass (`interval`,
 `max_per_run`, `max_retries`, `lookback`; `ArtifactDeliveryOptions` adds

@@ -119,50 +119,6 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         app.lock.assert_called_once_with()
 
-    def test_deliver_runs_one_sink_with_selection_requeue_and_force(self) -> None:
-        app = Mock()
-        app.run_delivery.return_value = RunSummary(done=1)
-
-        result = invoke(
-            app,
-            "deliver",
-            "telegram_artifacts",
-            "--artifact",
-            "digest/a/2026-10-01_2026-10-08",
-            "--force",
-        )
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        app.run_delivery.assert_called_once_with(
-            "telegram_artifacts",
-            workflow="default",
-            scope=ProcessingScope(),
-            artifacts=(("digest", "a/2026-10-01_2026-10-08"),),
-            requeue=False,
-            force=True,
-        )
-
-    def test_deliver_without_key_runs_every_one_but_cannot_force(self) -> None:
-        app = Mock()
-        app.delivery_keys.return_value = ["telegram"]
-        app.run_delivery.return_value = RunSummary(done=2, failed=1)
-
-        result = invoke(app, "deliver", "-w", "juntas", "--requeue")
-        forced = invoke(app, "deliver", "--force", "--item", "1")
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        app.delivery_keys.assert_called_once_with("juntas")
-        app.run_delivery.assert_called_once_with(
-            "telegram",
-            workflow="juntas",
-            scope=ProcessingScope(),
-            artifacts=(),
-            requeue=True,
-            force=False,
-        )
-        self.assertEqual(forced.exit_code, 2)
-        self.assertIn("--force needs a KEY", forced.output)
-
     def test_run_goes_on_after_a_failed_phase_and_exits_with_error(self) -> None:
         app = Mock()
         app.sources.return_value = []
@@ -200,23 +156,6 @@ class CommandTests(unittest.TestCase):
         app.process_keys.assert_called_once_with(workflow="juntas")
         app.remix_keys.assert_called_once_with("juntas")
         app.delivery_keys.assert_called_once_with("juntas")
-
-    def test_resolve_settles_interrupted_deliveries(self) -> None:
-        app = Mock()
-        app.resolve_deliveries.return_value = 2
-
-        result = invoke(
-            app, "deliveries", "resolve", "telegram", "--as", "queued", "--item", "4"
-        )
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        app.resolve_deliveries.assert_called_once_with(
-            "telegram",
-            DeliveryStatus.QUEUED,
-            scope=ProcessingScope(item_ids=(4,)),
-            artifact_names=None,
-        )
-        self.assertIn("Resolved 2 interrupted delivery(ies)", result.output)
 
     def test_user_errors_are_reported_without_traceback(self) -> None:
         app = Mock()

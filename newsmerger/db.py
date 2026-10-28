@@ -1030,36 +1030,30 @@ class Database:
             for source_id, uid, sha256 in rows
         }
 
-    def delete_annotations(
-        self, *, processor: str | None = None, item_id: int | None = None
-    ) -> int:
-        """Delete annotations by processor, by item, or both, together with
-        their processing state, so the items become pending again.
+    def delete_annotations(self, annotation_ids: Iterable[int]) -> int:
+        """Delete the annotations with these ids, each with the processing
+        state of its (item, key), so its run finds the item pending again.
 
         Returns the number of annotations deleted.
         """
-        if processor is None and item_id is None:
-            raise ValueError("give a processor, an item, or both")
-
+        annotation_ids = list(annotation_ids)
+        if not annotation_ids:
+            return 0
         with self.session_scope() as sess:
-            annotations = sess.query(DBItemAnnotation)
-            states = sess.query(DBProcessingState)
-            if processor is not None:
-                annotations = annotations.filter(
-                    DBItemAnnotation.processor == processor
-                )
-                states = states.filter(DBProcessingState.processor == processor)
-            if item_id is not None:
-                annotations = annotations.filter(
-                    DBItemAnnotation.source_item_id == item_id
-                )
-                states = states.filter(DBProcessingState.source_item_id == item_id)
-
-            released = {row.content_sha256 for row in annotations}
+            annotations = sess.query(DBItemAnnotation).filter(
+                DBItemAnnotation.id.in_(annotation_ids)
+            )
+            rows = [
+                (row.source_item_id, row.key, row.content_sha256) for row in annotations
+            ]
             deleted = annotations.delete(synchronize_session=False)
-            states.delete(synchronize_session=False)
+            sess.query(DBProcessingState).filter(
+                tuple_(DBProcessingState.source_item_id, DBProcessingState.key).in_(
+                    [(item_id, key) for item_id, key, _ in rows]
+                )
+            ).delete(synchronize_session=False)
 
-        self._release_contents(released)
+        self._release_contents({sha256 for _, _, sha256 in rows})
         return deleted
 
     def delete_items(self, item_ids: Iterable[int]) -> int:
@@ -1347,3 +1341,16 @@ class Database:
             if scope.limit:
                 query = query.limit(scope.limit)
             return [row.to_dto() for row in query]
+
+    def delete_deliveries(self, delivery_ids: Iterable[int]) -> int:
+        """Delete the ledger rows with these ids; return how many. Their
+        subjects can be queued again."""
+        delivery_ids = list(delivery_ids)
+        if not delivery_ids:
+            return 0
+        with self.session_scope() as sess:
+            return (
+                sess.query(DBDelivery)
+                .filter(DBDelivery.id.in_(delivery_ids))
+                .delete(synchronize_session=False)
+            )

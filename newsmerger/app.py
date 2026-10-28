@@ -236,31 +236,6 @@ class Application:
             force=force,
         )
 
-    def resolve_deliveries(
-        self,
-        sink: str,
-        status: DeliveryStatus,
-        *,
-        scope: ProcessingScope | None = None,
-        artifact_names: ArtifactNames | None = None,
-    ) -> int:
-        """Settle the interrupted (`sending`) rows of the ledger key `sink`
-        in the selection as `done` (it was delivered) or `queued` (deliver it
-        again); return how many. Its entry does not need to be configured."""
-        if status not in (DeliveryStatus.DONE, DeliveryStatus.QUEUED):
-            raise ValueError(f"cannot resolve a delivery as '{status}'")
-        rows = self._db.find_deliveries(
-            scope,
-            sink=sink,
-            status=DeliveryStatus.SENDING,
-            artifact_names=artifact_names,
-        )
-        for delivery in rows:
-            delivery.status = status
-            delivery.attempts = 0
-            self._db.save_delivery(delivery)
-        return len(rows)
-
     # --- Queries -----------------------------------------------------------
 
     def get_items(
@@ -349,15 +324,18 @@ class Application:
             sort=sort,
         )
 
-    def delete_annotations(
-        self, *, processor: str | None = None, item_id: int | None = None
-    ) -> int:
-        """Delete annotations by processor, by item, or both, with their
-        processing state: the items become pending again with fresh attempts.
+    def delete_annotations(self, annotation_ids: Iterable[int]) -> int:
+        """Delete these annotations with the processing state of their
+        (item, key): the items become pending again with fresh attempts.
 
         Returns the number of annotations deleted.
         """
-        return self._db.delete_annotations(processor=processor, item_id=item_id)
+        return self._db.delete_annotations(annotation_ids)
+
+    def delete_deliveries(self, delivery_ids: Iterable[int]) -> int:
+        """Delete these ledger rows; return how many. Their subjects are
+        queued again if their delivery's lookback still covers them."""
+        return self._db.delete_deliveries(delivery_ids)
 
     def delete_items(self, item_ids: Iterable[int]) -> int:
         """Delete items with their state, annotations and deliveries; return
