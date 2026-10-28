@@ -418,9 +418,11 @@ default to its type's section, which is optional. `item_image` picks
 `summary` option names (its `required_key`) and
 `TelegramArtifactSink` sends artifacts with `sendDocument`; both record
 `{"chat_id", "message_id"}`, since a message id is only unique in its chat.
-`googlechat` posts summarized items to the webhook of its entry, with the
-annotation its `summary` option names (its `required_key`), `item_url_text`
-as the link label and, under `item_image`, the item's image
-as a `cardsV2` image card. Request
+`googlechat` posts summarized items to the webhook of its entry as one
+`cardsV2` card: the title and the annotation its `summary` option names (its
+`required_key`) in a paragraph of Chat's HTML subset, the item's image under
+`item_image`, and a button labelled `item_url_text`. Chat renders no image
+from `blogger.googleusercontent.com`, so `chat_image_url` asks Blogger for
+the full size and routes it through the `wsrv.nl` proxy. Request
 errors are re-raised `from None` with their class only, since the URLs
 embed the secrets.

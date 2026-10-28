@@ -461,10 +461,13 @@ Every `telegram` and `telegram_artifacts` use needs a `bot_token` and a
 `telegram_artifacts` have one each), which hold their defaults and are
 optional: uses can post with different bots, and a workflow can give its
 entries both with no section at all. The `googlechat` section or entry gives
-the webhook as `url`, or as `channel` (the space id) and `token`. It takes
-`item_image` (the item's image, when it has one, as a card below the text;
-default true), `item_url_text` and `summary`, as `telegram`'s; Chat has no
-link preview to control.
+the webhook as `url`, or as `channel` (the space id) and `token`. Each item
+goes as a card: title and summary, then the image if any, then a button to
+the article. It takes `item_image` (show the item's image, when it has one;
+default true), `item_url_text` (the button's text) and `summary`, as
+`telegram`'s; Chat has no link preview to control. Chat shows no image
+hosted at `blogger.googleusercontent.com`, so those go at full size through
+the `wsrv.nl` image proxy, which sees their URLs.
 
 ```yaml
 plugins:
