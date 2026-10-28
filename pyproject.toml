@@ -1,12 +1,24 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "newstool"
 version = "0.1.0"
-description = "Add your description here"
+description = "Collects news from websites and builds markdown copies, LLM summaries and tags, RSS feeds, digests and Telegram posts from them."
 readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Luis López", email = "luis@cuarentaydos.com" }]
+keywords = ["news", "scraper", "rss", "feeds", "llm", "ollama", "telegram", "summarization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Text Processing :: Markup",
+]
 requires-python = ">=3.13"
 dependencies = [
     "foundation[scraping]",
@@ -32,18 +44,17 @@ dependencies = [
 newstool = "newstool.cli:cli"
 
 
+[project.urls]
+Homepage = "https://github.com/ldotlopez/newstool"
+Repository = "https://github.com/ldotlopez/newstool"
+Issues = "https://github.com/ldotlopez/newstool/issues"
+
 [dependency-groups]
 dev = [
-    "ipdb>=0.13.13",
     "ipython>=9.13.0",
     "pre-commit>=4.6.0",
 ]
-tagging = [
-    "ollama>=0.6.2",
-]
-feeds = [
-    "feedparser>=6.0.12",
-]
+
 
 [tool.uv.sources]
 foundation = { git = "https://github.com/ldotlopez/foundation.git", branch = "main" }
