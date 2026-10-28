@@ -71,7 +71,7 @@ class GoogleChatSinkTests(unittest.TestCase):
         self.add_summarized("h1")
         self.sink = GoogleChatSink(Options(channel="AAAA", token="secret"))
 
-    def add_summarized(self, uid: str, **data: Any) -> None:
+    def add_summarized(self, uid: str, key: str = "summary", **data: Any) -> None:
         item = SourceItem(
             source=SOURCE,
             uid=uid,
@@ -84,7 +84,7 @@ class GoogleChatSinkTests(unittest.TestCase):
         )
         self.db.upsert_source_items([item])
         self.db.record_result(
-            item, "summarize", "summary", ProcessingStatus.DONE, value="S"
+            item, "summarize", key, ProcessingStatus.DONE, value=f"S {key}"
         )
 
     def deliver(self, **options: Any) -> None:
@@ -107,13 +107,23 @@ class GoogleChatSinkTests(unittest.TestCase):
         self.assertEqual(
             post.call_args.kwargs["json"],
             {
-                "text": "*A &lt;b&gt; &amp; c*\n\nS\n\n"
+                "text": "*A &lt;b&gt; &amp; c*\n\nS summary\n\n"
                 "<https://a.test/1?a=1&b=2|original article>"
             },
         )
         ((row, _),) = self.db.get_item_deliveries("googlechat")
         self.assertEqual(row.status, DeliveryStatus.DONE)
         self.assertEqual(row.external_ref, {"message": "spaces/AAAA/messages/m1"})
+
+    def test_summary_option_picks_the_annotation(self, post: Mock) -> None:
+        post.return_value = Mock(ok=True)
+        post.return_value.json.return_value = {"name": "spaces/AAAA/messages/m1"}
+        self.add_summarized("h2", key="summary/ca")
+
+        self.deliver(summary="summary/ca")
+
+        post.assert_called_once()
+        self.assertIn("\n\nS summary/ca\n\n", post.call_args.kwargs["json"]["text"])
 
     def test_image_card_and_link_text(self, post: Mock) -> None:
         post.return_value = Mock(ok=True)

@@ -267,7 +267,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
 class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
     """Delivers items, oldest first. Without `since` or item ids in scope,
     the candidates are the items of the last `lookback` hours; with
-    `requires`, only those whose run of that annotation key finished. Each
+    `required_key`, only those whose run of that annotation key finished. Each
     source is a strict FIFO queue: a row that is not due yet holds back the
     ones after it."""
 
@@ -276,6 +276,10 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
 
     def is_explicit(self, scope: ProcessingScope, artifacts: ArtifactNames) -> bool:
         return bool(scope.item_ids)
+
+    def required_key(self, options: O) -> str | None:
+        """The annotation key an entry with `options` reads, if any."""
+        return self.requires
 
     def queue(
         self,
@@ -289,7 +293,7 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
         if scope.since is None and scope.item_ids is None:
             since = now - timedelta(hours=options.lookback)
             scope = dataclasses.replace(scope, since=since)
-        db.queue_item_deliveries(key, scope, requires=self.requires)
+        db.queue_item_deliveries(key, scope, requires=self.required_key(options))
 
     def queue_selected(
         self,

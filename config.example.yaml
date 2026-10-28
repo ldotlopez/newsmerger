@@ -130,6 +130,7 @@ deliver:
       interval: 30
       item_image: true               # the item's image as a photo, if any
       item_url_text: original article # the link to the article
+      summary: summary               # the annotation posted, e.g. summary/es
       item_url_preview: false        # Telegram's link preview, text posts only
   - sink: telegram_artifacts         # artifacts, as documents
     options: {artifacts: [digest]}

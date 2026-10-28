@@ -1,5 +1,5 @@
-"""The `googlechat` sink posts summarized items (title, summary, link and
-image, see `WebhookOptions`) to a
+"""The `googlechat` sink posts summarized items (title, the `summary` option's
+annotation, link and image, see `WebhookOptions`) to a
 Google Chat space through an incoming webhook, given either as its `url` or
 as its `channel` (space id) and `token`, in the section (the default) or in
 each `deliver:` entry. What was delivered is in the ledger
@@ -64,6 +64,7 @@ class WebhookOptions(DeliveryOptions):
     token: SecretStr | None = None
     item_image: bool = True  # the item's image, when it has one, as a card
     item_url_text: str = "original article"
+    summary: str = "summary"  # the annotation key posted as the summary
 
     @pydantic.model_validator(mode="after")
     def url_or_channel_and_token(self) -> Self:
@@ -86,13 +87,15 @@ class WebhookOptions(DeliveryOptions):
 
 class GoogleChatSink(BaseItemSink[WebhookOptions]):
     name = "googlechat"
-    requires = "summary"
     options_model = WebhookOptions
+
+    def required_key(self, options: WebhookOptions) -> str:
+        return options.summary
 
     def send(
         self, db: Database, subject: SourceItem, options: WebhookOptions
     ) -> dict[str, str]:
-        summaries = db.get_annotation_values([subject], key="summary")
+        summaries = db.get_annotation_values([subject], key=options.summary)
         message: dict[str, Any] = {
             "text": build_text(
                 subject.title,
