@@ -347,7 +347,7 @@ Each provider is a plugin of the same name, without options except
 | `theguardian` | The Guardian | HTML |
 | `csjuntasgobierno` | Index page of *juntas de gobierno* minutes | PDF |
 | `telegram_channel` | Articles linked from a public Telegram channel (`url: https://t.me/<channel>`) | HTML |
-| `feedreader` | Any RSS or Atom feed (`url:` the feed) | The feed's HTML or text, or the article's HTML with `article_selector` |
+| `feedreader` | Any RSS or Atom feed (`url:` the feed) | The feed's HTML or text, or the article's HTML with `fetch_article` or `article_selector` |
 
 `telegram_channel` reads the channel's web preview, which only public
 channels have, and imports one item per linked article, keyed by its
@@ -359,10 +359,13 @@ fetched fresh, never from the HTTP cache.
 
 `feedreader` imports one item per feed entry: its full content (or summary),
 author, categories as `tags` (the first also as `section`) and an image.
-Feeds that carry only a summary can set `article_selector`, a CSS selector
-of the article body: each entry's link is then fetched and that element
-becomes the item's content. Set it in the plugin's section for every feed,
-or per source in its `options`, which win:
+Feeds that carry only a summary can set `fetch_article: true`: each entry's
+link is then fetched and its page becomes the item's content, from which
+`markdownify` extracts the article. `article_selector`, a CSS selector of
+the article body, keeps only that element of the item's HTML, the feed's or,
+with `fetch_article`, the page's; plain-text content is kept whole. Set
+them in the plugin's section for every feed, or per source in its
+`options`, which win:
 
 ```yaml
 sources:
@@ -371,7 +374,8 @@ sources:
     provider: feedreader
     url: https://blog.example.com/feed.xml
     options:
-      article_selector: article .post-body
+      fetch_article: true
+      article_selector: article .post-body  # optional
 ```
 
 To support a new site, see

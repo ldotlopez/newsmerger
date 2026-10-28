@@ -156,7 +156,7 @@ sources:
   - id: some-blog
     provider: feedreader
     options:
-      article_selector: .article   # overrides plugins.feedreader.article_selector
+      fetch_article: true   # overrides plugins.feedreader.fetch_article
 ```
 
 An unknown or invalid option fails every command at start-up as a

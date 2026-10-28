@@ -25,7 +25,8 @@ plugins:
 
   # A provider's options, for every source of it.
   # feedreader:
-  #   article_selector: article  # fetch the full article
+  #   fetch_article: true  # fetch each entry's page, not the feed's text
+  #   article_selector: article  # keep only this element of the item's HTML
 
   # `llm:` names the LLM by id or type (default: the first in `llms`) and
   # `model:` overrides its default model.
@@ -92,7 +93,8 @@ sources:
   #   provider: feedreader
   #   url: https://blog.example.com/feed.xml
   #   options:
-  #     article_selector: article .post-body  # fetch the full article
+  #     fetch_article: true  # fetch the full article
+  #     article_selector: article .post-body  # keep only its body
 
 # Each processor run writes one annotation key, the processor's own unless the
 # entry names another with `key`. On shared sources a key is written by one

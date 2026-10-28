@@ -15,10 +15,15 @@ from . import PluginOptions, PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
+HTML_MIMETYPES = ("text/html", "application/xhtml+xml")
+
 
 class Options(PluginOptions):
-    # CSS selector of the article body, for feeds that only carry a summary:
-    # the item's content is then fetched from its link.
+    # For feeds that only carry a summary: the item's content is the page its
+    # link points to, fetched instead of taken from the feed.
+    fetch_article: bool = False
+    # CSS selector of the article body: the content is only that element of
+    # the item's HTML, be it the feed's or the fetched page's.
     article_selector: str | None = None
 
 
@@ -34,8 +39,12 @@ class FeedReaderProvider(BaseProvider):
         for entry in feed["entries"]:
             try:
                 item = parse_entry(entry)
-                if selector is not None:
-                    item.content = fetch_article(item.uri, selector, fetcher)
+                if self.options.fetch_article:
+                    item.content = fetch_article(item.uri, fetcher)
+                    item.mimetype = "text/html"
+                # Plain text has no elements to select: it is kept whole.
+                if selector is not None and item.mimetype in HTML_MIMETYPES:
+                    item.content = select_article(item.content, selector)
                     item.mimetype = "text/html"
                 yield item
             except (KeyError, ValueError) as e:
@@ -110,16 +119,24 @@ def find_image(entry: FeedParserDict, body: FeedParserDict) -> str | None:
     for enclosure in entry.get("enclosures", []):
         if enclosure.get("type", "").startswith("image/"):
             return enclosure["href"]
-    if body["type"] in ("text/html", "application/xhtml+xml") and (
+    if body["type"] in HTML_MIMETYPES and (
         img := soupify(body["value"]).select_one("img[src]")
     ):
         return urljoin(entry["link"], str(img["src"]))
     return None
 
 
-def fetch_article(url: str, selector: str, fetcher: HTTPClient) -> bytes:
-    soup = soupify(fetcher.get(url).decode("utf-8"))
-    if (article := soup.select_one(selector)) is None:
+def fetch_article(url: str, fetcher: HTTPClient) -> bytes:
+    """The page at `url`, which must be UTF-8 like any text content: assigning
+    it to an item skips the model's validation."""
+    page = fetcher.get(url)
+    page.decode("utf-8")
+    return page
+
+
+def select_article(html: bytes, selector: str) -> bytes:
+    """The element of `html` that `selector` matches."""
+    if (article := soupify(html.decode("utf-8")).select_one(selector)) is None:
         raise ValueError(f"no element matches '{selector}'")
     return str(article).encode("utf-8")
 

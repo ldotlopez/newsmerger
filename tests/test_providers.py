@@ -42,11 +42,20 @@ class TestCSJuntasGobierno(unittest.TestCase):
         self.assertEqual(winter, datetime.timedelta(hours=1))
 
 
+ARTICLE_PAGE = (
+    b'<html><body><article><div class="body"><p>full</p></div></article></body></html>'
+)
+
+
 class TestFeedReader(unittest.TestCase):
     def parse(
-        self, feed: bytes, default_selector: str | None = None, **provider_options: str
+        self,
+        feed: bytes,
+        default_selector: str | None = None,
+        article_page: bytes = ARTICLE_PAGE,
+        **provider_options: str | bool,
     ) -> list[SourceItemData]:
-        pages = {"https://x.test/feed": feed, "https://x.test/1": ARTICLE_PAGE}
+        pages = {"https://x.test/feed": feed, "https://x.test/1": article_page}
         source = Mock(id="src", url="https://x.test/feed")
         # The source's options over the plugin section, as the core merges them.
         section = {"article_selector": default_selector}
@@ -127,12 +136,14 @@ class TestFeedReader(unittest.TestCase):
         self.assertEqual(item.data["image"], "https://x.test/i.jpg")
         self.assertIsNone(item.data["section"])
 
-    def test_article_selector_fetches_full_body(self) -> None:
+    def test_article_selector_on_the_fetched_page(self) -> None:
         feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
           <link>https://x.test/1</link><description>teaser</description>
         </item></channel></rss>"""
         # The source's option beats the plugin's default.
-        (item,) = self.parse(feed, "nav", article_selector="article .body")
+        (item,) = self.parse(
+            feed, "nav", article_selector="article .body", fetch_article=True
+        )
 
         self.assertEqual(item.content, b'<div class="body"><p>full</p></div>')
         self.assertEqual(item.mimetype, "text/html")
@@ -141,9 +152,47 @@ class TestFeedReader(unittest.TestCase):
         feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
           <link>https://x.test/1</link><description>teaser</description>
         </item></channel></rss>"""
-        (item,) = self.parse(feed, "article .body")
+        (item,) = self.parse(feed, "article .body", fetch_article=True)
 
         self.assertEqual(item.content, b'<div class="body"><p>full</p></div>')
+
+    def test_article_selector_on_the_feed_html(self) -> None:
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link>
+          <description>&lt;nav&gt;menu&lt;/nav&gt;&lt;p&gt;text&lt;/p&gt;</description>
+        </item></channel></rss>"""
+        (item,) = self.parse(feed, article_selector="p")
+
+        self.assertEqual(item.content, b"<p>text</p>")
+
+    def test_article_selector_keeps_plain_text(self) -> None:
+        feed = b"""<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom"><entry>
+          <id>urn:a</id><link href="https://x.test/1"/>
+          <content type="text">teaser</content>
+        </entry></feed>"""
+        (item,) = self.parse(feed, article_selector="p")
+
+        self.assertEqual(item.content, b"teaser")
+        self.assertEqual(item.mimetype, "text/plain")
+
+    def test_fetch_article_keeps_the_whole_page(self) -> None:
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link><description>teaser</description>
+        </item></channel></rss>"""
+        (item,) = self.parse(feed, fetch_article=True)
+
+        self.assertEqual(item.content, ARTICLE_PAGE)
+        self.assertEqual(item.mimetype, "text/html")
+
+    def test_fetched_page_must_be_utf8(self) -> None:
+        feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><item>
+          <link>https://x.test/1</link><description>teaser</description>
+        </item></channel></rss>"""
+        with self.assertLogs("newsmerger.plugins.feedreader", "ERROR"):
+            items = self.parse(feed, article_page=b"<p>caf\xe9</p>", fetch_article=True)
+
+        self.assertEqual(items, [])
 
     def test_home_page_links_to_its_feed(self) -> None:
         home = b"""<html><head>
@@ -166,11 +215,6 @@ class TestFeedReader(unittest.TestCase):
     def test_not_a_feed(self) -> None:
         with self.assertRaises(ValueError):
             self.parse(b"<html><body>404</body></html>")
-
-
-ARTICLE_PAGE = (
-    b'<html><body><article><div class="body"><p>full</p></div></article></body></html>'
-)
 
 
 class TestPrensaIberica(unittest.TestCase):
