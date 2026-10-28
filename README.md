@@ -449,8 +449,10 @@ and is optional: entries can post with different bots, and a workflow can
 give its entries both with no section at all. The
 `googlechat` section or entry gives the webhook as `url`, or as `channel`
 (the space id) and `token`. Its entries take `item_image` (the item's image,
-when it has one, as a card below the text; default true) and
-`item_url_text`, as `telegram`'s; Chat has no link preview to control.
+when it has one, as a card below the text; default true),
+`item_url_text`, as `telegram`'s, and `summary` (the annotation key posted
+as the summary, e.g. `summary/es`; default `summary`); Chat has no link
+preview to control.
 
 ```yaml
 plugins:
