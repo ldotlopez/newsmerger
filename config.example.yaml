@@ -142,6 +142,7 @@ sinks:
       item_url_text: original article # the link to the article
       summary: summary               # the annotation posted, e.g. summary/es
       item_url_preview: false        # Telegram's link preview, text posts only
+      markdown: false                # the summary as Markdown, not plain text
   - sink: telegram_artifacts
     id: telegram-digests
     options:
