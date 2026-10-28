@@ -40,13 +40,24 @@ class TelegramError(Exception):
 
 
 def build_caption(
-    title: str, summary: str, uri: str, link_text: str = "original article"
+    title: str,
+    summary: str,
+    uri: str,
+    link_text: str = "original article",
+    markdown: bool = False,
 ) -> str:
-    escaped_title = html.escape(title)
-    escaped_summary = html.escape(summary)
-    escaped_uri = html.escape(uri, quote=True)
-    footer = f'\n\n<a href="{escaped_uri}">{html.escape(link_text)}</a>'
-    heading = f"<b>{escaped_title}</b>\n\n"
+    """The caption in Telegram's HTML or, with `markdown`, in its legacy
+    Markdown with the summary unescaped, so that its formatting renders."""
+    if markdown:
+        # Legacy Markdown cannot escape an entity's delimiter inside it.
+        heading = f"*{title.replace('*', '')}*\n\n"
+        footer = f"\n\n[{link_text.replace(']', '')}]({uri.replace(')', '%29')})"
+        escaped_summary = summary
+    else:
+        escaped_uri = html.escape(uri, quote=True)
+        heading = f"<b>{html.escape(title)}</b>\n\n"
+        footer = f'\n\n<a href="{escaped_uri}">{html.escape(link_text)}</a>'
+        escaped_summary = html.escape(summary)
     available_summary_length = MAX_CAPTION_LENGTH - len(heading) - len(footer)
 
     if available_summary_length <= 0:
@@ -68,6 +79,7 @@ class ItemDeliveryOptions(DeliveryOptions):
     item_url_preview: bool = False  # only for text messages
     item_url_text: str = "original article"
     summary: str = "summary"  # the annotation key posted as the summary
+    markdown: bool = False  # post the summary as Markdown, not as plain text
 
 
 class DocumentDeliveryOptions(ArtifactDeliveryOptions):
@@ -109,7 +121,9 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
             str(summaries[subject.key]),
             subject.uri,
             options.item_url_text,
+            options.markdown,
         )
+        parse_mode = "Markdown" if options.markdown else "HTML"
         image = subject.data.get("image")
         if options.item_image and isinstance(image, str) and image.strip():
             # Uploaded, not by URL: Telegram cannot fetch some URLs, such as
@@ -121,7 +135,7 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
             payload = {
                 "chat_id": options.chat_id,
                 "caption": caption,
-                "parse_mode": "HTML",
+                "parse_mode": parse_mode,
             }
             message_id = post(
                 options.bot_token,
@@ -133,7 +147,7 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
             payload = {
                 "chat_id": options.chat_id,
                 "text": caption,
-                "parse_mode": "HTML",
+                "parse_mode": parse_mode,
                 "link_preview_options": {"is_disabled": not options.item_url_preview},
             }
             message_id = post(options.bot_token, "sendMessage", json=payload)
