@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import string
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit, urlunsplit
 
 import platformdirs
 import pydantic
@@ -13,6 +16,12 @@ import pytimeparse2
 import yaml
 from dotenv import dotenv_values
 from foundation.jsonlib import JsonCompatible
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from .consts import PACKAGE_NAME
 from .models import SourceData
@@ -22,6 +31,44 @@ DEFAULT_WORKFLOW = "default"
 # Ids, workflow names, and remix and delivery keys, which form ledger keys as
 # `<workflow>/<key>`.
 NAME_PATTERN = re.compile(r"[a-z0-9_-]+")
+OLLAMA_PORT = 11434
+
+
+def ollama_url(host: str) -> str:
+    """The URL for an `OLLAMA_HOST` value, which Ollama itself accepts as
+    `host`, `host:port` or a URL, and sets to `0.0.0.0` to listen everywhere:
+    a bare host gets `http://` and Ollama's port, and a listen-everywhere
+    address becomes `localhost`."""
+    url = urlsplit(host if "://" in host else f"http://{host}")
+    try:
+        port = url.port
+    except ValueError:
+        return host
+    if "://" not in host and port is None:
+        port = OLLAMA_PORT
+    if url.hostname in ("0.0.0.0", "::"):
+        name = "localhost"
+    else:
+        name = url.hostname or ""
+        if ":" in name:
+            name = f"[{name}]"
+    return urlunsplit(url._replace(netloc=f"{name}:{port}" if port else name))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Alias:
+    """The config key an external variable fills, and how its value reads."""
+
+    path: tuple[str, ...]
+    convert: Callable[[str], str] = str
+
+
+# Well-known variables of external systems, below the config file: the user
+# need not repeat them as NEWSTOOL_* variables.
+ENV_ALIASES: dict[str, Alias] = {
+    "OLLAMA_HOST": Alias(("plugins", "ollama", "api_base"), ollama_url),
+    "OLLAMA_API_KEY": Alias(("plugins", "ollama", "api_key")),
+}
 
 
 class ConfigError(ValueError):
@@ -54,24 +101,40 @@ type Duration = Annotated[
 ]
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class LoadContext:
+    """What a config load resolves against: the directory relative paths are
+    anchored at and the variables `${VAR}` and the aliases read."""
+
+    config_dir: Path
+    environ: Mapping[str, str]
+
+
+# Set while a config loads: `BaseSettings` passes no validation context.
+LOAD_CONTEXT: ContextVar[LoadContext | None] = ContextVar(
+    "newstool_load_context", default=None
+)
+
+
+def load_context() -> LoadContext:
+    """The load in progress; outside one, the current directory and the
+    process environment."""
+    return LOAD_CONTEXT.get() or LoadContext(Path.cwd(), os.environ)
+
+
+def resolve_config_path(value: Path) -> Path:
+    """`value` as an absolute path: `~` expanded, a relative path anchored at
+    the config file's directory."""
+    return (load_context().config_dir / value.expanduser()).resolve()
+
+
+# A path in the config; relative ones are relative to the config file.
+type ConfigPath = Annotated[Path, pydantic.AfterValidator(resolve_config_path)]
+
+
 class CacheConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
-    base_dir: Path = pydantic.Field(
-        default_factory=lambda: platformdirs.user_cache_path(PACKAGE_NAME)
-    )
     expiration: Duration = 60 * 60
-
-
-class DatabaseConfig(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
-    uri: str = pydantic.Field(
-        default_factory=lambda: (
-            f"sqlite:///{platformdirs.user_data_path(PACKAGE_NAME) / 'data.db'}"
-        )
-    )
-    content_dir: Path = pydantic.Field(
-        default_factory=lambda: platformdirs.user_data_path(PACKAGE_NAME) / "content"
-    )
 
 
 class Entry(pydantic.BaseModel):
@@ -221,8 +284,44 @@ def own_entries(
     ]
 
 
-class Config(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
+class LoadEnvSettingsSource(EnvSettingsSource):
+    """`NEWSTOOL_*` variables of the load's environment, which a `.env` next
+    to the config file completes, rather than of the process alone."""
+
+    def _load_env_vars(self) -> Mapping[str, str | None]:
+        return {name.lower(): value for name, value in load_context().environ.items()}
+
+
+class EnvAliasSource(PydanticBaseSettingsSource):
+    """The `ENV_ALIASES` variables set in the load's environment, as the
+    nested config they fill."""
+
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
+        return None, field_name, False  # the mapping is built in `__call__`
+
+    def __call__(self) -> dict[str, Any]:
+        environ = load_context().environ
+        values: dict[str, Any] = {}
+        for variable, alias in ENV_ALIASES.items():
+            if not environ.get(variable):
+                continue
+            node = values
+            for key in alias.path[:-1]:
+                node = node.setdefault(key, {})
+            node[alias.path[-1]] = alias.convert(environ[variable])
+        return values
+
+
+class Config(BaseSettings):
+    """The configuration. From highest priority: `NEWSTOOL_*` environment
+    variables (`__` nests: `NEWSTOOL_CACHE__EXPIRATION`), the same in a `.env`
+    next to the config file, the YAML, the `ENV_ALIASES` variables, defaults."""
+
+    model_config = SettingsConfigDict(
+        extra="forbid",
+        env_prefix="NEWSTOOL_",
+        env_nested_delimiter="__",
+    )
     # Used when neither --log-level, -v/-q nor NEWSTOOL_LOG_LEVEL set one.
     log_level: str = "warning"
     # Plugin type name -> the defaults of its options in every use of the
@@ -237,7 +336,38 @@ class Config(pydantic.BaseModel):
     # Workflows, run by name; a list, since YAML drops duplicate keys.
     workflows: list[Workflow] = []
     cache: CacheConfig = CacheConfig()
-    db: DatabaseConfig = DatabaseConfig()
+    # Where the HTTP cache lives.
+    cache_dir: ConfigPath = pydantic.Field(
+        default_factory=lambda: platformdirs.user_cache_path(PACKAGE_NAME)
+    )
+    # Everything stored: the SQLite database and the content directory.
+    storage_dir: ConfigPath = pydantic.Field(
+        default_factory=lambda: platformdirs.user_data_path(PACKAGE_NAME)
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Highest priority first; `init_settings` carries the YAML."""
+        return (
+            LoadEnvSettingsSource(settings_cls),
+            init_settings,
+            EnvAliasSource(settings_cls),
+        )
+
+    @property
+    def database_uri(self) -> str:
+        return f"sqlite:///{self.storage_dir / 'data.db'}"
+
+    @property
+    def content_dir(self) -> Path:
+        return self.storage_dir / "content"
 
     @pydantic.model_validator(mode="after")
     def catalog_ids_are_unique(self) -> Config:
@@ -294,14 +424,19 @@ class Config(pydantic.BaseModel):
     @classmethod
     def from_file(cls, path: Path) -> Config:
         """Load a config file. `${VAR}` takes values from the environment,
-        then from a `.env` file next to the config file, if any."""
+        then from a `.env` file next to the config file, if any; relative
+        paths in it are relative to the file."""
         dotenv = {
             name: value
             for name, value in dotenv_values(path.parent / ".env").items()
             if value is not None
         }
         try:
-            return cls.from_text(path.read_text(), environ={**dotenv, **os.environ})
+            return cls.from_text(
+                path.read_text(),
+                environ={**dotenv, **os.environ},
+                base_dir=path.parent,
+            )
         except MissingVariableError as e:
             raise ConfigError(
                 f"{path}: {e}\n"
@@ -310,22 +445,30 @@ class Config(pydantic.BaseModel):
 
     @classmethod
     def from_text(
-        cls, text: str, *, environ: Mapping[str, str] | None = None
+        cls,
+        text: str,
+        *,
+        environ: Mapping[str, str] | None = None,
+        base_dir: Path | None = None,
     ) -> Config:
         """Parse YAML, then expand `${VAR}` references in its string values
         from `environ` (the process environment by default). Comments and
-        keys are never expanded.
+        keys are never expanded. Values from `NEWSTOOL_*` variables of `environ`
+        and the aliases are taken as they are.
 
-        A literal `$` in a value must be written as `$$`.
+        Relative paths are relative to `base_dir` (the current directory by
+        default). A literal `$` in a value must be written as `$$`.
         """
-        parsed = yaml.safe_load(text) or {}
-        expanded = expand_variables(
-            parsed, os.environ if environ is None else environ, ()
-        )
+        environ = os.environ if environ is None else environ
+        expanded = expand_variables(yaml.safe_load(text) or {}, environ, ())
+        context = LoadContext((base_dir or Path.cwd()).resolve(), environ)
+        token = LOAD_CONTEXT.set(context)
         try:
             return cls(**expanded)
         except pydantic.ValidationError as e:
             raise ConfigError(str(e)) from e
+        finally:
+            LOAD_CONTEXT.reset(token)
 
 
 def expand_variables(

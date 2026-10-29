@@ -83,10 +83,10 @@ def main(config_path: Path | None) -> None:
     setup_logger(PACKAGE_NAME, log_level="info")
     config = Config.from_file(config_path) if config_path else Config()
     try:
-        lock = write_lock(config.db.uri)
+        lock = write_lock(config.database_uri)
     except LockedError as e:
         raise click.ClickException(str(e)) from e
-    db = Database(config.db.uri, config.db.content_dir)
+    db = Database(config.database_uri, config.content_dir)
     try:
         done, queued = migrate(db)
     finally:

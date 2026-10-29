@@ -65,11 +65,8 @@ plugins:
 {plugins}
 {catalog}
 {workflows}
-db:
-  uri: sqlite:///{self.tmp_dir}/data.db
-  content_dir: {self.tmp_dir}/content
-cache:
-  base_dir: {self.tmp_dir}/cache
+storage_dir: {self.tmp_dir}
+cache_dir: {self.tmp_dir}/cache
 """
         )
         return Application(config)
@@ -158,11 +155,8 @@ sources:
     options: {options}
 plugins:
   feedreader: {{article_selector: nav}}
-db:
-  uri: sqlite:///{self.tmp_dir}/rss.db
-  content_dir: {self.tmp_dir}/rss-content
-cache:
-  base_dir: {self.tmp_dir}/cache
+storage_dir: {self.tmp_dir}/rss
+cache_dir: {self.tmp_dir}/cache
 """
             )
         )

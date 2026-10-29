@@ -19,9 +19,7 @@ class DeleteCommandTests(unittest.TestCase):
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="newstool-test-"))
         self.config = self.tmp_dir / "config.yaml"
         self.config.write_text(
-            f"db:\n  uri: sqlite:///{self.tmp_dir}/data.db\n"
-            f"  content_dir: {self.tmp_dir}/content\n"
-            f"cache:\n  base_dir: {self.tmp_dir}/cache\n"
+            f"storage_dir: {self.tmp_dir}\ncache_dir: {self.tmp_dir}/cache\n"
         )
         self.db = Database(
             f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"

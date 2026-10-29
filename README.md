@@ -42,9 +42,8 @@ Pass a YAML file with `-c/--config`. Every section is optional;
 `config.example.yaml` is a starting point.
 
 ```yaml
-db:
-  uri: sqlite:////path/to/data.db    # default: <user data dir>/newstool/data.db
-  content_dir: /path/to/content      # default: <user data dir>/newstool/content
+storage_dir: /path/to/storage        # data.db and content/; default: <user data dir>/newstool
+cache_dir: /path/to/cache            # default: <user cache dir>/newstool
 
 cache:
   expiration: 6h                     # HTTP cache lifetime (seconds, or 5m, 2h, 3d)
@@ -52,7 +51,7 @@ cache:
 plugins:                             # defaults of each type's options
   ollama:
     api_base: https://ollama.example.com
-    api_key: ${OLLAMA_API_KEY}
+    api_key: ${OLLAMA_API_KEY}       # or leave it to the OLLAMA_API_KEY variable
   tagger:
     model: gemma4:12b
   telegram:
@@ -97,6 +96,22 @@ real environment wins). A missing variable is an error. Pass secrets (API
 keys, bot tokens) this way, never as literals; `.env` is git-ignored.
 Comments and keys are left alone. Write a literal `$` in a value as `$$`,
 and quote a reference inside `{...}` or `[...]` (`{api_key: '${KEY}'}`).
+
+Relative paths (`storage_dir`, `cache_dir`) are relative to the config file's
+directory, and `~` is expanded: with `/a/b/config.yaml`, `data` and `./data`
+mean `/a/b/data` and `../data` means `/a/data`.
+
+Any key can be set by a `NEWSTOOL_`-prefixed environment variable, with `__`
+for nesting (`NEWSTOOL_CACHE__EXPIRATION=2h`,
+`NEWSTOOL_PLUGINS__OLLAMA__API_BASE=http://box:11434`,
+`NEWSTOOL_STORAGE_DIR=data`), or by the same in the `.env` file. From highest
+priority: the environment, the `.env` file, the config file, the aliases below,
+the defaults. Lists (`sources`, `workflows`...) are configured in the file.
+Values from the environment and `.env` are taken as they are, without `${VAR}`
+expansion. `OLLAMA_HOST` and `OLLAMA_API_KEY` are aliases for
+`plugins.ollama.api_base` and `plugins.ollama.api_key` when nothing else sets
+them; `OLLAMA_HOST` is read as Ollama does (`box` means `http://box:11434`,
+`0.0.0.0` means `localhost`).
 
 ```sh
 # .env
@@ -519,14 +534,14 @@ How delivery (the last phase of `run`) behaves:
 
 ## Data and backups
 
-Everything lives in two places: the SQLite database (`db.uri`) and the
-content directory (`db.content_dir`), which holds article contents,
-annotation values and artifacts. Back up both together. The database runs in
+Everything lives in `storage_dir`: the SQLite database (`data.db`) and the
+content directory (`content/`), which holds article contents, annotation
+values and artifacts. Back up both together. The database runs in
 WAL mode, so back it up with SQLite's backup API (or with no process using
 it), not by copying `data.db` alone.
 
 The schema is created, never migrated: after an upgrade that changes it,
-move the old `data.db` and `content_dir` aside and re-import. New tables are
+move the old `data.db` and `content/` aside and re-import. New tables are
 added on their own. Three upgrades come with a one-shot script for existing
 databases (back up first):
 

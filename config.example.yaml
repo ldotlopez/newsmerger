@@ -7,6 +7,17 @@
 # Used when neither --log-level, -v/-q nor NEWSTOOL_LOG_LEVEL set a level.
 # log_level: info
 
+# Where things live. Relative paths are relative to this file; ~ is expanded.
+# storage_dir holds everything stored: data.db and content/.
+# storage_dir: ~/.local/share/newstool   # default: the user data directory
+# cache_dir: ~/.cache/newstool           # default: the user cache directory
+
+# Any key can also come from a NEWSTOOL_* variable (or the .env next to this
+# file), which wins over this file; `__` nests: NEWSTOOL_CACHE__EXPIRATION=2h,
+# NEWSTOOL_PLUGINS__OLLAMA__API_BASE=http://box:11434, NEWSTOOL_STORAGE_DIR=data.
+# OLLAMA_HOST and OLLAMA_API_KEY fill the ollama plugin's api_base and api_key
+# when this file does not set them.
+
 # Lengths of time, here and in plugin options, are seconds or take a unit
 # suffix: 90s, 5m, 2h, 3d, 1h30m.
 cache:
@@ -19,7 +30,7 @@ cache:
 plugins:
   ollama:
     api_base: http://localhost:11434
-    api_key: ${OLLAMA_API_KEY}
+    # api_key: from OLLAMA_API_KEY, or ${OLLAMA_API_KEY} here
     chat_model: gemma4:12b
     embed_model: mxbai-embed-large:latest
 

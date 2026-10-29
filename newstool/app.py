@@ -60,12 +60,12 @@ class Application:
         self._objects: dict[Profile, Any] = {}
 
         self._db = Database(
-            config.db.uri, config.db.content_dir, create_schema=create_schema
+            config.database_uri, config.content_dir, create_schema=create_schema
         )
         self._cache = UserCache(
             app=PACKAGE_NAME,
             expiration_time=config.cache.expiration,
-            base_dir=config.cache.base_dir,
+            base_dir=config.cache_dir,
         )
         self._fetcher = HTTPClient(cache=self._cache)
         self._lock_file: IO[str] | None = None
@@ -103,7 +103,7 @@ class Application:
     def lock(self) -> None:
         """Take the write lock (see `write_lock`) until `close()`. Every
         command that writes takes it, so writers never overlap."""
-        self._lock_file = write_lock(self.config.db.uri)
+        self._lock_file = write_lock(self.config.database_uri)
 
     def _object(self, profile: Profile) -> Any:
         """The profile's object, built on first use."""

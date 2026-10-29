@@ -1,9 +1,12 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from newstool.config import Config, ConfigError
+import platformdirs
+
+from newstool.config import ENV_ALIASES, Config, ConfigError, ollama_url
 
 SOURCE = """
 sources:
@@ -15,6 +18,14 @@ sources:
 
 
 class ConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Variables aliased to config keys must not leak in from the shell.
+        patcher = patch.dict("os.environ")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for variable in ENV_ALIASES:
+            os.environ.pop(variable, None)
+
     def test_expands_environment_variables(self) -> None:
         with patch.dict("os.environ", {"API_KEY": "secret"}):
             config = Config.from_text("plugins:\n  llm:\n    api_key: ${API_KEY}\n")
@@ -202,6 +213,195 @@ class ConfigTests(unittest.TestCase):
     def test_unconfigured_source_has_clear_error(self) -> None:
         with self.assertRaisesRegex(ConfigError, "source 'missing' is not configured"):
             Config().get_source("missing")
+
+
+class EnvironmentOverrideTests(unittest.TestCase):
+    def test_environment_overrides_the_file_key_by_key(self) -> None:
+        with patch.dict("os.environ", {"NEWSTOOL_CACHE__EXPIRATION": "2h"}, clear=True):
+            config = Config.from_text("log_level: info\ncache: {expiration: 5m}\n")
+
+        self.assertEqual(config.cache.expiration, 2 * 60 * 60)
+        self.assertEqual(config.log_level, "info")
+
+    def test_environment_sets_arbitrary_plugin_options(self) -> None:
+        environ = {
+            "NEWSTOOL_PLUGINS__TAGGER__MODEL": "small",
+            "NEWSTOOL_LOG_LEVEL": "debug",
+        }
+        with patch.dict("os.environ", environ, clear=True):
+            config = Config.from_text("plugins:\n  tagger: {model: big, llm: x}\n")
+
+        self.assertEqual(config.plugins["tagger"], {"model": "small", "llm": "x"})
+        self.assertEqual(config.log_level, "debug")
+
+    def test_dotenv_next_to_the_config_feeds_newstool_variables(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text("log_level: info\n")
+            (Path(directory) / ".env").write_text(
+                "NEWSTOOL_LOG_LEVEL=error\nUNRELATED=1\n"
+            )
+
+            with patch.dict("os.environ", clear=True):
+                config = Config.from_file(config_path)
+
+        self.assertEqual(config.log_level, "error")
+
+    def test_environment_wins_over_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text("")
+            (Path(directory) / ".env").write_text("NEWSTOOL_LOG_LEVEL=error\n")
+
+            with patch.dict("os.environ", {"NEWSTOOL_LOG_LEVEL": "debug"}, clear=True):
+                config = Config.from_file(config_path)
+
+        self.assertEqual(config.log_level, "debug")
+
+    def test_the_environment_given_to_the_load_is_the_one_read(self) -> None:
+        with patch.dict("os.environ", {"NEWSTOOL_LOG_LEVEL": "error"}, clear=True):
+            config = Config.from_text("", environ={"NEWSTOOL_LOG_LEVEL": "debug"})
+
+        self.assertEqual(config.log_level, "debug")
+
+    def test_unknown_newstool_variables_are_ignored_everywhere(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text("")
+            (Path(directory) / ".env").write_text("NEWSTOOL_TYPO=1\n")
+
+            with patch.dict("os.environ", {"NEWSTOOL_OTHER": "2"}, clear=True):
+                Config.from_file(config_path)
+
+    def test_values_are_not_template_expanded(self) -> None:
+        with patch.dict("os.environ", {"NEWSTOOL_LOG_LEVEL": "a$b"}, clear=True):
+            config = Config.from_text("")
+
+        self.assertEqual(config.log_level, "a$b")
+
+
+class AliasTests(unittest.TestCase):
+    def test_ollama_host_reads_as_a_url(self) -> None:
+        for host, expected in [
+            ("box", "http://box:11434"),
+            ("box:8080", "http://box:8080"),
+            ("0.0.0.0", "http://localhost:11434"),
+            ("0.0.0.0:8080", "http://localhost:8080"),
+            ("[::]:8080", "http://localhost:8080"),
+            ("[::1]:8080", "http://[::1]:8080"),
+            ("https://box", "https://box"),
+            ("http://box:8080/api", "http://box:8080/api"),
+            ("box:notaport", "box:notaport"),
+        ]:
+            with self.subTest(host=host):
+                self.assertEqual(ollama_url(host), expected)
+
+    def test_empty_aliased_variables_are_unset(self) -> None:
+        with patch.dict("os.environ", {"OLLAMA_HOST": ""}, clear=True):
+            self.assertEqual(Config.from_text("").plugins, {})
+
+    def test_external_variables_fill_plugin_options(self) -> None:
+        environ = {"OLLAMA_HOST": "box:11434", "OLLAMA_API_KEY": "s$cret"}
+        with patch.dict("os.environ", environ, clear=True):
+            config = Config.from_text("plugins:\n  ollama: {chat_model: m}\n")
+
+        self.assertEqual(
+            config.plugins["ollama"],
+            {"chat_model": "m", "api_base": "http://box:11434", "api_key": "s$cret"},
+        )
+
+    def test_the_file_wins_over_an_alias_and_newstool_wins_over_both(self) -> None:
+        text = "plugins:\n  ollama: {api_base: from-file}\n"
+        with patch.dict("os.environ", {"OLLAMA_HOST": "alias"}, clear=True):
+            self.assertEqual(
+                Config.from_text(text).plugins["ollama"], {"api_base": "from-file"}
+            )
+
+        environ = {
+            "OLLAMA_HOST": "alias",
+            "NEWSTOOL_PLUGINS__OLLAMA__API_BASE": "from-newstool",
+        }
+        with patch.dict("os.environ", environ, clear=True):
+            self.assertEqual(
+                Config.from_text(text).plugins["ollama"],
+                {"api_base": "from-newstool"},
+            )
+
+    def test_alias_in_the_dotenv_next_to_the_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text("")
+            (Path(directory) / ".env").write_text("OLLAMA_API_KEY=from-dotenv\n")
+
+            with patch.dict("os.environ", clear=True):
+                config = Config.from_file(config_path)
+
+        self.assertEqual(config.plugins["ollama"], {"api_key": "from-dotenv"})
+
+
+class DirectoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="newstool-test-")
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name).resolve()
+        self.config_dir = self.directory / "a" / "b"
+        self.config_dir.mkdir(parents=True)
+        self.config_path = self.config_dir / "config.yaml"
+
+    def load(self, text: str, **environ: str) -> Config:
+        self.config_path.write_text(text)
+        with patch.dict("os.environ", environ, clear=True):
+            return Config.from_file(self.config_path)
+
+    def test_defaults_are_the_user_directories(self) -> None:
+        with patch.dict("os.environ", clear=True):
+            config = Config()
+            data_dir = platformdirs.user_data_path("newstool")
+            cache_dir = platformdirs.user_cache_path("newstool")
+
+        self.assertEqual(config.storage_dir, data_dir)
+        self.assertEqual(config.cache_dir, cache_dir)
+
+    def test_storage_dir_holds_the_database_and_the_content(self) -> None:
+        config = self.load(f"storage_dir: {self.directory}/store\n")
+
+        self.assertEqual(
+            config.database_uri, f"sqlite:///{self.directory}/store/data.db"
+        )
+        self.assertEqual(config.content_dir, self.directory / "store" / "content")
+
+    def test_relative_paths_are_relative_to_the_config_file(self) -> None:
+        for value, expected in [
+            ("datadir", self.config_dir / "datadir"),
+            ("./datadir", self.config_dir / "datadir"),
+            ("../datadir", self.config_dir.parent / "datadir"),
+            (f"{self.directory}/abs", self.directory / "abs"),
+        ]:
+            with self.subTest(value=value):
+                config = self.load(f"storage_dir: {value}\ncache_dir: {value}\n")
+                self.assertEqual(config.storage_dir, expected)
+                self.assertEqual(config.cache_dir, expected)
+
+    def test_home_is_expanded(self) -> None:
+        config = self.load("storage_dir: ~/news\n", HOME=str(self.directory))
+
+        self.assertEqual(config.storage_dir, self.directory / "news")
+
+    def test_environment_paths_are_relative_to_the_config_file(self) -> None:
+        config = self.load("", NEWSTOOL_STORAGE_DIR="../env-data")
+
+        self.assertEqual(config.storage_dir, self.config_dir.parent / "env-data")
+
+    def test_without_a_file_paths_are_relative_to_the_current_directory(self) -> None:
+        with patch.dict("os.environ", {"NEWSTOOL_CACHE_DIR": "cache"}, clear=True):
+            config = Config()
+
+        self.assertEqual(config.cache_dir, Path.cwd().resolve() / "cache")
+
+    def test_removed_keys_are_rejected(self) -> None:
+        for text in ["db: {uri: 'sqlite://'}\n", "cache: {base_dir: x}\n"]:
+            with self.subTest(text=text), self.assertRaises(ConfigError):
+                self.load(text)
 
 
 if __name__ == "__main__":

@@ -96,15 +96,15 @@ def migrate(db_path: Path) -> list[str]:
 @click.option("-c", "--config", "config_path", type=Path, default=None)
 def main(config_path: Path | None) -> None:
     config = Config.from_file(config_path) if config_path else Config()
-    url = make_url(config.db.uri)
+    url = make_url(config.database_uri)
     if url.get_backend_name() != "sqlite" or not url.database:
-        raise click.ClickException(f"not a SQLite database file: {config.db.uri}")
+        raise click.ClickException(f"not a SQLite database file: {config.database_uri}")
     db_path = Path(url.database)
     if not db_path.exists():
         raise click.ClickException(f"database not found: {db_path}")
 
     try:
-        lock = write_lock(config.db.uri)
+        lock = write_lock(config.database_uri)
     except LockedError as e:
         raise click.ClickException(str(e)) from e
     try:
