@@ -116,6 +116,16 @@ class SummarizeTests(ProcessorTestCase):
         )
         self.assertEqual(llm.calls[1][2]["model"], "small")
 
+    def test_an_empty_response_is_an_error_without_traceback(self) -> None:
+        processor = build(summarize.SummarizeProcessor, StubLLM("  "))
+
+        with self.assertLogs("newstool.processors", "ERROR") as logs:
+            summary = processor.process(self.db, key="summary", force=True)
+
+        self.assertEqual(summary.failed, 1)
+        self.assertIsNone(logs.records[0].exc_info)
+        self.assertIn("LLM returned an empty summary", logs.records[0].getMessage())
+
     def test_each_use_writes_its_key_with_its_options(self) -> None:
         llm = StubLLM("Resumen.")
         default = build(

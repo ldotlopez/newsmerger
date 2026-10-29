@@ -8,6 +8,7 @@ import feedparser
 from feedparser import FeedParserDict
 from foundation.scrapelib import soupify
 
+from ..errors import PluginFailure, describe
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
@@ -48,7 +49,7 @@ class FeedReaderProvider(BaseProvider):
                     item.mimetype = "text/html"
                 yield item
             except (KeyError, ValueError) as e:
-                LOGGER.error(f"error '{e}' while parsing entry '{entry.get('link')}'")
+                LOGGER.error(f"{describe(e)} while parsing entry '{entry.get('link')}'")
 
 
 def fetch_feed(url: str, fetcher: HTTPClient) -> FeedParserDict:
@@ -58,7 +59,7 @@ def fetch_feed(url: str, fetcher: HTTPClient) -> FeedParserDict:
     if not feed.version:
         feed_url = discover_feed_url(content, url)
         if feed_url is None:
-            raise ValueError(
+            raise PluginFailure(
                 f"{url} is a web page, not an RSS/Atom feed, and it doesn't link "
                 "to one; set the source url to the site's feed address"
             )
@@ -66,7 +67,7 @@ def fetch_feed(url: str, fetcher: HTTPClient) -> FeedParserDict:
         feed = feedparser.parse(fetcher.get(url))
     # An empty but valid feed is fine.
     if not feed["entries"] and (feed.bozo or not feed.version):
-        raise ValueError(
+        raise PluginFailure(
             f"{url} is not a valid RSS/Atom feed ({feed.get('bozo_exception')})"
         )
     return feed
@@ -146,7 +147,7 @@ def fetch_article(url: str, fetcher: HTTPClient) -> bytes:
 def select_article(html: bytes, selector: str) -> bytes:
     """The element of `html` that `selector` matches."""
     if (article := soupify(html.decode("utf-8")).select_one(selector)) is None:
-        raise ValueError(f"no element matches '{selector}'")
+        raise PluginFailure(f"no element matches '{selector}'")
     return str(article).encode("utf-8")
 
 

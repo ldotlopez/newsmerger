@@ -214,7 +214,8 @@ class GoogleChatSinkTests(unittest.TestCase):
 
         ((row, _),) = self.db.get_item_deliveries("googlechat")
         self.assertEqual(
-            (row.status, row.last_error), (DeliveryStatus.ERROR, "ConnectionError")
+            (row.status, row.last_error),
+            (DeliveryStatus.ERROR, "ConnectionError"),
         )
         self.assertNotIn("secret", "\n".join(logs.output))
 

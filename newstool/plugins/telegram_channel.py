@@ -17,6 +17,7 @@ from foundation.scrapelib import (
 )
 from pydantic import PositiveInt
 
+from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
@@ -47,7 +48,7 @@ def preview_url(source: SourceData) -> str:
     https://t.me/s/<channel>."""
     channel = (source.url.path or "").rstrip("/").rsplit("/", 1)[-1]
     if not channel:
-        raise ValueError(f"no channel name in '{source.url}'")
+        raise PluginFailure(f"no channel name in '{source.url}'")
     return f"https://t.me/s/{channel}"
 
 
@@ -91,7 +92,7 @@ def page_title(soup: bs4.BeautifulSoup) -> str:
         pass
     if soup.title is not None and (title := soup.title.get_text(strip=True)):
         return title
-    raise ValueError("no title")
+    raise PluginFailure("no title")
 
 
 def is_home_page(url: str) -> bool:
@@ -105,11 +106,11 @@ def parse_article(content: bytes, post: Post | None = None) -> SourceItemData:
     aren't HTML articles (binary files, error pages)."""
     # shortcut: sniffs the bytes because HTTPClient drops the content type; skips PDFs and other non-HTML links.
     if b"<html" not in content[:4096].lower():
-        raise ValueError("not an HTML page")
+        raise PluginFailure("not an HTML page")
     soup = soupify(content.decode("utf-8"))
     # The fetched URL can't be the fallback: it's the short link, not the article.
     if (url := find_canonical_url(soup)) is None:
-        raise ValueError("no canonical URL: not an article page")
+        raise PluginFailure("no canonical URL: not an article page")
     return SourceItemData(
         uid=hashlib.sha256(url.encode()).hexdigest(),
         title=page_title(soup),
@@ -138,7 +139,9 @@ class TelegramChannelProvider(BaseProvider):
             content = fetcher.get(page_url, use_cache=False)
             posts, page_url = parse_preview(content, page_url)
             if not posts:
-                raise ValueError(f"no posts in '{source.url}': not a public channel?")
+                raise PluginFailure(
+                    f"no posts in '{source.url}': not a public channel?"
+                )
             yield from posts
 
     def retrieve_items(

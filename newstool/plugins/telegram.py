@@ -20,6 +20,7 @@ import requests
 from pydantic import SecretStr
 
 from ..db import Database
+from ..errors import PluginFailure
 from ..models import Artifact, SourceItem
 from ..sinks import (
     ArtifactDeliveryOptions,
@@ -33,10 +34,6 @@ from . import PluginTypes
 LOGGER = logging.getLogger(__name__)
 
 MAX_CAPTION_LENGTH = 1024
-
-
-class TelegramError(Exception):
-    """A message could not be posted."""
 
 
 def build_caption(
@@ -99,9 +96,9 @@ def post(bot_token: SecretStr, method: str, **request: Any) -> int:
         result = response.json()
     except requests.RequestException as e:
         # Only the class: the message holds the URL, which embeds the bot token.
-        raise TelegramError(type(e).__name__) from None
+        raise PluginFailure(type(e).__name__) from None
     if not result.get("ok"):
-        raise TelegramError(result.get("description", str(result)))
+        raise PluginFailure(result.get("description", str(result)))
     return result["result"]["message_id"]
 
 

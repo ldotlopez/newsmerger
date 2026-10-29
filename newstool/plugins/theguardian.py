@@ -13,6 +13,7 @@ from foundation.scrapelib import (
     soupify,
 )
 
+from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
@@ -31,7 +32,7 @@ class TheGuardianProvider(IndexSiteProvider):
         soup = soupify(content.decode("utf-8"))
         tag = soup.select_one('link[rel="alternate"][type="application/rss+xml"]')
         if tag is None or not (href := tag.attrs.get("href")):
-            raise ValueError("Could not find RSS feed link in index page")
+            raise PluginFailure("Could not find RSS feed link in index page")
 
         feed = feedparser.parse(fetcher.get(urljoin(self.index_url(source), href)))
         for entry in feed["entries"]:
@@ -44,7 +45,7 @@ class TheGuardianProvider(IndexSiteProvider):
         soup = soupify(content.decode("utf-8"))
 
         if (url := find_canonical_url(soup)) is None:
-            raise ValueError("no canonical URL")
+            raise PluginFailure("no canonical URL")
         title = head_meta_get_value(soup, {"property": "og:title"})
         image = head_meta_get_value(soup, {"property": "og:image"})
         section = head_meta_get_value(soup, {"property": "article:section"})
@@ -60,7 +61,7 @@ class TheGuardianProvider(IndexSiteProvider):
         )
 
         if (body := soup.select_one(".article-body-commercial-selector")) is None:
-            raise ValueError("Could not find article body container")
+            raise PluginFailure("Could not find article body container")
 
         drop_selectors(
             body,

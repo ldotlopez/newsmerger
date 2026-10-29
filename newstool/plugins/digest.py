@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..config import Duration
 from ..db import Database
+from ..errors import PluginFailure
 from ..llms import strip_code_fence
 from ..models import ProcessingScope, SourceData, SourceItem
 from ..remixers import BaseRemixer, RemixerType
@@ -97,7 +98,7 @@ class DigestRemixer(BaseRemixer):
         )
         body = strip_code_fence(response)
         if not body:
-            raise ValueError(f"LLM returned an empty digest for '{source.id}'")
+            raise PluginFailure(f"LLM returned an empty digest for '{source.id}'")
 
         return f"# {source.name}: {since:%Y-%m-%d} – {until:%Y-%m-%d}\n\n{body}\n"
 

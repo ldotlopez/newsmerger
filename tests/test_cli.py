@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
+import requests
 from click.testing import CliRunner
 from foundation.storage import EntryNotFoundError
 
 from newstool.cli import cli
 from newstool.config import ConfigError
 from newstool.db import DeliveryStatus
+from newstool.errors import PluginFailure
 from newstool.models import (
     Annotation,
     Artifact,
@@ -31,6 +33,48 @@ SOURCE = SourceData(
 def invoke(app: Mock, *args: str):
     with patch("newstool.cli.app_from_context", return_value=app):
         return CliRunner().invoke(cli, list(args))
+
+
+class ExternalErrorTests(unittest.TestCase):
+    """Failures outside the program show as a message; the traceback needs
+    debug logging. Anything else keeps its traceback."""
+
+    def setUp(self) -> None:
+        logger = logging.getLogger("newstool")
+        self.addCleanup(logger.setLevel, logger.level)
+        logger.setLevel(logging.WARNING)
+
+    def remix_failing_with(self, error: Exception):
+        app = Mock()
+        app.remix_keys.return_value = ["digest"]
+        app.run_remix.side_effect = error
+        return invoke(app, "remix")
+
+    def test_external_failure_is_a_message_without_traceback(self) -> None:
+        result = self.remix_failing_with(requests.ConnectionError("llm down"))
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Error: ConnectionError: llm down", result.output)
+        self.assertIsInstance(result.exception, SystemExit)
+
+    def test_external_failure_keeps_its_traceback_with_debug(self) -> None:
+        logging.getLogger("newstool").setLevel(logging.DEBUG)
+
+        result = self.remix_failing_with(requests.ConnectionError("llm down"))
+
+        self.assertIsInstance(result.exception, requests.ConnectionError)
+
+    def test_plugin_failure_is_a_message_without_traceback(self) -> None:
+        result = self.remix_failing_with(PluginFailure("empty digest"))
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Error: empty digest", result.output)
+        self.assertIsInstance(result.exception, SystemExit)
+
+    def test_other_failures_keep_their_traceback(self) -> None:
+        result = self.remix_failing_with(ValueError("bug?"))
+
+        self.assertIsInstance(result.exception, ValueError)
 
 
 class CommandTests(unittest.TestCase):

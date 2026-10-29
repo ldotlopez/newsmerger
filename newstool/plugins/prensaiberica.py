@@ -13,6 +13,7 @@ from foundation.scrapelib import (
     soupify,
 )
 
+from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
@@ -54,7 +55,7 @@ class PrensaIbericaProvider(IndexSiteProvider):
         image = head_meta_get_value(soup, {"property": "og:image"})
         author = head_meta_get_value(soup, {"name": "author"})
         if (url := find_canonical_url(soup)) is None:
-            raise ValueError("no canonical URL")
+            raise PluginFailure("no canonical URL")
         tags = head_meta_get_value(soup, {"property": "article:tag"}).split(",")
         section = head_meta_get_value(soup, {"property": "article:section"})
         pub_time = datetime.fromisoformat(
@@ -65,7 +66,7 @@ class PrensaIbericaProvider(IndexSiteProvider):
         )
 
         if (main := soup.select_one("#main-content")) is None:
-            raise ValueError("Could not find main content container")
+            raise PluginFailure("Could not find main content container")
 
         for div in main.find_all("div", recursive=False):
             if div.get_text().find("Lo más leído") != -1:

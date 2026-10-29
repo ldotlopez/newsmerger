@@ -15,6 +15,7 @@ from foundation.scrapelib import (
     soupify,
 )
 
+from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
@@ -25,23 +26,19 @@ LOGGER = logging.getLogger(__name__)
 DATETIME_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})[^\d]+(\d{2}):(\d{2})")
 
 
-class SectionNotFoundError(Exception):
-    pass
-
-
 def get_section(tag: bs4.Tag, title: str) -> bs4.Tag:
     sections = tag.select("h2 span")
     for sect in sections:
         if sect.get_text().strip().lower() == "castellón":
             return sect
 
-    raise SectionNotFoundError("Could not find section 'Castellón' in index page")
+    raise PluginFailure("Could not find section 'Castellón' in index page")
 
 
 def parse_datetime(tag: bs4.Tag) -> datetime:
     text = tag.get_text().strip()
     if (m := DATETIME_RE.search(text)) is None:
-        raise ValueError(f"Could not parse datetime from text: {text}")
+        raise PluginFailure(f"Could not parse datetime from text: {text}")
     day, month, year, hour, minute = map(int, m.groups())
     dt = datetime(year, month, day, hour, minute, tzinfo=get_local_tz())
     return dt
@@ -66,7 +63,7 @@ class PlazaProvider(IndexSiteProvider):
         title = head_meta_get_value(soup, {"property": "og:title"})
         image = head_meta_get_value(soup, {"property": "og:image"})
         if (url := find_canonical_url(soup)) is None:
-            raise ValueError("no canonical URL")
+            raise PluginFailure("no canonical URL")
         author = soup.select_one(".redactor a").get_text().strip()
         content = soup.select_one(".wrap-FULL")
         drop_selectors(content, [".container-mega", ".COLUMNA-DER"])

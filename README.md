@@ -342,6 +342,10 @@ each from `warning` (`-v` shows progress messages, `-vv` debug). Without
 them, the level comes from `NEWSTOOL_LOG_LEVEL`, then from `log_level` in
 the config, then `warning`.
 
+Failures of a plugin or of something external (network, LLM backend,
+database, disk) are reported as `Type: message`; the traceback is shown only
+with debug logging (`-vv`). Unexpected errors always show it.
+
 Results (tables, `inspect` output, contents, `--help`, and the summaries of
 `run`, `import`, `process` and `remix`) go to stdout; progress and
 logs go to stderr. Each stream is rich only when it is a terminal, so

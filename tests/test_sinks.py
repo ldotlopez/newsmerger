@@ -3,10 +3,12 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pydantic
 
 from newstool.db import Database, DBDelivery, DeliveryStatus, ProcessingStatus
+from newstool.errors import PluginFailure
 from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
 from newstool.plugins import Services
 from newstool.processors import RunSummary
@@ -159,6 +161,19 @@ class ItemSinkTests(SinkTestCase):
         self.assertEqual((summary.done, summary.failed), (2, 1))
         self.assertEqual(sink.sent, ["a2", "b1"])
         self.assertEqual(self.statuses()["a1"], DeliveryStatus.ERROR)
+
+    def test_an_expected_failure_is_logged_without_traceback(self) -> None:
+        self.add(SOURCE_A, "a1", hours_ago=1)
+        sink = RecordingItemSink(failing={"a1"})
+        sink.send = Mock(side_effect=PluginFailure("a1 rejected"))
+
+        with self.assertLogs("newstool.sinks", "ERROR") as logs:
+            sink.run(self.db)
+
+        self.assertTrue(logs.records[0].getMessage().endswith(": a1 rejected"))
+        self.assertIsNone(logs.records[0].exc_info)
+        ((row, _),) = self.db.get_item_deliveries("recorder")
+        self.assertEqual(row.last_error, "a1 rejected")
 
     def test_exhausted_rows_stay_failed_and_the_queue_moves_on(self) -> None:
         self.add(SOURCE_A, "a1", hours_ago=3)

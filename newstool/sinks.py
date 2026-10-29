@@ -13,6 +13,7 @@ from foundation.jsonlib import JsonCompatible
 
 from .config import Duration
 from .db import Database, DeliveryStatus, backoff_seconds
+from .errors import log_failure, reason
 from .models import Artifact, Delivery, ProcessingScope, SourceItem
 from .plugins import PluginOptions, Services
 from .processors import RunSummary
@@ -201,11 +202,13 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
             db.save_delivery(delivery)
             try:
                 external_ref = self.send(db, subject)
-            except Exception as e:
-                LOGGER.exception(f"{key}: could not deliver {self.label(subject)}")
+            except Exception as e:  # noqa: BLE001
+                log_failure(
+                    LOGGER, f"{key}: could not deliver {self.label(subject)}", e
+                )
                 delivery.status = DeliveryStatus.ERROR
                 delivery.attempts += 1
-                delivery.last_error = str(e)
+                delivery.last_error = reason(e)
                 summary.failed += 1
             else:
                 LOGGER.info(f"{key}: delivered {self.label(subject)}")

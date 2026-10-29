@@ -7,6 +7,7 @@ import logging
 import pydantic
 
 from ..db import Database
+from ..errors import PluginFailure
 from ..llms import strip_code_fence
 from ..models import SourceItem
 from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
@@ -83,7 +84,7 @@ class TaggerProcessor(BaseProcessor):
             TypeError,
             json.JSONDecodeError,
         ) as e:
-            raise ValueError(f"invalid tags response {response!r}: {e}") from e
+            raise PluginFailure(f"invalid tags response {response!r}: {e}") from e
 
         item_tags = item.data.get("tags", [])
         tags = (

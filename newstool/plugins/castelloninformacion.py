@@ -13,6 +13,7 @@ from foundation.scrapelib import (
     prune_to_spine,
 )
 
+from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
@@ -41,7 +42,7 @@ class CastellonInformacionProvider(IndexSiteProvider):
         image = head_meta_get_value_by_property(soup, "og:image")
         author = head_meta_get_value_by_name(soup, "author")
         if (url := find_canonical_url(soup)) is None:
-            raise ValueError("no canonical URL")
+            raise PluginFailure("no canonical URL")
         pub_time = datetime.fromisoformat(
             head_meta_get_value_by_property(soup, "article:published_time")
         )
@@ -50,7 +51,7 @@ class CastellonInformacionProvider(IndexSiteProvider):
         )
 
         if (article := soup.select_one("article.post")) is None:
-            raise ValueError("Article not found")
+            raise PluginFailure("Article not found")
 
         drop_selectors(article, [".td-is-sticky"])
         root = prune_to_spine(article)

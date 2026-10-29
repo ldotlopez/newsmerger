@@ -38,6 +38,7 @@ from .db import (
     ITEM_SORTS,
     DeliveryStatus,
 )
+from .errors import EXPECTED_ERRORS, describe, log_failure
 from .models import Delivery, ProcessingScope, SourceItem
 from .processors import RunSummary
 from .sinks import SelectionRequiredError
@@ -63,6 +64,10 @@ def report_user_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
             return command(*args, **kwargs)
         except USER_ERRORS as e:
             raise click.ClickException(str(e)) from e
+        except EXPECTED_ERRORS as e:
+            if LOGGER.isEnabledFor(logging.DEBUG):
+                raise
+            raise click.ClickException(describe(e)) from e
 
     return wrapper
 
@@ -240,10 +245,10 @@ def import_sources(
     def import_one(source_id: str) -> list[Any]:
         try:
             items = app.import_source(source_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # One broken site must not stop the others; the summary reports it.
-            LOGGER.exception(f"importing '{source_id}' failed")
-            return [source_id, "-", f"{type(e).__name__}: {e}"]
+            log_failure(LOGGER, f"importing '{source_id}' failed", e)
+            return [source_id, "-", describe(e)]
         return [source_id, len(items), ""]
 
     sources = [source.id for source in app.sources(workflow)]
@@ -404,8 +409,8 @@ def run_cmd(ctx: click.Context, workflow: str) -> None:
             row = progress.add_task(description, total=1)
             try:
                 results.append((print_summary, run_phase(progress)))
-            except Exception:
-                LOGGER.exception(f"{phase} failed")
+            except Exception as e:  # noqa: BLE001
+                log_failure(LOGGER, f"{phase} failed", e)
                 failures += 1
                 progress.update(row, description=f"{description} failed")
             progress.update(row, completed=1)

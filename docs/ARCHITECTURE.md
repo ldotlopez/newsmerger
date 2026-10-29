@@ -37,6 +37,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `config.py` | Pydantic models for `config.yaml` (log level, `plugins` defaults per type, the catalog: `llms`, `sources`, `processors`, `remixers`, `sinks`; `workflows`, `cache`, `cache_dir`, `storage_dir`); `Config.all_workflows()` adds `default` (the sources without `skip_default`) and `Workflow.ledger_key` names a workflow's delivery records. `Duration`, a length of time as seconds or with a unit suffix (`5m`, `2h`, `3d`), parsed to seconds at load. `Config` is a pydantic-settings `BaseSettings`: `NEWSTOOL_*` variables, then a `.env` next to the config file, then the YAML, then the `ENV_ALIASES` variables (`OLLAMA_HOST`, `OLLAMA_API_KEY`), then defaults (`settings_customise_sources`). `ConfigPath`, a path relative to the config file's directory (the `LoadContext` of the load in progress); `storage_dir` holds `data.db` and `content/` (`database_uri`, `content_dir`). `${VAR}` expansion, in the YAML only, from the environment and a `.env` next to the config file, and the formatting of option errors with their config path. |
 | `models.py` | Domain models: `SourceData` (a configured source), `SourceItemData` (provider output, validated), the DTOs `SourceItem`, `Annotation`, `Artifact` and `Delivery` (each with its database `id`), and `ProcessingScope` (`sources` holds a workflow's). |
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
+| `errors.py` | How failures reach the user: `PluginFailure`, the exception a plugin raises, with a message written for the user, when it cannot do its job in an expected way; `EXPECTED_ERRORS`, that and the failures of the network, the LLM backend and the database; `describe` (the message of a `PluginFailure`, `Type: message` for any other exception) and `log_failure` (error-level log; the traceback only with debug logging or when the exception is unexpected). |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
 | `providers.py` | The `Provider` and `ProviderType` protocols, `BaseProvider` and `IndexSiteProvider`, optional base classes. |
 | `processors.py` | The `Processor` and `ProcessorType` protocols, `ProcessorOptions`, `BaseProcessor`, `SkipItem` and `RunSummary`. |
@@ -178,7 +179,10 @@ A plugin is a module in `newstool/plugins/` that exposes
 `__newstool_plugin__() -> PluginTypes`, the classes it provides under
 their type names, which are what `plugins:` sections, sources and entries
 name. A provider for a site with an index page (a section, an RSS feed)
-that links to one article per item:
+that links to one article per item (a plugin reports an expected failure,
+such as a page without the expected structure or an empty LLM response, by
+raising `PluginFailure` from `..errors` with a message for the user; any
+other exception is unexpected and shows its traceback):
 
 ```python
 import hashlib

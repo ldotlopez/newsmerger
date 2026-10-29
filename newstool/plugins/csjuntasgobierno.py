@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import bs4
 
+from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import LazySourceItemData, SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
@@ -155,7 +156,7 @@ def get_date_from_text(tag: bs4.Tag, pattern: str | re.Pattern) -> re.Match:
         pattern = re.compile(pattern)
 
     if (m := pattern.search(text)) is None:
-        raise ValueError(f"Unable to extract date from: {text!r}")
+        raise PluginFailure(f"Unable to extract date from: {text!r}")
 
     return m
 

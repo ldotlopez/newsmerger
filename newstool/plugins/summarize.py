@@ -1,6 +1,7 @@
 """Summarizes the article's markdown with an LLM."""
 
 from ..db import Database
+from ..errors import PluginFailure
 from ..models import SourceItem
 from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
 from . import PluginTypes, Services, UsesLLMOptions
@@ -36,7 +37,7 @@ class SummarizeProcessor(BaseProcessor):
             self.options.prompt + markdown, model=self.options.model
         ).strip()
         if not summary:
-            raise ValueError("LLM returned an empty summary")
+            raise PluginFailure("LLM returned an empty summary")
 
         return summary
 

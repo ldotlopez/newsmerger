@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 import pydantic
 
 from .db import Database, ProcessingStatus
+from .errors import PluginFailure, log_failure, reason
 from .models import ProcessingScope, SourceItem
 from .plugins import PluginOptions, Services
 
@@ -19,10 +20,6 @@ class SkipItem(Exception):
     """Raise from `process_item` when the item doesn't apply to this processor
     (e.g. wrong language). Recorded as `ignored`: permanent for the item's
     current content, revisited only if it changes or the run is forced."""
-
-
-class MissingAnnotationError(LookupError):
-    """An annotation a processor needs from an upstream one is missing."""
 
 
 @dataclasses.dataclass(slots=True)
@@ -163,16 +160,16 @@ class BaseProcessor:
         except SkipItem as e:
             LOGGER.info(f"{self.name} ignored '{item.uri}': {e}")
             return ProcessingStatus.IGNORED, None, None
-        except Exception as e:
-            LOGGER.exception(f"{self.name} failed on '{item.uri}'")
-            return ProcessingStatus.ERROR, None, str(e)
+        except Exception as e:  # noqa: BLE001
+            log_failure(LOGGER, f"{self.name} failed on '{item.uri}'", e)
+            return ProcessingStatus.ERROR, None, reason(e)
 
     @staticmethod
     def require_annotation(db: Database, item: SourceItem, key: str) -> Any:
         """Return an upstream annotation, or raise if it is missing."""
         value = db.get_annotations(item, key=key).get(key)
         if not value:
-            raise MissingAnnotationError(f"{key} annotation is missing")
+            raise PluginFailure(f"{key} annotation is missing")
         return value
 
     @abstractmethod

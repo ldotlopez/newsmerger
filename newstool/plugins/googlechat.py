@@ -16,6 +16,7 @@ import requests
 from pydantic import SecretStr
 
 from ..db import Database
+from ..errors import PluginFailure
 from ..models import SourceItem
 from ..sinks import BaseItemSink, DeliveryOptions, SinkType
 from . import PluginTypes
@@ -30,10 +31,6 @@ IMAGE_PROXY = "https://wsrv.nl/?url="
 # give 72px thumbnails, so cards ask for the full size instead.
 BLOGGER_SIZE = re.compile(r"[swh]\d+(-[\w-]+)?")
 BLOGGER_FULL_SIZE = "s1600"
-
-
-class GoogleChatError(Exception):
-    """A message could not be posted."""
 
 
 def chat_image_url(image_url: str) -> str:
@@ -140,9 +137,9 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
             result = response.json()
         except requests.RequestException as e:
             # Only the class: the message holds the URL, which embeds the token.
-            raise GoogleChatError(type(e).__name__) from None
+            raise PluginFailure(type(e).__name__) from None
         if not response.ok:
-            raise GoogleChatError(result.get("error", {}).get("message", str(result)))
+            raise PluginFailure(result.get("error", {}).get("message", str(result)))
         return {"message": result["name"]}
 
 
