@@ -1322,6 +1322,7 @@ class Database:
         sink: str | None = None,
         status: DeliveryStatus | None = None,
         artifact_names: Iterable[tuple[str, str]] | None = None,
+        delivery_ids: Iterable[int] | None = None,
         sort: str = "id",
     ) -> list[Delivery]:
         """Ledger rows by a `DELIVERY_SORTS` key (`id` is creation order).
@@ -1339,6 +1340,8 @@ class Database:
                 query = query.filter(DBDelivery.sink == sink)
             if status is not None:
                 query = query.filter(DBDelivery.status == status)
+            if delivery_ids is not None:
+                query = query.filter(DBDelivery.id.in_(list(delivery_ids)))
             if artifact_names is not None:
                 query = query.filter(
                     tuple_(DBArtifact.remixer, DBArtifact.name).in_(

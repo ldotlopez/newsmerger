@@ -480,6 +480,7 @@ class InspectCommandTests(unittest.TestCase):
             sink="telegram",
             status=DeliveryStatus.ERROR,
             artifact_names=None,
+            delivery_ids=None,
             sort="updated",
         )
         self.assertIn("item 7", result.output)

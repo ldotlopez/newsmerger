@@ -144,6 +144,62 @@ class DeleteCommandTests(unittest.TestCase):
         )
         self.assertEqual(len(self.db.get_items()), 2)
 
+    def test_deliveries_are_selected_by_id(self) -> None:
+        for item in self.items:
+            self.deliver(item)
+
+        listed = self.run_cli("inspect", "deliveries", "--delivery", "2")
+        missing = self.run_cli("inspect", "deliveries", "--delivery", "9")
+        result = self.run_cli("delete", "deliveries", "--delivery", "2")
+
+        self.assertEqual(listed.exit_code, 0, listed.output)
+        self.assertIn("item 2", listed.output)
+        self.assertNotIn("item 1", listed.output)
+        self.assertEqual(missing.exit_code, 1)
+        self.assertIn("no delivery 9 in the selection", missing.output)
+        self.assertIn("Deleted 1 delivery(ies)", result.stdout)
+        self.assertEqual([d.id for d in self.db.find_deliveries()], [1])
+
+    def test_deliveries_are_marked_by_selection_or_all_at_once(self) -> None:
+        for item in self.items:
+            self.deliver(item)
+        (_, second) = self.db.find_deliveries()
+        second.status = DeliveryStatus.ERROR
+        second.attempts = 3
+        second.last_error = "boom"
+        self.db.save_delivery(second)
+
+        refused = self.run_cli("deliveries", "set-status", "--as", "done")
+        mixed = self.run_cli(
+            "deliveries", "set-status", "--as", "done", "--all", "--sink", "telegram"
+        )
+        sending = self.run_cli("deliveries", "set-status", "--as", "sending", "--all")
+        one = self.run_cli(
+            "deliveries", "set-status", "--as", "queued", "--delivery", "2"
+        )
+        everything = self.run_cli("deliveries", "set-status", "--as", "done", "--all")
+
+        self.assertNotEqual(refused.exit_code, 0)
+        self.assertNotEqual(mixed.exit_code, 0)
+        self.assertNotEqual(sending.exit_code, 0)
+        self.assertEqual(one.exit_code, 0, one.output)
+        (queued,) = self.db.find_deliveries(delivery_ids=[2])
+        self.assertEqual((queued.attempts, queued.last_error), (0, None))
+        self.assertIn("Marked 2 delivery(ies) as done", everything.stdout)
+        self.assertEqual(
+            {d.status for d in self.db.find_deliveries()}, {DeliveryStatus.DONE}
+        )
+
+    def test_send_needs_a_selection_and_skips_unconfigured_ledger_keys(self) -> None:
+        self.deliver(self.items[0])
+
+        refused = self.run_cli("deliveries", "send")
+        skipped = self.run_cli("deliveries", "send", "--delivery", "1")
+
+        self.assertNotEqual(refused.exit_code, 0)
+        self.assertEqual(skipped.exit_code, 0, skipped.output)
+        self.assertEqual(self.db.find_deliveries()[0].status, DeliveryStatus.QUEUED)
+
     def test_artifacts_with_deliveries_are_skipped_unless_forced(self) -> None:
         for name in ("a/1", "a/2"):
             self.db.save_artifact(Artifact("digest", name, name, "text/markdown"))

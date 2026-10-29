@@ -18,7 +18,7 @@ from newstool.app import (
     LockedError,
 )
 from newstool.config import Config, ConfigError
-from newstool.db import ProcessingStatus
+from newstool.db import DeliveryStatus, ProcessingStatus
 from newstool.models import (
     LazySourceItemData,
     ProcessingScope,
@@ -359,6 +359,52 @@ workflows:
         (row,) = self.app.find_deliveries()
         self.assertEqual(row.sink, "channel/telegram")
         self.assertEqual(row.external_ref, {"chat_id": "main", "message_id": 1})
+
+    @patch("newstool.plugins.telegram.requests.post")
+    def test_deliveries_are_marked_and_sent_again_by_id(self, post) -> None:
+        post.return_value.json.return_value = {"ok": True, "result": {"message_id": 1}}
+        self.app.close()
+        self.app = self.make_app(
+            "  telegram: {bot_token: t}\n",
+            catalog="""
+llms: [ollama]
+processors: [markdownify, summarize]
+sinks:
+  - {sink: telegram, id: main, options: {chat_id: main}}
+""",
+            workflows="""
+workflows:
+  - name: channel
+    sources: [mediterraneo]
+    process: [markdownify, summarize]
+    deliver: [main]
+""",
+        )
+        item = self.import_sample()
+        self.app._db.record_result(
+            item, "summarize", "summary", ProcessingStatus.DONE, value="S"
+        )
+        scope = ProcessingScope(item_ids=(item.id,))
+        self.app.run_delivery("telegram", workflow="channel", scope=scope, force=True)
+        (row,) = self.app.find_deliveries()
+
+        summaries = self.app.send_deliveries([row])
+
+        self.assertEqual(summaries["channel/telegram"].done, 1)
+        self.assertEqual(post.call_count, 2)
+
+        marked = self.app.set_delivery_status(
+            self.app.find_deliveries(delivery_ids=[row.id]), DeliveryStatus.QUEUED
+        )
+
+        self.assertEqual(marked, 1)
+        (row,) = self.app.find_deliveries(status=DeliveryStatus.QUEUED)
+        self.assertEqual(row.attempts, 0)
+        with self.assertRaises(ValueError):
+            self.app.set_delivery_status([row], DeliveryStatus.SENDING)
+        row.sink = "gone/telegram"
+        self.assertEqual(self.app.send_deliveries([row]), {})
+        self.assertEqual(post.call_count, 2)
 
     def test_what_runs_read_must_be_written_on_their_sources(self) -> None:
         for catalog, workflows, message in (

@@ -271,6 +271,12 @@ uv run newstool -c config.yaml inspect artifacts
 uv run newstool -c config.yaml inspect artifacts --artifact feedgenerator/feed > feed.xml
 uv run newstool -c config.yaml inspect deliveries --sink telegram --status error
 
+# Change the state of ledger rows, or send them now
+uv run newstool -c config.yaml deliveries set-status --as queued --status error
+uv run newstool -c config.yaml deliveries set-status --as done --delivery 31
+uv run newstool -c config.yaml deliveries set-status --as queued --all
+uv run newstool -c config.yaml deliveries send --delivery 31
+
 # Delete, without asking: the same options as inspect select what goes
 uv run newstool -c config.yaml delete items --item 4127
 uv run newstool -c config.yaml delete annotations --processor summarize --source castellonplaza
@@ -280,13 +286,14 @@ uv run newstool -c config.yaml delete deliveries --sink telegram --item 4127
 ```
 
 Items and annotations are selected by their numeric id, which `inspect`
-shows; artifacts by `<remix key>/<name>`, and deliveries by their recorded
-key (`<workflow>/<key>`). `process`, `remix`,
+shows; artifacts by `<remix key>/<name>`, and deliveries by the numeric id
+`inspect deliveries` shows (`--delivery`), or by their recorded key
+(`<workflow>/<key>`, `--sink`). `process`, `remix`,
 `inspect` and `delete` accept `--source` (a source id), `--since`,
 `--until`, `--item` (repeatable) and `--limit`; `inspect` and `delete` add
 `--processor`, `--key` and `--annotation` for annotations,
 `--remixer`, `--artifact` and `--limit` for artifacts, and `--artifact`,
-`--sink` and `--status` for deliveries. Filters combine; an
+`--delivery` (repeatable), `--sink` and `--status` for deliveries. Filters combine; an
 id that the selection does not return is an error.
 
 `inspect` and `delete` sort with `--sort` (default `updated`), always
@@ -317,6 +324,17 @@ processes the item again. `delete deliveries` drops ledger rows; the next
 `run` delivers those subjects again while its `lookback` covers them. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
+
+`deliveries set-status` and `deliveries send` take the selection of
+`inspect deliveries` and need at least one filter or id, so run `inspect`
+first. `set-status --as queued|done|error` changes the state of the
+selected rows: `queued` also gives them fresh attempts, so the next `run`
+sends them, and `done` records a delivery you settled by hand.
+`set-status --all` (no other filter) changes every row. `send` sends the
+selected rows now, whatever their state (`done` ones too), with no backoff
+or pacing, and exits non-zero if one fails; a row whose delivery is no
+longer in the configuration is skipped with a warning. Neither creates
+rows: a subject with none is queued by the next `run`.
 
 Global options: `--log-level LEVEL` (also accepts specs such as
 `info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one step
@@ -527,10 +545,10 @@ How delivery (the last phase of `run`) behaves:
   within its `lookback`.
 - A delivery is marked `sending` before the call. If a run is interrupted
   there, its outcome is unknown and it is never retried on its own: check
-  the chat, then send it again with `delete deliveries --status sending`
-  (with the key `inspect deliveries` shows as `--sink`), or leave it.
-- `inspect deliveries` shows the ledger: each subject, its state, attempts
-  and last error.
+  the chat, then settle it with `deliveries set-status --as done|queued
+  --delivery ID` (the id `inspect deliveries` shows), or leave it.
+- `inspect deliveries` shows the ledger: each row's id, subject, state,
+  attempts and last error.
 
 ## Data and backups
 

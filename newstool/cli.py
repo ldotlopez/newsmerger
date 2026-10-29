@@ -38,7 +38,7 @@ from .db import (
     ITEM_SORTS,
     DeliveryStatus,
 )
-from .models import ProcessingScope, SourceItem
+from .models import Delivery, ProcessingScope, SourceItem
 from .processors import RunSummary
 from .sinks import SelectionRequiredError
 
@@ -509,8 +509,8 @@ def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
 
 
 def delivery_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
-    """Add the item scope, --artifact, --sink and --status, which select
-    ledger rows."""
+    """Add the item scope, --artifact, --delivery, --sink and --status, which
+    select ledger rows."""
     command = click.option(
         "--status",
         type=click.Choice([status.value for status in DeliveryStatus]),
@@ -520,7 +520,37 @@ def delivery_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     command = click.option(
         "--sink", default=None, help="Only this ledger key's deliveries"
     )(command)
+    command = click.option(
+        "--delivery",
+        "delivery_ids",
+        type=int,
+        multiple=True,
+        help="Delivery id (repeatable)",
+    )(command)
     return scope_options(artifact_ids_option(command))
+
+
+def select_deliveries(
+    app: Application,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
+    sink: str | None,
+    status: str | None,
+    sort: str,
+) -> list[Delivery]:
+    """The ledger rows the `delivery_options` select; an explicit delivery id
+    outside the selection is an error."""
+    deliveries = app.find_deliveries(
+        scope,
+        sink=sink,
+        status=DeliveryStatus(status) if status else None,
+        artifact_names=artifact_ids or None,
+        delivery_ids=delivery_ids or None,
+        sort=sort,
+    )
+    check_found("delivery", delivery_ids, (d.id for d in deliveries))
+    return deliveries
 
 
 def artifact_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
@@ -814,6 +844,7 @@ def inspect_deliveries_cmd(
     ctx: click.Context,
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
     sink: str | None,
     status: str | None,
     sort: str,
@@ -823,12 +854,14 @@ def inspect_deliveries_cmd(
 
     Item filters keep item deliveries, --artifact artifact deliveries.
     """
-    deliveries = app_from_context(ctx).find_deliveries(
+    deliveries = select_deliveries(
+        app_from_context(ctx),
         scope,
-        sink=sink,
-        status=DeliveryStatus(status) if status else None,
-        artifact_names=artifact_ids or None,
-        sort=sort,
+        artifact_ids,
+        delivery_ids,
+        sink,
+        status,
+        sort,
     )
 
     if output_format == "json":
@@ -837,9 +870,10 @@ def inspect_deliveries_cmd(
 
     print_table(
         "Deliveries",
-        ["Sink", "Subject", "Status", "Attempts", "Updated", "Error"],
+        ["ID", "Sink", "Subject", "Status", "Attempts", "Updated", "Error"],
         [
             [
+                d.id,
                 d.sink,
                 f"item {d.item_id}" if d.item_id is not None else d.artifact_name,
                 d.status,
@@ -862,10 +896,30 @@ force_delete_option = click.option(
 )
 
 
-def require_selection(*filters: object) -> None:
+def require_selection(*filters: object, action: str = "delete") -> None:
     """Refuse a selection that names no filter or id: it would match all."""
     if not any(filters):
-        raise click.UsageError("name a filter or an id to select what to delete")
+        raise click.UsageError(f"name a filter or an id to select what to {action}")
+
+
+def delivery_filters(
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
+    sink: str | None,
+    status: str | None,
+) -> tuple[object, ...]:
+    """What a `delivery_options` selection names, for `require_selection`."""
+    return (
+        scope.source,
+        scope.since,
+        scope.until,
+        scope.item_ids,
+        artifact_ids,
+        delivery_ids,
+        sink,
+        status,
+    )
 
 
 @cli.group("delete")
@@ -1007,6 +1061,7 @@ def delete_deliveries_cmd(
     ctx: click.Context,
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
     sink: str | None,
     status: str | None,
     sort: str,
@@ -1017,21 +1072,95 @@ def delete_deliveries_cmd(
     its lookback still covers it, and is then delivered again.
     """
     require_selection(
-        scope.source,
-        scope.since,
-        scope.until,
-        scope.item_ids,
-        artifact_ids,
-        sink,
-        status,
+        *delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
     )
     app = app_from_context(ctx, write=True)
-    deliveries = app.find_deliveries(
-        scope,
-        sink=sink,
-        status=DeliveryStatus(status) if status else None,
-        artifact_names=artifact_ids or None,
-        sort=sort,
+    deliveries = select_deliveries(
+        app, scope, artifact_ids, delivery_ids, sink, status, sort
     )
     deleted = app.delete_deliveries(d.id for d in deliveries)
     click.echo(f"Deleted {deleted} delivery(ies)")
+
+
+# --- Deliveries -------------------------------------------------------------
+
+
+@cli.group("deliveries")
+def deliveries_group() -> None:
+    """Change the state of ledger rows, or send them now."""
+
+
+@deliveries_group.command("set-status")
+@delivery_options
+@sort_option(DELIVERY_SORTS)
+@click.option(
+    "--as",
+    "target",
+    type=click.Choice(
+        [s.value for s in DeliveryStatus if s is not DeliveryStatus.SENDING]
+    ),
+    required=True,
+    help="The new state; `queued` also gives fresh attempts",
+)
+@click.option(
+    "--all", "all_rows", is_flag=True, help="Every ledger row; takes no filter"
+)
+@click.pass_context
+@report_user_errors
+def deliveries_set_status_cmd(
+    ctx: click.Context,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
+    sink: str | None,
+    status: str | None,
+    sort: str,
+    target: str,
+    all_rows: bool,
+) -> None:
+    """Move ledger rows to another state; --limit counts rows.
+
+    Settles an interrupted `sending` row (`--as done` or `--as queued`), or
+    requeues failed ones (`--as queued`).
+    """
+    filters = delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
+    if all_rows and any(filters):
+        raise click.UsageError("--all takes no filter or id")
+    if not all_rows:
+        require_selection(*filters, action="change")
+    app = app_from_context(ctx, write=True)
+    deliveries = select_deliveries(
+        app, scope, artifact_ids, delivery_ids, sink, status, sort
+    )
+    changed = app.set_delivery_status(deliveries, DeliveryStatus(target))
+    click.echo(f"Marked {changed} delivery(ies) as {target}")
+
+
+@deliveries_group.command("send")
+@delivery_options
+@sort_option(DELIVERY_SORTS)
+@click.pass_context
+@report_user_errors
+def deliveries_send_cmd(
+    ctx: click.Context,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
+    sink: str | None,
+    status: str | None,
+    sort: str,
+) -> None:
+    """Send ledger rows now, whatever their state, with no backoff or pacing.
+
+    A row is sent again even if it is `done`. Exits non-zero if any fails.
+    """
+    require_selection(
+        *delivery_filters(scope, artifact_ids, delivery_ids, sink, status),
+        action="send",
+    )
+    app = app_from_context(ctx, write=True)
+    deliveries = select_deliveries(
+        app, scope, artifact_ids, delivery_ids, sink, status, sort
+    )
+    if print_deliver(app.send_deliveries(deliveries)):
+        ctx.exit(1)

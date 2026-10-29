@@ -319,17 +319,71 @@ class Application:
         sink: str | None = None,
         status: DeliveryStatus | None = None,
         artifact_names: ArtifactNames | None = None,
+        delivery_ids: Iterable[int] | None = None,
         sort: str = "id",
     ) -> list[Delivery]:
         """Ledger rows by a `db.DELIVERY_SORTS` key; item filters keep item
-        rows, `artifact_names` artifact rows, and `limit` counts rows."""
+        rows, `artifact_names` artifact rows, `delivery_ids` these rows, and
+        `limit` counts rows."""
         return self._db.find_deliveries(
             scope,
             sink=sink,
             status=status,
             artifact_names=artifact_names,
+            delivery_ids=delivery_ids,
             sort=sort,
         )
+
+    def set_delivery_status(
+        self, deliveries: Iterable[Delivery], status: DeliveryStatus
+    ) -> int:
+        """Move these ledger rows to `queued`, `done` or `error`; return how
+        many. `queued` also gives them fresh attempts, and `queued` and
+        `done` clear the last error."""
+        if status == DeliveryStatus.SENDING:
+            raise ValueError("a delivery is only `sending` while it is sent")
+        count = 0
+        for delivery in deliveries:
+            delivery.status = status
+            if status == DeliveryStatus.QUEUED:
+                delivery.attempts = 0
+            if status != DeliveryStatus.ERROR:
+                delivery.last_error = None
+            self._db.save_delivery(delivery)
+            count += 1
+        return count
+
+    def send_deliveries(self, deliveries: Iterable[Delivery]) -> dict[str, RunSummary]:
+        """Send these ledger rows now, whatever their state, with no backoff
+        and no pacing; one summary per ledger key. Rows of a ledger key that
+        is no longer configured are skipped with a warning."""
+        by_key: dict[str, list[Delivery]] = {}
+        for delivery in deliveries:
+            by_key.setdefault(delivery.sink, []).append(delivery)
+
+        summaries: dict[str, RunSummary] = {}
+        for ledger_key, rows in by_key.items():
+            if (run := self._catalog.deliveries.get(ledger_key)) is None:
+                LOGGER.warning(
+                    f"{ledger_key}: not configured, skipped {len(rows)} delivery(ies)"
+                )
+                continue
+            item_ids = tuple(d.item_id for d in rows if d.item_id is not None)
+            summaries[ledger_key] = self._object(run.profile).deliver(
+                self._db,
+                key=ledger_key,
+                scope=workflow_scope(
+                    run.workflow, ProcessingScope(item_ids=item_ids or None)
+                ),
+                artifacts=tuple(
+                    (remixer, name)
+                    for d in rows
+                    if d.artifact_name is not None
+                    for remixer, _, name in [d.artifact_name.partition("/")]
+                ),
+                force=True,
+            )
+        return summaries
 
     def delete_annotations(self, annotation_ids: Iterable[int]) -> int:
         """Delete these annotations with the processing state of their
