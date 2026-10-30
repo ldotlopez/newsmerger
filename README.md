@@ -387,8 +387,9 @@ Each provider is a plugin of the same name, without options except
 | `feedreader` | Any RSS or Atom feed (`url:` the feed) | The feed's HTML or text, or the article's HTML with `fetch_article` or `article_selector` |
 
 `prensaiberica` imports the articles its section's index page lists. Its
-`exclude_sections` option (default none) leaves out the articles of the
-index's sections with those header titles, compared case-insensitively:
+`exclude_sections` option leaves out the articles of the index's sections
+with those header titles, compared case-insensitively. It defaults to
+`Comarcas` and `Vídeos y galerías de Castellón`; `[]` excludes none:
 
 ```yaml
 sources:

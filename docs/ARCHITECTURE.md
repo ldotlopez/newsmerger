@@ -250,7 +250,7 @@ files), subclass `BaseProvider` and implement
 options (`self.options`). When the index already gives each item's uid and
 date and fetching an item is expensive, implement `iter_items` and
 `retrieve_item` instead, so stored items are skipped undownloaded;
-`csjuntasgobierno` is an example.
+`csjuntasgobierno` and `prensaiberica` (with options) are examples.
 
 A class with options sets `options_model` to a `PluginOptions` subclass
 with defaults for the general case, so a use needs no options; its
