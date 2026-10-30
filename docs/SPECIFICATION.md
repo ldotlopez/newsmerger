@@ -258,8 +258,9 @@ process, not a network service. It offers:
 - **Deletion** of items and artifacts, with everything that references them
   (processing state, annotations, deliveries).
 - **Changing the state** of ledger rows (`queued`, `done` or `error`, which
-  also settles interrupted deliveries) and **sending** them now, selected by
-  id or by the filters of `inspect deliveries`.
+  also settles interrupted deliveries), **deleting** them (a deleted
+  subject is queued again while within `lookback`) and **sending** them
+  now, selected by id or by the filters of `inspect deliveries`.
 - A **write lock**: commands that write take it, so two of them never run
   at the same time; the second fails at once.
 
