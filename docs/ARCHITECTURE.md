@@ -72,11 +72,13 @@ code:
 
 A type protocol declares `options_model` and `__call__(options, services)`;
 `ProcessorType` adds `output_key(options)` and `required_key(options)`, and
-`SinkType` `required_key(options)`, as class methods, so keys are worked
-out without objects. An object keeps its options (`self.options`) and
-receives what each task needs as method arguments: providers the source
-and the `HTTPClient`, processors, remixers and sinks the `Database`, the
-scope and the run's key. Each protocol has its own method
+`RemixerType` and `SinkType` `required_key(options)`, as class methods, so
+keys are worked out without objects. An object keeps its options
+(`self.options`) and what it takes from `services` (decision 0013):
+providers the `HTTPClient` (`self.fetcher`), processors, remixers and sinks
+the `Database` (`self.db`). Methods receive only what each task needs:
+providers the source, processors, remixers and sinks the scope and the
+run's key. Each protocol has its own method
 (`retrieve_items` or `iter_items`/`retrieve_item`, `process`, `remix`,
 `deliver`). Processors, remixers and
 sinks own their name, a class attribute that records who wrote an
@@ -85,8 +87,8 @@ processing state are keyed by the process run's key, artifacts by the
 remix run's and deliveries by the delivery run's (see *Workflows*), never
 by the type name, which is only their default.
 
-`services` is what the core shares with objects: `services.llm(name)`
-returns the LLM `name` refers to (an `llms` id or an LLM type; `None`, the
+`services` is what the core shares with objects: `services.db`,
+`services.fetcher`, and `services.llm(name)`, which returns the LLM `name` refers to (an `llms` id or an LLM type; `None`, the
 first `llms` entry), built on first use by `Application._llm`. Objects that
 use one take `UsesLLMOptions` and ask for it in their constructor.
 
@@ -134,7 +136,7 @@ Identity follows ownership:
   stored as the delivery's `sink`. A key is unique within its workflow; `/`
   is not allowed in workflow names or keys.
 
-Every key a process or delivery run reads (`required_key`) must be written
+Every key a process, remix or delivery run reads (`required_key`) must be written
 by a process run on its workflow's sources, in any workflow, so a workflow
 may deliver what others process.
 
@@ -144,11 +146,11 @@ grouping remixer reads `tags`.
 
 ## Providers
 
-`Provider.retrieve_items(source, fetcher)` yields `SourceItemData`. A
-`PreflightProvider` imports in two stages instead: `iter_items(source,
-fetcher)` lists `PreflightSourceItemData` (the `uid`, a `ref` of the
+`Provider.retrieve_items(source)` yields `SourceItemData`. A
+`PreflightProvider` imports in two stages instead: `iter_items(source)`
+lists `PreflightSourceItemData` (the `uid`, a `ref` of the
 plugin's own type to fetch the item with, and the `modified_at` the index
-shows, if any), and the core calls `retrieve_item(preflight_item, fetcher)`
+shows, if any), and the core calls `retrieve_item(preflight_item)`
 only for items that are new, listed without a date, or listed newer than
 the stored `modified_at`. An item that turns out no newer once retrieved is
 dropped with a warning, and a uid other than the listed one is warned about.
@@ -201,7 +203,6 @@ from collections.abc import Iterator
 import bs4
 from foundation.scrapelib import drop_selectors, prune_to_spine
 
-from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
 from . import PluginTypes
@@ -212,9 +213,7 @@ class ExampleProvider(IndexSiteProvider):
         # Optional: defaults to the source's url.
         return str(source.url).rstrip("/") + "/feed/"
 
-    def parse_index(
-        self, content: bytes, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[URI]:
+    def parse_index(self, content: bytes, source: SourceData) -> Iterator[URI]:
         """Yield the article URLs found in the index page."""
         ...
 
@@ -245,8 +244,8 @@ def __newstool_plugin__() -> PluginTypes:
 `parse_item` is logged and that article is skipped, so raise it for pages
 that aren't articles. For anything else (several items in one page, binary
 files), subclass `BaseProvider` and implement
-`retrieve_items(source, fetcher)` yourself, fetching with
-`fetcher.get(url)`; `feedreader` and `telegram_channel` are examples with
+`retrieve_items(source)` yourself, fetching with
+`self.fetcher.get(url)`; `feedreader` and `telegram_channel` are examples with
 options (`self.options`). When the index already gives each item's uid and
 date and fetching an item is expensive, implement `iter_items` and
 `retrieve_item` instead, so stored items are skipped undownloaded;
@@ -258,10 +257,11 @@ constructor takes `(options, services)`. `feedgenerator` and `telegram` are
 examples, `grouping` shows a bundle with several classes and `summarize` an
 LLM consumer (`UsesLLMOptions`). Use `pydantic.SecretStr` for secrets, so
 they never show in a `repr` or a traceback. Processors, remixers and sinks
-usually subclass `BaseProcessor` (`process_item(db, item)`, plus `key` and
+usually subclass `BaseProcessor` (`process_item(item)`, plus `key` and
 `requires` class attributes, options from `ProcessorOptions`),
-`BaseRemixer` (`produce(db, scope)`) or `BaseItemSink`/`BaseArtifactSink`
-(`send(db, subject)`), set `name` and `options_model` as class attributes
+`BaseRemixer` (`produce(scope)`, plus `requires`) or
+`BaseItemSink`/`BaseArtifactSink` (`send(subject)`), read the database
+through `self.db`, set `name` and `options_model` as class attributes
 and are returned as `(cls.name, ProcessorType, cls)`.
 
 Rules every provider follows:
@@ -349,8 +349,8 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
   validates the options, asks the class for its `output_key(options)` when
   the entry names no key, and checks the keys (see *Workflows*).
   `run_process(key, workflow=...)` calls
-  `processor.process(db, key=key, scope=..., force=...)`.
-- `BaseProcessor.process_item(db, item)` returns the value of one
+  `processor.process(key=key, scope=..., force=...)`.
+- `BaseProcessor.process_item(item)` returns the value of one
   annotation for one item, with its options in `self.options`.
   `Database.get_unprocessed_items(key, ...)` selects the eligible items
   (backoff in `backoff_seconds`, `max_retries` from `ProcessorOptions`,
@@ -370,9 +370,9 @@ The eligibility and retry rules are in spec §4.2; this is where they live:
 
 ## Remixers
 
-`BaseRemixer.produce(db, scope, options)` yields `(name, content,
+`BaseRemixer.produce(scope)` yields `(name, content,
 content_type)` for the whole scope, regenerated on each run and stored by
-`remix(db, key=..., options=..., scope=...)` as an `Artifact` of the
+`remix(key=..., scope=...)` as an `Artifact` of the
 entry's key, unique per `(key, name)`. Remixers read items, bulk annotations by key
 (`Database.get_annotation_values`, one query for many items) and other
 remixers' artifacts. The three `grouping` remixers share `GroupingRemixer`
@@ -394,8 +394,8 @@ Remixers have no external side effects; that is the sinks' job.
 
 ## Sinks
 
-Decision 0007. `BaseSink.deliver(db, key=..., options=..., scope,
-artifacts, requeue, force)` runs one cycle over the ledger rows of `key`,
+Decision 0007. `BaseSink.deliver(key=..., scope, artifacts, requeue,
+force)` runs one cycle over the ledger rows of `key`,
 the entry's ledger key:
 
 1. queue the candidates: `queue_item_deliveries` or
@@ -409,8 +409,7 @@ the entry's ledger key:
    to `pace`: with an `interval`, only the first one, once the key's last
    `done` delivery (`last_delivered_at`) is that old; then at most
    `max_per_run`;
-3. for each selected row: save it `sending`, call `send(db, subject,
-   options)`, then
+3. for each selected row: save it `sending`, call `send(subject)`, then
    save it `done` with the returned `external_ref` and the subject's
    `content_sha256`, or `error` with one more attempt. Errors are logged
    with their traceback, so `send` raises without chaining secrets.
