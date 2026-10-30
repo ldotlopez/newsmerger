@@ -9,7 +9,6 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from xml.sax.saxutils import escape
 
-from ..db import Database
 from ..models import ProcessingScope, SourceItem
 from ..remixers import BaseRemixer, RemixerType
 from . import PluginOptions, PluginTypes
@@ -29,14 +28,12 @@ class FeedGeneratorRemixer(BaseRemixer):
     options_model = Options
     options: Options
 
-    def produce(
-        self, db: Database, scope: ProcessingScope
-    ) -> Iterator[tuple[str, str, str]]:
+    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
         if scope.limit is None:
             scope = dataclasses.replace(scope, limit=self.options.max_items)
         yield (
             "feed",
-            self._build_feed(db.get_items(scope, newest_first=True)),
+            self._build_feed(self.db.get_items(scope, newest_first=True)),
             "application/rss+xml",
         )
 

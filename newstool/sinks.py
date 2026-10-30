@@ -12,7 +12,7 @@ import pydantic
 from foundation.jsonlib import JsonCompatible
 
 from .config import Duration
-from .db import Database, DeliveryStatus, backoff_seconds
+from .db import DeliveryStatus, backoff_seconds
 from .errors import log_failure, reason
 from .models import Artifact, Delivery, ProcessingScope, SourceItem
 from .plugins import PluginOptions, Services
@@ -52,7 +52,6 @@ class Sink(Protocol):
 
     def deliver(
         self,
-        db: Database,
         *,
         key: str,
         scope: ProcessingScope | None = None,
@@ -97,6 +96,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
 
     def __init__(self, options: O, services: Services) -> None:
         self.options = options
+        self.db = services.db
 
     @classmethod
     def required_key(cls, options: Any) -> str | None:
@@ -104,7 +104,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
 
     def deliver(
         self,
-        db: Database,
         *,
         key: str,
         scope: ProcessingScope | None = None,
@@ -120,20 +119,19 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         if force:
             if not self.is_explicit(scope, artifacts):
                 raise SelectionRequiredError(f"{key}: {self.selection_hint}")
-            self.queue_selected(db, key, scope, artifacts)
-            rows = self.rows(db, key, scope, artifacts)
-            return self._send_all(db, key, rows)
+            self.queue_selected(key, scope, artifacts)
+            rows = self.rows(key, scope, artifacts)
+            return self._send_all(key, rows)
 
         if requeue:
-            errors = self.rows(db, key, scope, artifacts, [DeliveryStatus.ERROR])
+            errors = self.rows(key, scope, artifacts, [DeliveryStatus.ERROR])
             for delivery, _ in errors:
                 delivery.status = DeliveryStatus.QUEUED
                 delivery.attempts = 0
-                db.save_delivery(delivery)
-        self.queue(db, key, scope, artifacts, now)
+                self.db.save_delivery(delivery)
+        self.queue(key, scope, artifacts, now)
 
         rows = self.rows(
-            db,
             key,
             ProcessingScope(),
             (),
@@ -154,8 +152,8 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
                 and delivery.attempts < self.options.max_retries
             )
         ]
-        selected = self.pace(db, key, self.select(pending, now), now)
-        return self._send_all(db, key, selected)
+        selected = self.pace(key, self.select(pending, now), now)
+        return self._send_all(key, selected)
 
     def is_due(self, delivery: Delivery, now: datetime) -> bool:
         """Queued rows are due; failed ones once their backoff has passed."""
@@ -176,7 +174,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
 
     def pace(
         self,
-        db: Database,
         key: str,
         selected: list[tuple[Delivery, S]],
         now: datetime,
@@ -185,23 +182,21 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         delivery is that old; then at most `max_per_run` rows."""
         interval = self.options.interval
         if interval:
-            last = db.last_delivered_at(key)
+            last = self.db.last_delivered_at(key)
             if last is not None and now - last < timedelta(seconds=interval):
                 return []
             selected = selected[:1]
         return selected[: self.options.max_per_run]
 
-    def _send_all(
-        self, db: Database, key: str, rows: list[tuple[Delivery, S]]
-    ) -> RunSummary:
+    def _send_all(self, key: str, rows: list[tuple[Delivery, S]]) -> RunSummary:
         LOGGER.info(f"{key}: {len(rows)} to deliver")
         started = time.monotonic()
         summary = RunSummary()
         for delivery, subject in rows:
             delivery.status = DeliveryStatus.SENDING
-            db.save_delivery(delivery)
+            self.db.save_delivery(delivery)
             try:
-                external_ref = self.send(db, subject)
+                external_ref = self.send(subject)
             except Exception as e:  # noqa: BLE001
                 log_failure(
                     LOGGER, f"{key}: could not deliver {self.label(subject)}", e
@@ -218,7 +213,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
                 delivery.external_ref = external_ref
                 delivery.content_sha256 = subject.content_sha256
                 summary.done += 1
-            db.save_delivery(delivery)
+            self.db.save_delivery(delivery)
         LOGGER.info(
             f"{key}: finished in {time.monotonic() - started:.1f}s:"
             f" {summary.done} delivered, {summary.failed} failed"
@@ -232,7 +227,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
     @abstractmethod
     def queue(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
@@ -243,7 +237,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
     @abstractmethod
     def queue_selected(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
@@ -253,7 +246,6 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
     @abstractmethod
     def rows(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
@@ -266,7 +258,7 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         """How logs name a subject."""
 
     @abstractmethod
-    def send(self, db: Database, subject: S) -> JsonCompatible:
+    def send(self, subject: S) -> JsonCompatible:
         """Deliver one subject; return its external reference. Raise on
         failure; the error is logged with its traceback, so it must not
         chain an exception that holds a secret (raise it `from None`)."""
@@ -291,7 +283,6 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
 
     def queue(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
@@ -300,28 +291,26 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
         if scope.since is None and scope.item_ids is None:
             since = now - timedelta(seconds=self.options.lookback)
             scope = dataclasses.replace(scope, since=since)
-        return db.queue_item_deliveries(
+        return self.db.queue_item_deliveries(
             key, scope, requires=self.required_key(self.options)
         )
 
     def queue_selected(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
     ) -> None:
-        db.queue_item_deliveries(key, scope)
+        self.db.queue_item_deliveries(key, scope)
 
     def rows(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         statuses: list[DeliveryStatus] | None = None,
     ) -> list[tuple[Delivery, SourceItem]]:
-        return db.get_item_deliveries(key, scope, statuses=statuses)
+        return self.db.get_item_deliveries(key, scope, statuses=statuses)
 
     def select(
         self, pending: list[tuple[Delivery, SourceItem]], now: datetime
@@ -353,7 +342,6 @@ class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
 
     def queue(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
@@ -361,28 +349,26 @@ class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
     ) -> int:
         remixers = self.options.artifacts
         if artifacts:
-            return db.queue_artifact_deliveries(key, remixers, names=artifacts)
+            return self.db.queue_artifact_deliveries(key, remixers, names=artifacts)
         since = scope.since or now - timedelta(seconds=self.options.lookback)
-        return db.queue_artifact_deliveries(key, remixers, since=since)
+        return self.db.queue_artifact_deliveries(key, remixers, since=since)
 
     def queue_selected(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
     ) -> None:
-        db.queue_artifact_deliveries(key, self.options.artifacts, names=artifacts)
+        self.db.queue_artifact_deliveries(key, self.options.artifacts, names=artifacts)
 
     def rows(
         self,
-        db: Database,
         key: str,
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         statuses: list[DeliveryStatus] | None = None,
     ) -> list[tuple[Delivery, Artifact]]:
-        return db.get_artifact_deliveries(
+        return self.db.get_artifact_deliveries(
             key, statuses=statuses, names=artifacts or None
         )
 

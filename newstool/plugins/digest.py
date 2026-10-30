@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 from ..config import Duration
-from ..db import Database
 from ..errors import PluginFailure
 from ..llms import strip_code_fence
 from ..models import ProcessingScope, SourceData, SourceItem
@@ -55,15 +54,15 @@ class DigestRemixer(BaseRemixer):
         super().__init__(options, services)
         self.llm = services.llm(options.llm)
 
-    def produce(
-        self, db: Database, scope: ProcessingScope
-    ) -> Iterator[tuple[str, str, str]]:
+    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
         options = self.options
         now = datetime.now(UTC)
         since = scope.since or now - timedelta(seconds=options.lookback)
         until = scope.until or now
-        items = db.get_items(dataclasses.replace(scope, since=since), newest_first=True)
-        markdowns = db.get_annotation_values(items, key="markdown")
+        items = self.db.get_items(
+            dataclasses.replace(scope, since=since), newest_first=True
+        )
+        markdowns = self.db.get_annotation_values(items, key="markdown")
 
         items_by_source: dict[str, list[SourceItem]] = {}
         for item in items:

@@ -91,8 +91,8 @@ class TelegramTestCase(unittest.TestCase):
 @patch("newstool.plugins.telegram.requests.post")
 class TelegramSinkTests(TelegramTestCase):
     def deliver(self, key: str = "telegram", **options: Any) -> None:
-        sink = TelegramSink(item_options(self.section, options), Services())
-        sink.deliver(self.db, key=key)
+        sink = TelegramSink(item_options(self.section, options), Services(db=self.db))
+        sink.deliver(key=key)
 
     def test_posts_one_item_per_interval_oldest_first_once(self, post: Mock) -> None:
         post.return_value = ok_response()
@@ -142,7 +142,7 @@ class TelegramSinkTests(TelegramTestCase):
         self.add_summarized(SOURCE_A, 3)
         # No section: the entry says it all.
         options = item_options({}, {"bot_token": "other", "chat_id": "@channel"})
-        TelegramSink(options, Services()).deliver(self.db, key="channel")
+        TelegramSink(options, Services(db=self.db)).deliver(key="channel")
 
         (request_url,) = post.call_args.args
         self.assertEqual(request_url, "https://api.telegram.org/botother/sendMessage")
@@ -265,10 +265,10 @@ class TelegramArtifactSinkTests(TelegramTestCase):
         options = DocumentDeliveryOptions.model_validate(
             merge_options(self.section, {"artifacts": ["digest"]})
         )
-        sink = TelegramArtifactSink(options, Services())
+        sink = TelegramArtifactSink(options, Services(db=self.db))
 
-        sink.deliver(self.db, key="telegram_artifacts")
-        sink.deliver(self.db, key="telegram_artifacts")
+        sink.deliver(key="telegram_artifacts")
+        sink.deliver(key="telegram_artifacts")
 
         post.assert_called_once()
         (request_url,) = post.call_args.args

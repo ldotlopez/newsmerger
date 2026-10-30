@@ -49,9 +49,9 @@ class DigestRemixerTests(unittest.TestCase):
     ) -> tuple[Mock, list[tuple[str, str, str]]]:
         llm = Mock()
         llm.prompt.return_value = response
-        services = Services(llm_factory=lambda name: llm)
+        services = Services(db=self.db, llm_factory=lambda name: llm)
         remixer = digest.DigestRemixer(digest.DigestOptions(**options), services)
-        return llm, list(remixer.produce(self.db, scope))
+        return llm, list(remixer.produce(scope))
 
     def test_digests_newest_items_with_markdown_oldest_first(self) -> None:
         self.add_item(SOURCE, 1, "Body 1")
@@ -130,7 +130,9 @@ class DigestPluginTests(unittest.TestCase):
             return llm
 
         ((name, protocol, cls),) = digest.__newstool_plugin__()
-        remixer = cls(digest.DigestOptions(llm="writer"), Services(factory))
+        remixer = cls(
+            digest.DigestOptions(llm="writer"), Services(db=Mock(), llm_factory=factory)
+        )
 
         self.assertEqual((name, protocol), ("digest", RemixerType))
         self.assertIs(remixer.llm, llm)
@@ -138,7 +140,7 @@ class DigestPluginTests(unittest.TestCase):
 
     def test_cannot_be_built_without_an_llm(self) -> None:
         with self.assertRaises(LLMUnavailableError):
-            digest.DigestRemixer(digest.DigestOptions(), Services())
+            digest.DigestRemixer(digest.DigestOptions(), Services(db=Mock()))
 
 
 if __name__ == "__main__":

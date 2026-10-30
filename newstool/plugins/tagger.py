@@ -6,7 +6,6 @@ import logging
 
 import pydantic
 
-from ..db import Database
 from ..errors import PluginFailure
 from ..llms import strip_code_fence
 from ..models import SourceItem
@@ -68,8 +67,8 @@ class TaggerProcessor(BaseProcessor):
         super().__init__(options, services)
         self.llm = services.llm(options.llm)
 
-    def process_item(self, db: Database, item: SourceItem) -> list[str]:
-        markdown = self.require_annotation(db, item, "markdown")
+    def process_item(self, item: SourceItem) -> list[str]:
+        markdown = self.require_annotation(item, "markdown")
 
         response = self.llm.prompt(
             TAGS_PROMPT + markdown, model=self.options.model, json_mode=True

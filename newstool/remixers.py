@@ -8,7 +8,6 @@ from typing import Any, Protocol, runtime_checkable
 
 import pydantic
 
-from .db import Database
 from .models import Artifact, ProcessingScope
 from .plugins import NoOptions, Services
 
@@ -21,7 +20,6 @@ class Remixer(Protocol):
 
     def remix(
         self,
-        db: Database,
         *,
         key: str,
         scope: ProcessingScope | None = None,
@@ -41,7 +39,7 @@ class RemixerType(Protocol):
 class BaseRemixer:
     """A Remixer whose named artifacts are regenerated on every run.
     Remixers may read items, annotations and other remixers' artifacts
-    through `db`. `options_model` declares its options.
+    through `self.db`. `options_model` declares its options.
     """
 
     name: str
@@ -49,10 +47,10 @@ class BaseRemixer:
 
     def __init__(self, options: Any, services: Services) -> None:
         self.options = options
+        self.db = services.db
 
     def remix(
         self,
-        db: Database,
         *,
         key: str,
         scope: ProcessingScope | None = None,
@@ -62,8 +60,8 @@ class BaseRemixer:
         LOGGER.info(f"{key}: remixing with {self.name}")
         started = time.monotonic()
         names = []
-        for name, content, content_type in self.produce(db, scope or ProcessingScope()):
-            db.save_artifact(Artifact(key, name, content, content_type))
+        for name, content, content_type in self.produce(scope or ProcessingScope()):
+            self.db.save_artifact(Artifact(key, name, content, content_type))
             LOGGER.info(f"{key}: saved artifact '{name}' ({len(content)} chars)")
             names.append(name)
         LOGGER.info(
@@ -73,7 +71,5 @@ class BaseRemixer:
         return names
 
     @abstractmethod
-    def produce(
-        self, db: Database, scope: ProcessingScope
-    ) -> Iterator[tuple[str, str, str]]:
+    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
         """Yield (name, content, content_type) tuples."""

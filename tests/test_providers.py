@@ -35,7 +35,7 @@ class TestCSJuntasGobierno(unittest.TestCase):
         <li>Sesi\xc3\xb3n del d\xc3\xada 3 de diciembre de 2026
             <a href="/b.pdf/1">Descargar extracto</a></li>
         </ul>"""
-        provider = CSJuntasGobiernoProvider(NoOptions(), Services())
+        provider = CSJuntasGobiernoProvider(NoOptions(), Services(db=Mock()))
         links = provider._iter_pdf_links(index, "https://x.test/")
 
         summer, winter = (link.dt.utcoffset() for link in links)
@@ -50,7 +50,7 @@ class TestCSJuntasGobierno(unittest.TestCase):
         fetcher = Mock(get=lambda url: fetched.append(url) or pages[url])
         source = Mock(id="src", url="https://x.test/")
 
-        provider = CSJuntasGobiernoProvider(NoOptions(), Services())
+        provider = CSJuntasGobiernoProvider(NoOptions(), Services(db=Mock()))
         (preflight_item,) = provider.iter_items(source, fetcher)
         self.assertEqual(fetched, ["https://x.test/"])
         self.assertEqual(
@@ -80,7 +80,7 @@ class TestFeedReader(unittest.TestCase):
         # The source's options over the plugin section, as the core merges them.
         section = {"article_selector": default_selector}
         options = Options.model_validate(merge_options(section, provider_options))
-        provider = FeedReaderProvider(options, Services())
+        provider = FeedReaderProvider(options, Services(db=Mock()))
         fetcher = Mock(get=lambda url: pages[url])
         return list(provider.retrieve_items(source, fetcher))
 
@@ -226,7 +226,7 @@ class TestFeedReader(unittest.TestCase):
         source = Mock(id="src", url="https://x.test/")
         fetcher = Mock(get=lambda url: pages[url])
 
-        (item,) = FeedReaderProvider(Options(), Services()).retrieve_items(
+        (item,) = FeedReaderProvider(Options(), Services(db=Mock())).retrieve_items(
             source, fetcher
         )
 
@@ -243,7 +243,7 @@ class TestPrensaIberica(unittest.TestCase):
             PrensaIbericaOptions(
                 exclude_sections=["comarcas", "VÍDEOS Y GALERÍAS DE CASTELLÓN"]
             ),
-            Services(),
+            Services(db=Mock()),
         )
 
     def check_parser(self, filename: str, expected: SourceItemData):
@@ -393,7 +393,7 @@ class TestPrensaIberica(unittest.TestCase):
             (PrensaIbericaOptions(), 21),
             (PrensaIbericaOptions(exclude_sections=[]), 41),
         ):
-            provider = PrensaIbericaProvider(options, Services())
+            provider = PrensaIbericaProvider(options, Services(db=Mock()))
             fetcher = Mock(get=Mock(return_value=index))
             self.assertEqual(len(list(provider.iter_items(source, fetcher))), expected)
 
@@ -443,7 +443,7 @@ class TestPrensaIberica(unittest.TestCase):
             (PrensaIbericaOptions(), 63),
             (PrensaIbericaOptions(exclude_sections=[]), 67),
         ):
-            provider = PrensaIbericaProvider(options, Services())
+            provider = PrensaIbericaProvider(options, Services(db=Mock()))
             fetcher = Mock(get=Mock(return_value=index))
             items = list(provider.iter_items(source, fetcher))
             refs = [item.ref for item in items]
@@ -536,9 +536,9 @@ class TestTelegramChannel(unittest.TestCase):
 
         with self.assertLogs("newstool.plugins.telegram_channel", "ERROR"):
             items = list(
-                TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
-                    self.source(), fetcher
-                )
+                TelegramChannelProvider(
+                    ChannelOptions(), Services(db=Mock())
+                ).retrieve_items(self.source(), fetcher)
             )
 
         self.assertEqual(len(items), 1)
@@ -567,9 +567,9 @@ class TestTelegramChannel(unittest.TestCase):
 
         with self.assertLogs("newstool.plugins.telegram_channel", "ERROR"):
             items = list(
-                TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
-                    self.source(), fetcher
-                )
+                TelegramChannelProvider(
+                    ChannelOptions(), Services(db=Mock())
+                ).retrieve_items(self.source(), fetcher)
             )
 
         self.assertEqual(
@@ -581,9 +581,9 @@ class TestTelegramChannel(unittest.TestCase):
         fetcher.get.return_value = b"<html><head></head><body></body></html>"
         with self.assertRaises(ValueError):
             list(
-                TelegramChannelProvider(ChannelOptions(), Services()).retrieve_items(
-                    self.source(), fetcher
-                )
+                TelegramChannelProvider(
+                    ChannelOptions(), Services(db=Mock())
+                ).retrieve_items(self.source(), fetcher)
             )
 
 

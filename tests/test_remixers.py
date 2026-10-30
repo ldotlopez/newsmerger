@@ -48,9 +48,9 @@ class RemixerTestCase(unittest.TestCase):
 class FeedGeneratorTests(RemixerTestCase):
     def feed(self, **params) -> ET.Element:
         remixer = feedgenerator.FeedGeneratorRemixer(
-            feedgenerator.Options(**params), Services()
+            feedgenerator.Options(**params), Services(db=self.db)
         )
-        (artifact,) = remixer.produce(self.db, ProcessingScope())
+        (artifact,) = remixer.produce(ProcessingScope())
         name, content, content_type = artifact
         self.assertEqual((name, content_type), ("feed", "application/rss+xml"))
         return ET.fromstring(content)
@@ -83,8 +83,8 @@ class GroupingTests(RemixerTestCase):
 
     def groups(self, remixer_class) -> list[list[str]]:
         cfg = grouping.GroupingOptions(tau=None, lookback="10000d")
-        remixer = remixer_class(cfg, Services())
-        ((_, content, _),) = remixer.produce(self.db, ProcessingScope())
+        remixer = remixer_class(cfg, Services(db=self.db))
+        ((_, content, _),) = remixer.produce(ProcessingScope())
         return [
             sorted(member["uid"] for member in group["members"])
             for group in json.loads(content)["groups"]
@@ -114,9 +114,9 @@ class GroupingTests(RemixerTestCase):
     def test_nothing_to_group_produces_no_artifact(self) -> None:
         self.add_items(1)
         cfg = grouping.GroupingOptions()
-        remixer = grouping.SingleLinkRemixer(cfg, Services())
+        remixer = grouping.SingleLinkRemixer(cfg, Services(db=self.db))
 
-        self.assertEqual(list(remixer.produce(self.db, ProcessingScope())), [])
+        self.assertEqual(list(remixer.produce(ProcessingScope())), [])
 
 
 class EmbeddingGroupingTests(RemixerTestCase):
@@ -144,9 +144,9 @@ class EmbeddingGroupingTests(RemixerTestCase):
 
     def groups_of(self, **options) -> tuple[list[list[str]], dict]:
         cfg = grouping.EmbeddingsOptions(tau=None, lookback="10000d", **options)
-        ((_, content, _),) = grouping.EmbeddingsRemixer(cfg, Services()).produce(
-            self.db, ProcessingScope()
-        )
+        ((_, content, _),) = grouping.EmbeddingsRemixer(
+            cfg, Services(db=self.db)
+        ).produce(ProcessingScope())
         payload = json.loads(content)
         groups = [
             sorted(member["uid"] for member in group["members"])

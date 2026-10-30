@@ -15,7 +15,6 @@ import pydantic
 import requests
 from pydantic import SecretStr
 
-from ..db import Database
 from ..errors import PluginFailure
 from ..models import SourceItem
 from ..sinks import BaseItemSink, DeliveryOptions, SinkType
@@ -115,9 +114,9 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
     def required_key(cls, options: WebhookOptions) -> str:
         return options.summary
 
-    def send(self, db: Database, subject: SourceItem) -> dict[str, str]:
+    def send(self, subject: SourceItem) -> dict[str, str]:
         options = self.options
-        summaries = db.get_annotation_values([subject], key=options.summary)
+        summaries = self.db.get_annotation_values([subject], key=options.summary)
         image = subject.data.get("image")
         if not (options.item_image and isinstance(image, str) and image.strip()):
             image = None

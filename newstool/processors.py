@@ -8,7 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import pydantic
 
-from .db import Database, ProcessingStatus
+from .db import ProcessingStatus
 from .errors import PluginFailure, log_failure, reason
 from .models import ProcessingScope, SourceItem
 from .plugins import PluginOptions, Services
@@ -36,7 +36,6 @@ class Processor(Protocol):
 
     def process(
         self,
-        db: Database,
         *,
         key: str,
         scope: ProcessingScope | None = None,
@@ -85,6 +84,7 @@ class BaseProcessor:
 
     def __init__(self, options: ProcessorOptions, services: Services) -> None:
         self.options = options
+        self.db = services.db
 
     @classmethod
     def output_key(cls, options: Any) -> str:
@@ -96,14 +96,13 @@ class BaseProcessor:
 
     def process(
         self,
-        db: Database,
         *,
         key: str,
         scope: ProcessingScope | None = None,
         force: bool = False,
     ) -> RunSummary:
         requires = self.required_key(self.options)
-        items = db.get_unprocessed_items(
+        items = self.db.get_unprocessed_items(
             key,
             version=self.version,
             max_retries=self.options.max_retries,
@@ -122,12 +121,12 @@ class BaseProcessor:
         for position, item in enumerate(items, start=1):
             LOGGER.info(f"{key}: [{position}/{total}] '{item.title}' ({item.uri})")
             item_started = time.monotonic()
-            status, value, error = self._run_item(db, item)
+            status, value, error = self._run_item(item)
             LOGGER.debug(
                 f"{key}: '{item.uri}' {status.value}"
                 f" in {time.monotonic() - item_started:.2f}s"
             )
-            db.record_result(
+            self.db.record_result(
                 item,
                 self.name,
                 key,
@@ -151,12 +150,10 @@ class BaseProcessor:
         )
         return summary
 
-    def _run_item(
-        self, db: Database, item: SourceItem
-    ) -> tuple[ProcessingStatus, Any, str | None]:
+    def _run_item(self, item: SourceItem) -> tuple[ProcessingStatus, Any, str | None]:
         """Run `process_item` and translate its outcome into a result."""
         try:
-            return ProcessingStatus.DONE, self.process_item(db, item), None
+            return ProcessingStatus.DONE, self.process_item(item), None
         except SkipItem as e:
             LOGGER.info(f"{self.name} ignored '{item.uri}': {e}")
             return ProcessingStatus.IGNORED, None, None
@@ -164,16 +161,15 @@ class BaseProcessor:
             log_failure(LOGGER, f"{self.name} failed on '{item.uri}'", e)
             return ProcessingStatus.ERROR, None, reason(e)
 
-    @staticmethod
-    def require_annotation(db: Database, item: SourceItem, key: str) -> Any:
+    def require_annotation(self, item: SourceItem, key: str) -> Any:
         """Return an upstream annotation, or raise if it is missing."""
-        value = db.get_annotations(item, key=key).get(key)
+        value = self.db.get_annotations(item, key=key).get(key)
         if not value:
             raise PluginFailure(f"{key} annotation is missing")
         return value
 
     @abstractmethod
-    def process_item(self, db: Database, item: SourceItem) -> Any:
+    def process_item(self, item: SourceItem) -> Any:
         """Return the annotation's value.
 
         Raise `SkipItem` if the item doesn't apply. Any other exception marks

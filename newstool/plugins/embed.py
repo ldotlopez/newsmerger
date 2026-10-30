@@ -3,7 +3,6 @@ grouping remixer."""
 
 from typing import Literal
 
-from ..db import Database
 from ..models import SourceItem
 from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
 from . import PluginTypes, Services, UsesLLMOptions
@@ -36,8 +35,8 @@ class EmbedProcessor(BaseProcessor):
     def required_key(cls, options: EmbedOptions) -> str | None:
         return options.input
 
-    def process_item(self, db: Database, item: SourceItem) -> list[float]:
-        value = self.require_annotation(db, item, self.options.input)
+    def process_item(self, item: SourceItem) -> list[float]:
+        value = self.require_annotation(item, self.options.input)
         text = tags_text(value) if self.options.input == "tags" else value
         return self.llm.embed([text], model=self.options.model)[0]
 

@@ -19,7 +19,6 @@ from typing import Any
 import requests
 from pydantic import SecretStr
 
-from ..db import Database
 from ..errors import PluginFailure
 from ..models import Artifact, SourceItem
 from ..sinks import (
@@ -110,9 +109,9 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
     def required_key(cls, options: ItemDeliveryOptions) -> str:
         return options.summary
 
-    def send(self, db: Database, subject: SourceItem) -> dict[str, Any]:
+    def send(self, subject: SourceItem) -> dict[str, Any]:
         options = self.options
-        summaries = db.get_annotation_values([subject], key=options.summary)
+        summaries = self.db.get_annotation_values([subject], key=options.summary)
         caption = build_caption(
             subject.title,
             str(summaries[subject.key]),
@@ -159,9 +158,9 @@ class TelegramArtifactSink(BaseArtifactSink[DocumentDeliveryOptions]):
     name = "telegram_artifacts"
     options_model = DocumentDeliveryOptions
 
-    def send(self, db: Database, subject: Artifact) -> dict[str, Any]:
+    def send(self, subject: Artifact) -> dict[str, Any]:
         options = self.options
-        artifact = db.get_artifact(subject.remixer, subject.name)
+        artifact = self.db.get_artifact(subject.remixer, subject.name)
         if artifact is None or artifact.content is None:
             raise LookupError(f"artifact {subject.remixer}/{subject.name} is gone")
         extension = mimetypes.guess_extension(artifact.content_type) or ".txt"

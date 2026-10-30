@@ -839,7 +839,7 @@ class ClassRegisterTests(unittest.TestCase):
         )
 
     def test_entry_points_must_return_classes(self) -> None:
-        instance = MarkdownifyProcessor(ProcessorOptions(), Services())
+        instance = MarkdownifyProcessor(ProcessorOptions(), Services(db=Mock()))
         register = self.register([("markdownify", ProcessorType, instance)])
 
         with self.assertRaisesRegex(PluginError, "as an instance, not a class"):

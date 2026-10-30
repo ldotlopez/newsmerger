@@ -117,8 +117,10 @@ class GoogleChatSinkTests(unittest.TestCase):
         )
 
     def deliver(self, **options: Any) -> None:
-        sink = GoogleChatSink(webhook_options(self.section, options), Services())
-        sink.deliver(self.db, key="googlechat")
+        sink = GoogleChatSink(
+            webhook_options(self.section, options), Services(db=self.db)
+        )
+        sink.deliver(key="googlechat")
 
     def tearDown(self) -> None:
         self.db.close()

@@ -1,6 +1,5 @@
 """Summarizes the article's markdown with an LLM."""
 
-from ..db import Database
 from ..errors import PluginFailure
 from ..models import SourceItem
 from ..processors import BaseProcessor, ProcessorOptions, ProcessorType
@@ -30,8 +29,8 @@ class SummarizeProcessor(BaseProcessor):
         super().__init__(options, services)
         self.llm = services.llm(options.llm)
 
-    def process_item(self, db: Database, item: SourceItem) -> str:
-        markdown = self.require_annotation(db, item, "markdown")
+    def process_item(self, item: SourceItem) -> str:
+        markdown = self.require_annotation(item, "markdown")
 
         summary = self.llm.prompt(
             self.options.prompt + markdown, model=self.options.model

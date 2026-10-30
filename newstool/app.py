@@ -58,13 +58,13 @@ class Application:
         self._workflows = {
             workflow.name: workflow for workflow in config.all_workflows()
         }
-        self._services = Services(llm_factory=self._llm)
-        # Each profile's object, built when a run first needs it.
-        self._objects: dict[Profile, Any] = {}
-
         self._db = Database(
             config.database_uri, config.content_dir, create_schema=create_schema
         )
+        self._services = Services(db=self._db, llm_factory=self._llm)
+        # Each profile's object, built when a run first needs it.
+        self._objects: dict[Profile, Any] = {}
+
         self._cache = UserCache(
             app=PACKAGE_NAME,
             expiration_time=config.cache.expiration,
@@ -247,7 +247,6 @@ class Application:
                 f"no process run of workflow '{workflow}' writes the key '{key}'"
             )
         return self._object(run.profile).process(
-            self._db,
             key=key,
             scope=workflow_scope(run.workflow, scope),
             force=force,
@@ -261,7 +260,6 @@ class Application:
         if (run := self._catalog.remix.get(key)) is None:
             raise ConfigError(f"no workflow has a remix run '{key}'")
         return self._object(run.profile).remix(
-            self._db,
             key=key,
             scope=workflow_scope(run.workflow, scope),
         )
@@ -284,7 +282,6 @@ class Application:
         if (run := self._catalog.deliveries.get(ledger_key)) is None:
             raise ConfigError(f"workflow '{workflow}' has no delivery '{key}'")
         return self._object(run.profile).deliver(
-            self._db,
             key=ledger_key,
             scope=workflow_scope(run.workflow, scope),
             artifacts=artifacts,
@@ -419,7 +416,6 @@ class Application:
                 continue
             item_ids = tuple(d.item_id for d in rows if d.item_id is not None)
             summaries[ledger_key] = self._object(run.profile).deliver(
-                self._db,
                 key=ledger_key,
                 scope=workflow_scope(
                     run.workflow, ProcessingScope(item_ids=item_ids or None)
@@ -460,7 +456,6 @@ class Application:
             # No lookback: an explicit `since` from the beginning of time.
             since = scope.since or datetime.min.replace(tzinfo=UTC)
             counts[ledger_key] = target.queue(
-                self._db,
                 ledger_key,
                 workflow_scope(run.workflow, dataclasses.replace(scope, since=since)),
                 artifacts,

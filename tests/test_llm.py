@@ -39,11 +39,6 @@ class StubLLM:
         return [[float(i)] for i, _ in enumerate(texts)]
 
 
-def build(cls: type, llm: StubLLM, **options: object) -> Processor:
-    """A processor of `cls` with `options`, using `llm`."""
-    return cls(cls.options_model(**options), Services(lambda name: llm))
-
-
 class ServicesTests(unittest.TestCase):
     def test_asks_the_factory_for_the_named_llm(self) -> None:
         llm = StubLLM()
@@ -53,7 +48,7 @@ class ServicesTests(unittest.TestCase):
             names.append(name)
             return llm
 
-        services = Services(factory)
+        services = Services(db=Mock(), llm_factory=factory)
 
         self.assertIs(services.llm(), llm)
         self.assertIs(services.llm("b"), llm)
@@ -61,7 +56,7 @@ class ServicesTests(unittest.TestCase):
 
     def test_without_llms_it_raises(self) -> None:
         with self.assertRaisesRegex(LLMUnavailableError, "no llm is configured"):
-            Services().llm()
+            Services(db=Mock()).llm()
 
 
 class ProcessorTestCase(unittest.TestCase):
@@ -96,9 +91,14 @@ class ProcessorTestCase(unittest.TestCase):
         self.db.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
+    def build(self, cls: type, llm: StubLLM, **options: object) -> Processor:
+        """A processor of `cls` with `options`, using `llm`."""
+        services = Services(db=self.db, llm_factory=lambda name: llm)
+        return cls(cls.options_model(**options), services)
+
     def annotation(self, processor: Processor, key: str) -> object:
         """Run `processor`, writing `key`; return its value."""
-        summary = processor.process(self.db, key=key, force=True)
+        summary = processor.process(key=key, force=True)
         self.assertEqual(summary.done, 1)
         return self.db.get_annotations(self.item, key=key)[key]
 
@@ -106,21 +106,21 @@ class ProcessorTestCase(unittest.TestCase):
 class SummarizeTests(ProcessorTestCase):
     def test_summarizes_with_the_backend_model_unless_overridden(self) -> None:
         llm = StubLLM(" A summary. ")
-        processor = build(summarize.SummarizeProcessor, llm)
+        processor = self.build(summarize.SummarizeProcessor, llm)
 
         self.assertEqual(self.annotation(processor, "summary"), "A summary.")
         self.assertEqual(llm.calls[0][2], {"model": None, "json_mode": False})
 
         self.annotation(
-            build(summarize.SummarizeProcessor, llm, model="small"), "summary"
+            self.build(summarize.SummarizeProcessor, llm, model="small"), "summary"
         )
         self.assertEqual(llm.calls[1][2]["model"], "small")
 
     def test_an_empty_response_is_an_error_without_traceback(self) -> None:
-        processor = build(summarize.SummarizeProcessor, StubLLM("  "))
+        processor = self.build(summarize.SummarizeProcessor, StubLLM("  "))
 
         with self.assertLogs("newstool.processors", "ERROR") as logs:
-            summary = processor.process(self.db, key="summary", force=True)
+            summary = processor.process(key="summary", force=True)
 
         self.assertEqual(summary.failed, 1)
         self.assertIsNone(logs.records[0].exc_info)
@@ -128,10 +128,10 @@ class SummarizeTests(ProcessorTestCase):
 
     def test_each_use_writes_its_key_with_its_options(self) -> None:
         llm = StubLLM("Resumen.")
-        default = build(
+        default = self.build(
             summarize.SummarizeProcessor, llm, model="small", prompt="Summarize: "
         )
-        spanish = build(
+        spanish = self.build(
             summarize.SummarizeProcessor, llm, model="big", prompt="Resume: "
         )
 
@@ -179,9 +179,9 @@ class SummarizeTests(ProcessorTestCase):
                     raise KeyboardInterrupt
                 return super().prompt(prompt, **options)
 
-        processor = build(summarize.SummarizeProcessor, InterruptedLLM("Summary."))
+        processor = self.build(summarize.SummarizeProcessor, InterruptedLLM("Summary."))
         with self.assertRaises(KeyboardInterrupt):
-            processor.process(self.db, key="summary")
+            processor.process(key="summary")
 
         # A fresh connection sees only committed rows.
         reopened = Database(
@@ -200,7 +200,7 @@ class SummarizeTests(ProcessorTestCase):
 class TaggerTests(ProcessorTestCase):
     def test_merges_json_tags_with_the_item_tags(self) -> None:
         llm = StubLLM('```json\n{"items": ["BCE", "Pleno"]}\n```')
-        processor = build(tagger.TaggerProcessor, llm, model="small")
+        processor = self.build(tagger.TaggerProcessor, llm, model="small")
 
         self.assertEqual(self.annotation(processor, "tags"), ["BCE", "Pleno"])
         self.assertEqual(llm.calls[0][2], {"model": "small", "json_mode": True})
@@ -209,14 +209,14 @@ class TaggerTests(ProcessorTestCase):
 class EmbedTests(ProcessorTestCase):
     def test_embeds_the_tags_text_by_default(self) -> None:
         llm = StubLLM()
-        processor = build(embed.EmbedProcessor, llm, model="embedder")
+        processor = self.build(embed.EmbedProcessor, llm, model="embedder")
 
         self.assertEqual(self.annotation(processor, "tags_embedding"), [0.0])
         self.assertEqual(llm.calls, [("embed", ["BCE, pleno"], {"model": "embedder"})])
 
     def test_embeds_the_input_its_options_name(self) -> None:
         llm = StubLLM()
-        processor = build(embed.EmbedProcessor, llm, input="markdown")
+        processor = self.build(embed.EmbedProcessor, llm, input="markdown")
 
         self.annotation(processor, "markdown_embedding")
 
@@ -247,7 +247,10 @@ class ConsumerPluginTests(unittest.TestCase):
                 factory = Mock(return_value=llm)
 
                 ((_, protocol, cls),) = plugin.__newstool_plugin__()
-                processor = cls(cls.options_model(**options), Services(factory))
+                processor = cls(
+                    cls.options_model(**options),
+                    Services(db=Mock(), llm_factory=factory),
+                )
 
                 self.assertIs(protocol, ProcessorType)
                 self.assertIs(processor.llm, llm)
@@ -258,7 +261,7 @@ class ConsumerPluginTests(unittest.TestCase):
             with self.subTest(plugin=plugin.__name__):
                 ((_, _, cls),) = plugin.__newstool_plugin__()
                 with self.assertRaises(LLMUnavailableError):
-                    cls(cls.options_model(), Services())
+                    cls(cls.options_model(), Services(db=Mock()))
 
 
 class OllamaTests(unittest.TestCase):
@@ -268,7 +271,7 @@ class OllamaTests(unittest.TestCase):
         client.embed.return_value = Mock(embeddings=[(1.0, 2.0)])
         options = ollama.Options(chat_model="chat", embed_model="embedder")
         with patch.object(ollama, "ollama_client", return_value=client):
-            llm = ollama.OllamaLLM(options, Services())
+            llm = ollama.OllamaLLM(options, Services(db=Mock()))
 
         self.assertEqual(llm.prompt("hi"), "ok")
         llm.prompt("hi", model="other", json_mode=True, context_length=8192)
@@ -297,7 +300,7 @@ class OllamaTests(unittest.TestCase):
 
     def test_registers_one_llm_class_named_ollama(self) -> None:
         ((name, protocol, cls),) = ollama.__newstool_plugin__()
-        llm = cls(ollama.Options(chat_model="chat"), Services())
+        llm = cls(ollama.Options(chat_model="chat"), Services(db=Mock()))
 
         self.assertEqual((name, protocol, cls), ("ollama", LLMType, ollama.OllamaLLM))
         self.assertEqual(

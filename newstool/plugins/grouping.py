@@ -32,7 +32,6 @@ from typing import Any, Literal
 import pydantic
 
 from ..config import Duration
-from ..db import Database
 from ..models import ItemKey, ProcessingScope, SourceItem
 from ..remixers import BaseRemixer, RemixerType
 from . import PluginOptions, PluginTypes
@@ -225,17 +224,15 @@ class GroupingRemixer(BaseRemixer):
     options_model = GroupingOptions
     options: GroupingOptions
 
-    def produce(
-        self, db: Database, scope: ProcessingScope
-    ) -> Iterator[tuple[str, str, str]]:
+    def produce(self, scope: ProcessingScope) -> Iterator[tuple[str, str, str]]:
         options = self.options
         if scope.since is None:
             scope = dataclasses.replace(
                 scope, since=datetime.now(UTC) - timedelta(seconds=options.lookback)
             )
 
-        items = db.get_items(scope)
-        tags = db.get_annotation_values(items, key="tags")
+        items = self.db.get_items(scope)
+        tags = self.db.get_annotation_values(items, key="tags")
         scored = tagged_items(items, tags)
         if not scored:
             LOGGER.info(f"{self.name}: no tagged items in scope - nothing to group")
@@ -244,19 +241,19 @@ class GroupingRemixer(BaseRemixer):
         payload = {
             "generated_at": datetime.now(UTC).isoformat(),
             "params": {"algorithm": self.name, **options.model_dump()},
-            "groups": self.group(db, scored),
+            "groups": self.group(scored),
         }
         yield ARTIFACT_NAME, json.dumps(payload, indent=2), "application/json"
 
     @abstractmethod
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+    def group(self, items: list[ScoredItem]) -> list[dict[str, Any]]:
         """Cluster the items; return one payload dict per group, largest first."""
 
 
 class SingleLinkRemixer(GroupingRemixer):
     name = "singlelink"
 
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+    def group(self, items: list[ScoredItem]) -> list[dict[str, Any]]:
         scores = build_score_matrix(items, self.options.tau)
         return single_link_groups(items, scores, self.options.min_score)
 
@@ -264,7 +261,7 @@ class SingleLinkRemixer(GroupingRemixer):
 class AverageLinkRemixer(GroupingRemixer):
     name = "avglink"
 
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+    def group(self, items: list[ScoredItem]) -> list[dict[str, Any]]:
         matrix = build_score_matrix(items, self.options.tau)
         clusters = average_link_cluster(matrix, min_score=self.options.min_score)
 
@@ -307,10 +304,10 @@ class EmbeddingsRemixer(GroupingRemixer):
             a.item.published_at, b.item.published_at, options.tau
         )
 
-    def group(self, db: Database, items: list[ScoredItem]) -> list[dict[str, Any]]:
+    def group(self, items: list[ScoredItem]) -> list[dict[str, Any]]:
         options = self.options
         embedding_key = f"{options.embedding}_embedding"
-        vectors = db.get_annotation_values(
+        vectors = self.db.get_annotation_values(
             [scored.item for scored in items], key=embedding_key
         )
         embedded = [scored for scored in items if scored.item.key in vectors]

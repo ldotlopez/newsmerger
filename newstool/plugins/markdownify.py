@@ -4,7 +4,6 @@ processors. PDFs give plain text, which is valid markdown."""
 import pymupdf
 import trafilatura
 
-from ..db import Database
 from ..models import SourceItem
 from ..processors import BaseProcessor, ProcessorType, SkipItem
 from . import PluginTypes
@@ -14,12 +13,12 @@ class MarkdownifyProcessor(BaseProcessor):
     name = "markdownify"
     key = "markdown"
 
-    def process_item(self, db: Database, item: SourceItem) -> str:
+    def process_item(self, item: SourceItem) -> str:
         match item.mimetype:
             case "text/html":
-                markdown = self.extract_html(db.get_content(item))
+                markdown = self.extract_html(self.db.get_content(item))
             case "application/pdf":
-                markdown = self.extract_pdf(db.get_content(item))
+                markdown = self.extract_pdf(self.db.get_content(item))
             case _:
                 raise SkipItem(f"unsupported mimetype '{item.mimetype}'")
 

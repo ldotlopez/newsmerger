@@ -11,6 +11,7 @@ from typing import Any
 import pydantic
 from foundation.plugin import BaseRegister, PluginError, ProtocolConformanceError
 
+from ..db import Database
 from ..llms import LLM, LLMUnavailableError
 
 # What an entry point returns: (type name, type Protocol, class) per class.
@@ -49,11 +50,13 @@ def merge_options(
     return merged
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass(slots=True, kw_only=True)
 class Services:
-    """What the core shares with plugin objects. `llm_factory` returns the
-    LLM a name refers to (see `UsesLLMOptions`), built on first use."""
+    """What the core shares with plugin objects: the database, and
+    `llm_factory`, which returns the LLM a name refers to (see
+    `UsesLLMOptions`), built on first use."""
 
+    db: Database
     llm_factory: Callable[[str | None], LLM] | None = None
 
     def llm(self, name: str | None = None) -> LLM:
