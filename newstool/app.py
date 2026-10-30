@@ -9,7 +9,7 @@ import dataclasses
 import fcntl
 import logging
 from collections.abc import Iterable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Self
@@ -182,6 +182,10 @@ class Application:
                 LOGGER.info(f"{source.id}: {item.uri}")
                 items.append(item)
         finally:
+            # Oldest first, so new items get ids in publication order; undated
+            # ones are stored as published now.
+            now = datetime.now(UTC)
+            items.sort(key=lambda item: item.published_at or now)
             # An error mid-run keeps what was fetched: the next run resumes.
             self._db.upsert_source_items(items)
             # Changed or not, a listed date once checked is not fetched again.

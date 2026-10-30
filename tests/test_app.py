@@ -157,6 +157,24 @@ cache_dir: {self.tmp_dir}/cache
         retrieve_item.assert_called_once()
         self.assertEqual({item.uid for item in self.app.get_items()}, {"new", "late"})
 
+    def test_import_stores_new_items_oldest_first(self) -> None:
+        def retrieve_published(
+            item: PreflightSourceItemData[str], fetcher: object
+        ) -> SourceItemData:
+            item_data = retrieved(item, fetcher)
+            item_data.published_at = item.modified_at
+            return item_data
+
+        items, _ = self.import_preflight(
+            [listed("june", JUNE), listed("undated"), listed("april", APRIL)],
+            retrieve_published,
+        )
+
+        expected = ["april", "june", "undated"]
+        self.assertEqual([item.uid for item in items], expected)
+        stored = sorted(self.app.get_items(), key=lambda item: item.id)
+        self.assertEqual([item.uid for item in stored], expected)
+
     def test_items_listed_without_a_date_are_always_fetched(self) -> None:
         self.import_preflight([listed("a")])
         (imported,), _ = self.import_preflight([listed("a")])
