@@ -74,6 +74,9 @@ sources:
     name: El Periódico Mediterraneo (Castelló ciudad)
     provider: prensaiberica
     url: https://www.elperiodicomediterraneo.com/castello
+    options:
+      # Index sections left out, by header title (case-insensitive).
+      exclude_sections: [Comarcas, Vídeos y galerías de Castellón]
 
   - id: castelloninformacion-castello
     name: Castellón información (Castelló ciudad)

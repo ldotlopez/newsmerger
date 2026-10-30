@@ -2,7 +2,7 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
-from typing import ClassVar, cast
+from typing import cast
 from urllib.parse import urlsplit
 
 import bs4
@@ -18,13 +18,20 @@ from ..errors import PluginFailure
 from ..httpclient import HTTPClient
 from ..models import PreflightSourceItemData, SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
-from . import PluginTypes
+from . import PluginOptions, PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
 
+class Options(PluginOptions):
+    # Index sections whose articles are left out, by header title (e.g.
+    # "Comarcas"), compared case-insensitively.
+    exclude_sections: tuple[str, ...] = ()
+
+
 class PrensaIbericaProvider(BaseProvider):
-    EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
+    options_model = Options
+    options: Options
 
     def iter_items(
         self, source: SourceData, fetcher: HTTPClient
@@ -128,10 +135,11 @@ class PrensaIbericaProvider(BaseProvider):
         """Find the container divs for sections we want to exclude entirely,
         identified by their header title (e.g. 'Comarcas', 'Vídeos y galerías de Castellón')."""
         containers = []
+        excluded = {title.casefold() for title in self.options.exclude_sections}
 
         for h3 in soup.find_all("h3", class_="grp__header__title"):
             title = self._get_section_title(h3)
-            if title not in self.EXCLUDED_SECTION_TITLES:
+            if title.casefold() not in excluded:
                 continue
 
             container = self._get_section_container(h3)

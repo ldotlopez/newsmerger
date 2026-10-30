@@ -11,6 +11,7 @@ from newstool.models import PreflightSourceItemData, SourceData, SourceItemData
 from newstool.plugins import NoOptions, Services, merge_options
 from newstool.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
 from newstool.plugins.feedreader import FeedReaderProvider, Options
+from newstool.plugins.prensaiberica import Options as PrensaIbericaOptions
 from newstool.plugins.prensaiberica import PrensaIbericaProvider
 from newstool.plugins.telegram_channel import Options as ChannelOptions
 from newstool.plugins.telegram_channel import (
@@ -238,7 +239,12 @@ class TestFeedReader(unittest.TestCase):
 
 class TestPrensaIberica(unittest.TestCase):
     def setUp(self) -> None:
-        self.provider = PrensaIbericaProvider(NoOptions(), Services())
+        self.provider = PrensaIbericaProvider(
+            PrensaIbericaOptions(
+                exclude_sections=["comarcas", "VÍDEOS Y GALERÍAS DE CASTELLÓN"]
+            ),
+            Services(),
+        )
 
     def check_parser(self, filename: str, expected: SourceItemData):
         buff = read_sample(filename)
@@ -380,7 +386,17 @@ class TestPrensaIberica(unittest.TestCase):
             ),
         )
 
+    def test_iter_items_excludes_no_section_by_default(self) -> None:
+        index = read_sample("prensaiberica-index-castello.html")
+        source = Mock(url="https://www.elperiodicomediterraneo.com/castello/")
+        provider = PrensaIbericaProvider(PrensaIbericaOptions(), Services())
+
+        items = list(provider.iter_items(source, Mock(get=Mock(return_value=index))))
+
+        self.assertEqual(len(items), 41)
+
     def test_iter_items_lists_dated_articles_without_excluded_sections(self) -> None:
+        # The excluded titles differ in case from the index's headers.
         index = read_sample("prensaiberica-index-castello.html")
         source = Mock(url="https://www.elperiodicomediterraneo.com/castello/")
         fetcher = Mock(get=Mock(return_value=index))
