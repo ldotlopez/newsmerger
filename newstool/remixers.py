@@ -35,19 +35,29 @@ class RemixerType(Protocol):
 
     def __call__(self, options: Any, services: Services) -> Remixer: ...
 
+    def required_key(self, options: Any) -> str | None:
+        """The annotation key a run with `options` reads, if any."""
+        ...
+
 
 class BaseRemixer:
     """A Remixer whose named artifacts are regenerated on every run.
     Remixers may read items, annotations and other remixers' artifacts
-    through `self.db`. `options_model` declares its options.
+    through `self.db`; `requires` names the annotation key it reads.
+    `options_model` declares its options.
     """
 
     name: str
+    requires: str | None = None
     options_model: type[pydantic.BaseModel] = NoOptions
 
     def __init__(self, options: Any, services: Services) -> None:
         self.options = options
         self.db = services.db
+
+    @classmethod
+    def required_key(cls, options: Any) -> str | None:
+        return cls.requires
 
     def remix(
         self,

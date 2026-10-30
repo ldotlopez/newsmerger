@@ -347,7 +347,8 @@ class Catalog:
     def _check_requirements(self) -> None:
         """Every annotation a run reads is written by a process run on its
         workflow's sources, in any workflow."""
-        for run in [*self.process.values(), *self.deliveries.values()]:
+        runs = [*self.process.values(), *self.remix.values(), *self.deliveries.values()]
+        for run in runs:
             required = run.profile.cls.required_key(run.profile.options)
             if required is None:
                 continue

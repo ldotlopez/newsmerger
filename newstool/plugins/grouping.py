@@ -221,6 +221,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 class GroupingRemixer(BaseRemixer):
     """Groups the tagged items of the last `lookback` into events."""
 
+    requires = "tags"
     options_model = GroupingOptions
     options: GroupingOptions
 

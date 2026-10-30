@@ -364,14 +364,14 @@ processors:
   - markdownify
   - {processor: markdownify, key: markdown/copy, skip_default: true}
 remixers:
-  - singlelink
+  - feedgenerator
   - {remixer: feedgenerator, skip_default: true}
   - {remixer: feedgenerator, key: short}
 """
         )
 
         self.assertEqual(self.app.process_keys(), ["markdown"])
-        self.assertEqual(self.app.remix_keys(), ["singlelink", "short"])
+        self.assertEqual(self.app.remix_keys(), ["feedgenerator", "short"])
         self.assertEqual(self.app.delivery_keys(), [])
 
     def test_remix_entries_save_their_artifacts_under_their_key(self) -> None:
@@ -608,6 +608,11 @@ workflows:
                     " [{sink: telegram, options: {bot_token: t, chat_id: c}}]}\n"
                 ),
                 r"workflows\.w\.deliver\.0: telegram reads 'summary'",
+            ),
+            (
+                "remixers: [singlelink]\n",
+                "",
+                r"remixers\.0: singlelink reads 'tags', and no process run",
             ),
         ):
             with (

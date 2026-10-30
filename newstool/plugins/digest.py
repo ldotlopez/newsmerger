@@ -47,6 +47,7 @@ class DigestRemixer(BaseRemixer):
     `markdownify.markdown` are left out."""
 
     name = "digest"
+    requires = "markdown"
     options_model = DigestOptions
     options: DigestOptions
 
