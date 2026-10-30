@@ -37,7 +37,7 @@ from .models import (
 from .plugins import ClassRegister, Services
 from .processors import RunSummary
 from .providers import PreflightProvider
-from .sinks import ArtifactNames, BaseItemSink
+from .sinks import ArtifactNames
 
 PLUGINS_NAMESPACE = "newstool.plugins"
 PLUGIN_ENTRY_POINT = "__newstool_plugin__"
@@ -45,8 +45,22 @@ PLUGIN_ENTRY_POINT = "__newstool_plugin__"
 LOGGER = logging.getLogger(__name__)
 
 
+# The `last_error` of a row created as `error`.
+SET_BY_HAND = "set by hand"
+
+
 class LockedError(RuntimeError):
     """Another newstool command holds the write lock."""
+
+
+@dataclasses.dataclass(slots=True)
+class MarkSummary:
+    """What `mark_deliveries` did, or would do: rows created, existing rows
+    changed, and existing rows left as they were."""
+
+    created: int = 0
+    changed: int = 0
+    kept: int = 0
 
 
 class Application:
@@ -362,18 +376,22 @@ class Application:
         self,
         scope: ProcessingScope | None = None,
         *,
+        workflow: str | None = None,
         sink: str | None = None,
         status: DeliveryStatus | None = None,
         artifact_names: ArtifactNames | None = None,
         delivery_ids: Iterable[int] | None = None,
         sort: str = "id",
     ) -> list[Delivery]:
-        """Ledger rows by a `db.DELIVERY_SORTS` key; item filters keep item
-        rows, `artifact_names` artifact rows, `delivery_ids` these rows, and
-        `limit` counts rows."""
+        """Ledger rows by a `db.DELIVERY_SORTS` key; `workflow` keeps its
+        rows, `sink` those of that delivery key in any workflow, item
+        filters item rows, `artifact_names` artifact rows, `delivery_ids`
+        these rows, and `limit` counts rows. Neither name is checked against
+        the configuration, so the rows of a removed delivery can be found."""
         return self._db.find_deliveries(
             scope,
-            sink=sink,
+            workflow=workflow,
+            key=sink,
             status=status,
             artifact_names=artifact_names,
             delivery_ids=delivery_ids,
@@ -430,38 +448,67 @@ class Application:
             )
         return summaries
 
-    def queue_deliveries(
+    def mark_deliveries(
         self,
+        key: str,
+        status: DeliveryStatus,
         scope: ProcessingScope | None = None,
         artifacts: ArtifactNames = (),
         *,
-        sink: str | None = None,
-    ) -> dict[str, int]:
-        """Give the subjects in scope a `queued` row in every delivery (or the
-        ledger key `sink`) without sending them, ignoring the lookback; return
-        how many per ledger key. Item filters reach item deliveries only and
-        `artifacts` artifact deliveries only; a delivery's `requires` holds."""
-        scope = scope or ProcessingScope()
-        item_filtered = any((scope.source, scope.since, scope.until, scope.item_ids))
-        if sink is not None and sink not in self._catalog.deliveries:
-            raise ConfigError(f"no delivery has the ledger key '{sink}'")
-        counts: dict[str, int] = {}
-        for ledger_key, run in self._catalog.deliveries.items():
-            if sink is not None and ledger_key != sink:
-                continue
-            target = self._object(run.profile)
-            is_item_sink = isinstance(target, BaseItemSink)
-            if (artifacts and is_item_sink) or (item_filtered and not is_item_sink):
-                continue  # the selection names the other kind of subject
-            # No lookback: an explicit `since` from the beginning of time.
-            since = scope.since or datetime.min.replace(tzinfo=UTC)
-            counts[ledger_key] = target.queue(
-                ledger_key,
-                workflow_scope(run.workflow, dataclasses.replace(scope, since=since)),
-                artifacts,
-                datetime.now(UTC),
+        workflow: str,
+        overwrite: bool = False,
+        dry_run: bool = False,
+    ) -> MarkSummary:
+        """Give the subjects selected for the workflow's delivery `key` a row
+        in `status`, ignoring the lookback and the delivery's `requires`;
+        without filters, every subject of the delivery. Existing rows are
+        left as they are unless `overwrite`. `dry_run` only counts."""
+        if status == DeliveryStatus.SENDING:
+            raise ValueError("a delivery is only `sending` while it is sent")
+        ledger_key = self.workflow(workflow).ledger_key(key)
+        if (run := self._catalog.deliveries.get(ledger_key)) is None:
+            raise ConfigError(f"workflow '{workflow}' has no delivery '{key}'")
+        target = self._object(run.profile)
+        scope = workflow_scope(run.workflow, scope)
+        subjects = target.subjects(scope, artifacts)
+        existing = {
+            subject.id: row
+            for row, subject in target.rows(ledger_key, scope, artifacts)
+        }
+        new = [subject for subject in subjects if subject.id not in existing]
+        present = [subject for subject in subjects if subject.id in existing]
+        summary = MarkSummary(created=len(new))
+        if overwrite:
+            summary.changed = len(present)
+        else:
+            summary.kept = len(present)
+
+        required = target.required_key(target.options)
+        if status == DeliveryStatus.QUEUED and required is not None:
+            queued = new + present if overwrite else new
+            values = self._db.get_annotation_values(queued, key=required)
+            if missing := sum(item.key not in values for item in queued):
+                LOGGER.warning(
+                    f"{ledger_key}: {missing} item(s) without '{required}' fail"
+                    " until it exists, and hold back their source meanwhile"
+                )
+
+        if dry_run:
+            return summary
+        last_error = SET_BY_HAND if status == DeliveryStatus.ERROR else None
+        self._db.add_deliveries(
+            dataclasses.replace(
+                target.new_delivery(ledger_key, subject),
+                status=status,
+                last_error=last_error,
             )
-        return counts
+            for subject in new
+        )
+        if overwrite:
+            self.set_delivery_status(
+                (existing[subject.id] for subject in present), status
+            )
+        return summary
 
     def delete_annotations(self, annotation_ids: Iterable[int]) -> int:
         """Delete these annotations with the processing state of their

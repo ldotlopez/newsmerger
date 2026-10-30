@@ -11,7 +11,13 @@ import pydantic
 import requests
 
 from newstool.db import Database, DeliveryStatus, ProcessingStatus
-from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newstool.models import (
+    Artifact,
+    Delivery,
+    ProcessingScope,
+    SourceData,
+    SourceItem,
+)
 from newstool.plugins import Services, merge_options, telegram
 from newstool.plugins.telegram import (
     MAX_CAPTION_LENGTH,
@@ -126,6 +132,22 @@ class TelegramSinkTests(TelegramTestCase):
         self.assertEqual(
             self.delivered("other"), {"h3": {"chat_id": "other-chat", "message_id": 42}}
         )
+
+    def test_a_queued_item_without_its_summary_fails_readably(self, post: Mock) -> None:
+        (item,) = self.add_summarized(SOURCE_A, 3, key="other")
+        # Queued by hand: a run queues only items with the summary.
+        self.db.add_deliveries(
+            [Delivery("telegram", DeliveryStatus.QUEUED, item_id=item.id)]
+        )
+
+        self.deliver()
+
+        (row,) = self.db.find_deliveries()
+        self.assertEqual(
+            (row.status, row.last_error),
+            (DeliveryStatus.ERROR, "summary annotation is missing"),
+        )
+        post.assert_not_called()
 
     def test_an_entry_needs_a_token_and_a_chat(self, post: Mock) -> None:
         for section, overrides in (

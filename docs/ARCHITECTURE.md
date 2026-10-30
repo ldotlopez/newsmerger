@@ -427,7 +427,13 @@ by id (`Database.find_deliveries(delivery_ids=...)`);
 `Application.set_delivery_status` rewrites the state of rows
 (`deliveries set-status`), and `Application.send_deliveries` groups rows by
 ledger key and calls `deliver(force=True)` once per key with the rows'
-subjects (`deliveries send`).
+subjects (`deliveries send`). Decision 0014: `Application.mark_deliveries`
+gives the subjects a delivery selects (`BaseSink.subjects`, which rejects
+filters of the other kind with `SubjectKindError`) a row in a given state
+(`BaseSink.new_delivery`, `Database.add_deliveries`), ignoring `lookback`
+and `requires` (`deliveries set-status --sink`); item sinks read the
+annotation with `BaseItemSink.require_annotation`, a `PluginFailure` when
+it is missing.
 
 A sink's options are a `DeliveryOptions` subclass (`interval`,
 `max_per_run`, `max_retries`, `lookback`; `ArtifactDeliveryOptions` adds

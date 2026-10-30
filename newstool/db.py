@@ -1262,6 +1262,19 @@ class Database:
             )
         return len(artifact_ids)
 
+    def add_deliveries(self, deliveries: Iterable[Delivery]) -> int:
+        """Store these new ledger rows, stamped now; return how many."""
+        now = datetime.now(UTC)
+        rows = [
+            DBDelivery.from_dto(
+                dataclasses.replace(delivery, created_at=now, updated_at=now)
+            )
+            for delivery in deliveries
+        ]
+        with self.session_scope() as sess:
+            sess.add_all(rows)
+        return len(rows)
+
     def get_item_deliveries(
         self,
         sink: str,
@@ -1336,15 +1349,18 @@ class Database:
         self,
         scope: ProcessingScope | None = None,
         *,
-        sink: str | None = None,
+        workflow: str | None = None,
+        key: str | None = None,
         status: DeliveryStatus | None = None,
         artifact_names: Iterable[tuple[str, str]] | None = None,
         delivery_ids: Iterable[int] | None = None,
         sort: str = "id",
     ) -> list[Delivery]:
         """Ledger rows by a `DELIVERY_SORTS` key (`id` is creation order).
-        Item filters in `scope` keep item rows only and `artifact_names`
-        artifact rows only; filters combine and `limit` counts rows."""
+        `workflow` and `key` are the two halves of the ledger key
+        `<workflow>/<key>`. Item filters in `scope` keep item rows only and
+        `artifact_names` artifact rows only; filters combine and `limit`
+        counts rows."""
         scope = scope or ProcessingScope()
         with self.session_scope() as sess:
             query = (
@@ -1353,8 +1369,15 @@ class Database:
                 .outerjoin(DBArtifact, DBDelivery.artifact_id == DBArtifact.id)
             )
             query = self._apply_scope(query, scope)
-            if sink is not None:
-                query = query.filter(DBDelivery.sink == sink)
+            # Neither half contains "/" (NAME_PATTERN).
+            if workflow is not None:
+                query = query.filter(
+                    DBDelivery.sink.startswith(f"{workflow}/", autoescape=True)
+                )
+            if key is not None:
+                query = query.filter(
+                    DBDelivery.sink.endswith(f"/{key}", autoescape=True)
+                )
             if status is not None:
                 query = query.filter(DBDelivery.status == status)
             if delivery_ids is not None:

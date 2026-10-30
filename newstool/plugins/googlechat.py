@@ -116,13 +116,12 @@ class GoogleChatSink(BaseItemSink[WebhookOptions]):
 
     def send(self, subject: SourceItem) -> dict[str, str]:
         options = self.options
-        summaries = self.db.get_annotation_values([subject], key=options.summary)
         image = subject.data.get("image")
         if not (options.item_image and isinstance(image, str) and image.strip()):
             image = None
         message = build_card(
             subject.title,
-            str(summaries[subject.key]),
+            str(self.require_annotation(subject, options.summary)),
             subject.uri,
             options.item_url_text,
             image,

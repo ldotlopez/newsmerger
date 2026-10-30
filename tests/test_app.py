@@ -16,8 +16,10 @@ from foundation.plugin import PluginError, ProtocolConformanceError
 from newstool.app import (
     PLUGIN_ENTRY_POINT,
     PLUGINS_NAMESPACE,
+    SET_BY_HAND,
     Application,
     LockedError,
+    MarkSummary,
 )
 from newstool.config import Config, ConfigError
 from newstool.db import DeliveryStatus, ProcessingStatus
@@ -33,6 +35,7 @@ from newstool.plugins import ClassRegister, Services, feedreader, markdownify
 from newstool.plugins.markdownify import MarkdownifyProcessor
 from newstool.plugins.ollama import OllamaLLM
 from newstool.processors import ProcessorOptions, ProcessorType
+from newstool.sinks import SubjectKindError
 
 SAMPLE = Path(__file__).parent / "samples" / "prensaiberica-item-132310503.html"
 SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
@@ -537,7 +540,7 @@ workflows:
         self.assertEqual(self.app.send_deliveries([row]), {})
         self.assertEqual(post.call_count, 2)
 
-    def test_queue_gives_rows_without_sending_or_lookback(self) -> None:
+    def test_mark_gives_rows_without_sending_lookback_or_requires(self) -> None:
         self.app.close()
         self.app = self.make_app(
             "  telegram: {bot_token: t}\n  telegram_artifacts: {bot_token: t}\n",
@@ -564,32 +567,72 @@ workflows:
             Artifact("feedgenerator", "feed", "<rss/>", "application/rss+xml")
         )
 
-        # The item has no summary yet, which the telegram sink requires.
-        self.assertEqual(
-            self.app.queue_deliveries(),
-            {"channel/telegram": 0, "channel/telegram_artifacts": 1},
+        # Nothing is written on a dry run.
+        dry = self.app.mark_deliveries(
+            "telegram", DeliveryStatus.DONE, workflow="channel", dry_run=True
         )
-        self.app._db.record_result(
-            item, "summarize", "summary", ProcessingStatus.DONE, value="S"
-        )
-        # Item filters only reach item deliveries.
+        self.assertEqual(dry, MarkSummary(created=1))
+        self.assertEqual(self.app.find_deliveries(), [])
+
+        # The item has no summary, which the telegram sink requires.
         self.assertEqual(
-            self.app.queue_deliveries(ProcessingScope(item_ids=(item.id,))),
-            {"channel/telegram": 1},
-        )
-        self.assertEqual(
-            self.app.queue_deliveries(sink="channel/telegram_artifacts"),
-            {"channel/telegram_artifacts": 0},
+            self.app.mark_deliveries(
+                "telegram", DeliveryStatus.DONE, workflow="channel"
+            ),
+            MarkSummary(created=1),
         )
         self.assertEqual(
-            {(d.sink, d.status) for d in self.app.find_deliveries()},
+            self.app.mark_deliveries(
+                "telegram", DeliveryStatus.QUEUED, workflow="channel"
+            ),
+            MarkSummary(kept=1),
+        )
+        with self.assertLogs("newstool.app", "WARNING") as logs:
+            overwritten = self.app.mark_deliveries(
+                "telegram",
+                DeliveryStatus.QUEUED,
+                ProcessingScope(item_ids=(item.id,)),
+                workflow="channel",
+                overwrite=True,
+            )
+        self.assertEqual(overwritten, MarkSummary(changed=1))
+        self.assertIn("1 item(s) without 'summary'", logs.output[0])
+
+        self.assertEqual(
+            self.app.mark_deliveries(
+                "telegram_artifacts", DeliveryStatus.ERROR, workflow="channel"
+            ),
+            MarkSummary(created=1),
+        )
+        self.assertEqual(
             {
-                ("channel/telegram", DeliveryStatus.QUEUED),
-                ("channel/telegram_artifacts", DeliveryStatus.QUEUED),
+                (d.sink, d.status, d.attempts, d.last_error)
+                for d in self.app.find_deliveries()
+            },
+            {
+                ("channel/telegram", DeliveryStatus.QUEUED, 0, None),
+                ("channel/telegram_artifacts", DeliveryStatus.ERROR, 0, SET_BY_HAND),
             },
         )
-        with self.assertRaisesRegex(ConfigError, "ledger key 'telegram'"):
-            self.app.queue_deliveries(sink="telegram")
+
+        with self.assertRaisesRegex(SubjectKindError, "not --artifact"):
+            self.app.mark_deliveries(
+                "telegram",
+                DeliveryStatus.DONE,
+                artifacts=(("feedgenerator", "feed"),),
+                workflow="channel",
+            )
+        with self.assertRaisesRegex(SubjectKindError, "not item filters"):
+            self.app.mark_deliveries(
+                "telegram_artifacts",
+                DeliveryStatus.DONE,
+                ProcessingScope(item_ids=(item.id,)),
+                workflow="channel",
+            )
+        with self.assertRaisesRegex(ConfigError, "has no delivery 'main'"):
+            self.app.mark_deliveries("main", DeliveryStatus.DONE, workflow="channel")
+        with self.assertRaisesRegex(ConfigError, "workflow 'nope'"):
+            self.app.mark_deliveries("telegram", DeliveryStatus.DONE, workflow="nope")
 
     def test_what_runs_read_must_be_written_on_their_sources(self) -> None:
         for catalog, workflows, message in (

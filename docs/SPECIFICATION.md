@@ -237,6 +237,10 @@ remix, so they see freshly built artifacts.
   `max_per_run` in a run, so a new entry does not flood its destination.
 - **Forced delivery** sends explicitly selected subjects now, whatever their
   state, with no backoff and no pacing. It needs an explicit selection.
+- **Marking by hand** gives the subjects selected for one entry a row in a
+  chosen state (`queued`, `done` or `error`), ignoring `lookback` and the
+  annotation the entry depends on; existing rows change only when asked.
+  Marking everything stored as `done` keeps a new entry from delivering it.
 - A subject is delivered at most once per entry, unless its delivery
   record is deleted (it is queued again while within `lookback`) or a
   delivery is forced.
@@ -258,9 +262,10 @@ process, not a network service. It offers:
 - **Deletion** of items and artifacts, with everything that references them
   (processing state, annotations, deliveries).
 - **Changing the state** of ledger rows (`queued`, `done` or `error`, which
-  also settles interrupted deliveries), **deleting** them (a deleted
-  subject is queued again while within `lookback`) and **sending** them
-  now, selected by id or by the filters of `inspect deliveries`.
+  also settles interrupted deliveries), **marking** the selected subjects
+  of one entry (rows created in a chosen state), **deleting** rows (a
+  deleted subject is queued again while within `lookback`) and **sending**
+  them now, selected by id or by the filters of `inspect deliveries`.
 - A **write lock**: commands that write take it, so two of them never run
   at the same time; the second fails at once.
 

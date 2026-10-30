@@ -111,10 +111,9 @@ class TelegramSink(BaseItemSink[ItemDeliveryOptions]):
 
     def send(self, subject: SourceItem) -> dict[str, Any]:
         options = self.options
-        summaries = self.db.get_annotation_values([subject], key=options.summary)
         caption = build_caption(
             subject.title,
-            str(summaries[subject.key]),
+            str(self.require_annotation(subject, options.summary)),
             subject.uri,
             options.item_url_text,
             options.markdown,

@@ -41,7 +41,7 @@ from .db import (
 from .errors import EXPECTED_ERRORS, describe, log_failure
 from .models import Delivery, ProcessingScope, SourceItem
 from .processors import RunSummary
-from .sinks import SelectionRequiredError
+from .sinks import SelectionRequiredError, SubjectKindError
 
 # Help goes to stdout: rich only when stdout is a terminal.
 click = plain_click if RICH_STDOUT_DISABLED else rich_click
@@ -54,6 +54,7 @@ USER_ERRORS = (
     PluginError,
     LockedError,
     SelectionRequiredError,
+    SubjectKindError,
 )
 
 
@@ -514,8 +515,8 @@ def annotation_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
 
 
 def delivery_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
-    """Add the item scope, --artifact, --delivery, --sink and --status, which
-    select ledger rows."""
+    """Add the item scope, --artifact, --delivery, -w, --sink and --status,
+    which select ledger rows."""
     command = click.option(
         "--status",
         type=click.Choice([status.value for status in DeliveryStatus]),
@@ -523,7 +524,12 @@ def delivery_options[**P, R](command: Callable[P, R]) -> Callable[P, R]:
         help="Only deliveries in this state",
     )(command)
     command = click.option(
-        "--sink", default=None, help="Only this ledger key's deliveries"
+        "--sink",
+        default=None,
+        help="Only this delivery key's deliveries (<workflow>/<key> in the ledger)",
+    )(command)
+    command = click.option(
+        "-w", "--workflow", default=None, help="Only this workflow's deliveries"
     )(command)
     command = click.option(
         "--delivery",
@@ -540,6 +546,7 @@ def select_deliveries(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
     delivery_ids: tuple[int, ...],
+    workflow: str | None,
     sink: str | None,
     status: str | None,
     sort: str,
@@ -548,6 +555,7 @@ def select_deliveries(
     outside the selection is an error."""
     deliveries = app.find_deliveries(
         scope,
+        workflow=workflow,
         sink=sink,
         status=DeliveryStatus(status) if status else None,
         artifact_names=artifact_ids or None,
@@ -850,6 +858,7 @@ def inspect_deliveries_cmd(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
     delivery_ids: tuple[int, ...],
+    workflow: str | None,
     sink: str | None,
     status: str | None,
     sort: str,
@@ -858,12 +867,14 @@ def inspect_deliveries_cmd(
     """The delivery ledger; --limit counts rows.
 
     Item filters keep item deliveries, --artifact artifact deliveries.
+    Without -w, --sink shows that key in every workflow.
     """
     deliveries = select_deliveries(
         app_from_context(ctx),
         scope,
         artifact_ids,
         delivery_ids,
+        workflow,
         sink,
         status,
         sort,
@@ -907,6 +918,20 @@ def require_selection(*filters: object, action: str = "delete") -> None:
         raise click.UsageError(f"name a filter or an id to select what to {action}")
 
 
+def require_workflow(workflow: str | None) -> str:
+    """Commands that change the ledger act on one workflow, named."""
+    if workflow is None:
+        raise click.UsageError("name the workflow with -w/--workflow")
+    return workflow
+
+
+def subject_filters(
+    scope: ProcessingScope, artifact_ids: tuple[tuple[str, str], ...]
+) -> tuple[object, ...]:
+    """The filters of a `delivery_options` selection that name subjects."""
+    return (scope.source, scope.since, scope.until, scope.item_ids, artifact_ids)
+
+
 def delivery_filters(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
@@ -915,16 +940,20 @@ def delivery_filters(
     status: str | None,
 ) -> tuple[object, ...]:
     """What a `delivery_options` selection names, for `require_selection`."""
-    return (
-        scope.source,
-        scope.since,
-        scope.until,
-        scope.item_ids,
-        artifact_ids,
-        delivery_ids,
-        sink,
-        status,
-    )
+    return (*subject_filters(scope, artifact_ids), delivery_ids, sink, status)
+
+
+def check_all_rows(
+    all_rows: bool,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    delivery_ids: tuple[int, ...],
+    status: str | None,
+) -> None:
+    """`--all` takes -w and --sink only."""
+    filters = (*subject_filters(scope, artifact_ids), delivery_ids, status)
+    if all_rows and any(filters):
+        raise click.UsageError("--all takes no filter or id but -w and --sink")
 
 
 @cli.group("delete")
@@ -1061,7 +1090,10 @@ def delete_artifacts_cmd(
 @delivery_options
 @sort_option(DELIVERY_SORTS)
 @click.option(
-    "--all", "all_rows", is_flag=True, help="Every ledger row; takes no filter"
+    "--all",
+    "all_rows",
+    is_flag=True,
+    help="Every row of the workflow, or of --sink; takes no other filter",
 )
 @click.pass_context
 @report_user_errors
@@ -1070,24 +1102,26 @@ def delete_deliveries_cmd(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
     delivery_ids: tuple[int, ...],
+    workflow: str | None,
     sink: str | None,
     status: str | None,
     sort: str,
     all_rows: bool,
 ) -> None:
-    """Delete ledger rows; --limit counts rows.
+    """Delete one workflow's ledger rows; --limit counts rows.
 
     A deleted subject is queued again by the next run of its delivery while
     its lookback still covers it, and is then delivered again.
     """
-    filters = delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
-    if all_rows and any(filters):
-        raise click.UsageError("--all takes no filter or id")
+    require_workflow(workflow)
+    check_all_rows(all_rows, scope, artifact_ids, delivery_ids, status)
     if not all_rows:
-        require_selection(*filters)
+        require_selection(
+            *delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
+        )
     app = app_from_context(ctx, write=True)
     deliveries = select_deliveries(
-        app, scope, artifact_ids, delivery_ids, sink, status, sort
+        app, scope, artifact_ids, delivery_ids, workflow, sink, status, sort
     )
     deleted = app.delete_deliveries(d.id for d in deliveries)
     click.echo(f"Deleted {deleted} delivery(ies)")
@@ -1114,8 +1148,18 @@ def deliveries_group() -> None:
     help="The new state; `queued` also gives fresh attempts",
 )
 @click.option(
-    "--all", "all_rows", is_flag=True, help="Every ledger row; takes no filter"
+    "--all",
+    "all_rows",
+    is_flag=True,
+    help="With --sink, every subject of the delivery; without it, every row"
+    " of the workflow. Takes no other filter",
 )
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="With --sink, also change the subjects' existing rows",
+)
+@click.option("--dry-run", is_flag=True, help="Count, without changing anything")
 @click.pass_context
 @report_user_errors
 def deliveries_set_status_cmd(
@@ -1123,61 +1167,78 @@ def deliveries_set_status_cmd(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
     delivery_ids: tuple[int, ...],
+    workflow: str | None,
     sink: str | None,
     status: str | None,
     sort: str,
     target: str,
     all_rows: bool,
+    overwrite: bool,
+    dry_run: bool,
 ) -> None:
-    """Move ledger rows to another state; --limit counts rows.
+    """Set the state of one workflow's deliveries.
 
-    Settles an interrupted `sending` row (`--as done` or `--as queued`), or
-    requeues failed ones (`--as queued`).
+    With --sink and subject filters (or --all), every selected subject gets
+    a row of that delivery, whatever the lookback or the annotation it
+    requires; --limit counts subjects. Existing rows are left as they are
+    unless --overwrite. `--all --as done` marks what a new delivery must not
+    send.
+
+    Otherwise, or with --delivery or --status, it changes the selected rows;
+    --limit counts rows. That settles an interrupted `sending` row (`--as
+    done` or `--as queued`), or requeues failed ones (`--as queued`).
     """
-    filters = delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
-    if all_rows and any(filters):
-        raise click.UsageError("--all takes no filter or id")
+    workflow = require_workflow(workflow)
+    check_all_rows(all_rows, scope, artifact_ids, delivery_ids, status)
+    by_subject = (
+        sink is not None
+        and not (delivery_ids or status)
+        and (all_rows or any(subject_filters(scope, artifact_ids)))
+    )
+    if overwrite and not by_subject:
+        raise click.UsageError(
+            "--overwrite needs --sink and subject filters (or --all), and no"
+            " --delivery or --status"
+        )
+    verb = "Would mark" if dry_run else "Marked"
+    app = app_from_context(ctx, write=not dry_run)
+
+    if by_subject:
+        assert sink is not None
+        summary = app.mark_deliveries(
+            sink,
+            DeliveryStatus(target),
+            scope,
+            artifact_ids,
+            workflow=workflow,
+            overwrite=overwrite,
+            dry_run=dry_run,
+        )
+        click.echo(
+            f"{verb} {summary.created + summary.changed} delivery(ies) as"
+            f" {target}: {summary.created} new, {summary.changed} changed"
+        )
+        if summary.kept:
+            click.echo(
+                f"Left {summary.kept} existing delivery(ies) as they were;"
+                " --overwrite changes them",
+                err=True,
+            )
+        return
+
     if not all_rows:
-        require_selection(*filters, action="change")
-    app = app_from_context(ctx, write=True)
+        require_selection(
+            *delivery_filters(scope, artifact_ids, delivery_ids, sink, status),
+            action="change",
+        )
     deliveries = select_deliveries(
-        app, scope, artifact_ids, delivery_ids, sink, status, sort
+        app, scope, artifact_ids, delivery_ids, workflow, sink, status, sort
     )
-    changed = app.set_delivery_status(deliveries, DeliveryStatus(target))
-    click.echo(f"Marked {changed} delivery(ies) as {target}")
-
-
-@deliveries_group.command("queue")
-@scope_options
-@artifact_ids_option
-@click.option("--sink", default=None, help="Only this ledger key's delivery")
-@click.option("--all", "all_rows", is_flag=True, help="Every subject; takes no filter")
-@click.pass_context
-@report_user_errors
-def deliveries_queue_cmd(
-    ctx: click.Context,
-    scope: ProcessingScope,
-    artifact_ids: tuple[tuple[str, str], ...],
-    sink: str | None,
-    all_rows: bool,
-) -> None:
-    """Give the selected subjects a `queued` ledger row without sending them;
-    --limit counts items per delivery.
-
-    The lookback does not apply, a delivery's required annotation does.
-    Subjects that already have a row are left as they are. `deliveries
-    set-status --status queued --as done` then marks them delivered.
-    """
-    filters = delivery_filters(scope, artifact_ids, (), sink, None)
-    if all_rows and any(filters):
-        raise click.UsageError("--all takes no filter or id")
-    if not all_rows:
-        require_selection(*filters, action="queue")
-    app = app_from_context(ctx, write=True)
-    queued = app.queue_deliveries(scope, artifact_ids, sink=sink)
-    print_table(
-        "Queue", ["Delivery", "Queued"], [[key, n] for key, n in queued.items()]
-    )
+    if dry_run:
+        changed = len(deliveries)
+    else:
+        changed = app.set_delivery_status(deliveries, DeliveryStatus(target))
+    click.echo(f"{verb} {changed} delivery(ies) as {target}")
 
 
 @deliveries_group.command("send")
@@ -1190,21 +1251,24 @@ def deliveries_send_cmd(
     scope: ProcessingScope,
     artifact_ids: tuple[tuple[str, str], ...],
     delivery_ids: tuple[int, ...],
+    workflow: str | None,
     sink: str | None,
     status: str | None,
     sort: str,
 ) -> None:
-    """Send ledger rows now, whatever their state, with no backoff or pacing.
+    """Send one workflow's ledger rows now, whatever their state, with no
+    backoff or pacing.
 
     A row is sent again even if it is `done`. Exits non-zero if any fails.
     """
+    require_workflow(workflow)
     require_selection(
         *delivery_filters(scope, artifact_ids, delivery_ids, sink, status),
         action="send",
     )
     app = app_from_context(ctx, write=True)
     deliveries = select_deliveries(
-        app, scope, artifact_ids, delivery_ids, sink, status, sort
+        app, scope, artifact_ids, delivery_ids, workflow, sink, status, sort
     )
     if print_deliver(app.send_deliveries(deliveries)):
         ctx.exit(1)

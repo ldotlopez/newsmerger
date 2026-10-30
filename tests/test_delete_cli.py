@@ -51,7 +51,9 @@ class DeleteCommandTests(unittest.TestCase):
         return CliRunner().invoke(cli, ["-c", str(self.config), *args])
 
     def deliver(self, item: SourceItem) -> None:
-        self.db.queue_item_deliveries("telegram", ProcessingScope(item_ids=(item.id,)))
+        self.db.queue_item_deliveries(
+            "w/telegram", ProcessingScope(item_ids=(item.id,))
+        )
 
     def test_items_with_deliveries_are_skipped_unless_forced(self) -> None:
         self.deliver(self.items[0])
@@ -73,7 +75,7 @@ class DeleteCommandTests(unittest.TestCase):
             ("items", "--limit", "1"),
             ("annotations", "--limit", "1"),
             ("artifacts",),
-            ("deliveries", "--limit", "1"),
+            ("deliveries", "-w", "w", "--limit", "1"),
         ):
             with self.subTest(command=args[0]):
                 result = self.run_cli("delete", *args)
@@ -128,8 +130,8 @@ class DeleteCommandTests(unittest.TestCase):
     def test_deliveries_are_deleted_with_the_inspect_selection(self) -> None:
         for item in self.items:
             self.deliver(item)
-        self.db.queue_item_deliveries("other", ProcessingScope())
-        args = ("deliveries", "--sink", "telegram", "--item", "1")
+        self.db.queue_item_deliveries("w/other", ProcessingScope())
+        args = ("deliveries", "-w", "w", "--sink", "telegram", "--item", "1")
         listed = self.run_cli("inspect", *args)
         self.assertIn("item 1", listed.output)
         self.assertNotIn("item 2", listed.output)
@@ -140,7 +142,7 @@ class DeleteCommandTests(unittest.TestCase):
         self.assertIn("Deleted 1 delivery(ies)", result.stdout)
         self.assertEqual(
             sorted((d.sink, d.item_id) for d in self.db.find_deliveries()),
-            [("other", 1), ("other", 2), ("telegram", 2)],
+            [("w/other", 1), ("w/other", 2), ("w/telegram", 2)],
         )
         self.assertEqual(len(self.db.get_items()), 2)
 
@@ -150,13 +152,16 @@ class DeleteCommandTests(unittest.TestCase):
 
         listed = self.run_cli("inspect", "deliveries", "--delivery", "2")
         missing = self.run_cli("inspect", "deliveries", "--delivery", "9")
-        result = self.run_cli("delete", "deliveries", "--delivery", "2")
+        unnamed = self.run_cli("delete", "deliveries", "--delivery", "2")
+        result = self.run_cli("delete", "deliveries", "-w", "w", "--delivery", "2")
 
         self.assertEqual(listed.exit_code, 0, listed.output)
         self.assertIn("item 2", listed.output)
         self.assertNotIn("item 1", listed.output)
         self.assertEqual(missing.exit_code, 1)
         self.assertIn("no delivery 9 in the selection", missing.output)
+        self.assertEqual(unnamed.exit_code, 2)
+        self.assertIn("name the workflow", unnamed.output)
         self.assertIn("Deleted 1 delivery(ies)", result.stdout)
         self.assertEqual([d.id for d in self.db.find_deliveries()], [1])
 
@@ -164,12 +169,14 @@ class DeleteCommandTests(unittest.TestCase):
         for item in self.items:
             self.deliver(item)
 
-        refused = self.run_cli("delete", "deliveries")
-        mixed = self.run_cli("delete", "deliveries", "--all", "--sink", "telegram")
-        everything = self.run_cli("delete", "deliveries", "--all")
+        refused = self.run_cli("delete", "deliveries", "-w", "w")
+        mixed = self.run_cli("delete", "deliveries", "-w", "w", "--all", "--item", "1")
+        other = self.run_cli("delete", "deliveries", "-w", "x", "--all")
+        everything = self.run_cli("delete", "deliveries", "-w", "w", "--all")
 
         self.assertNotEqual(refused.exit_code, 0)
         self.assertNotEqual(mixed.exit_code, 0)
+        self.assertIn("Deleted 0 delivery(ies)", other.stdout)
         self.assertEqual(everything.exit_code, 0, everything.output)
         self.assertIn("Deleted 2 delivery(ies)", everything.stdout)
         self.assertEqual(self.db.find_deliveries(), [])
@@ -183,19 +190,20 @@ class DeleteCommandTests(unittest.TestCase):
         second.last_error = "boom"
         self.db.save_delivery(second)
 
-        refused = self.run_cli("deliveries", "set-status", "--as", "done")
-        mixed = self.run_cli(
-            "deliveries", "set-status", "--as", "done", "--all", "--sink", "telegram"
-        )
-        sending = self.run_cli("deliveries", "set-status", "--as", "sending", "--all")
-        one = self.run_cli(
-            "deliveries", "set-status", "--as", "queued", "--delivery", "2"
-        )
-        everything = self.run_cli("deliveries", "set-status", "--as", "done", "--all")
+        set_status = ("deliveries", "set-status", "-w", "w")
+        refused = self.run_cli(*set_status, "--as", "done")
+        unnamed = self.run_cli("deliveries", "set-status", "--as", "done", "--all")
+        mixed = self.run_cli(*set_status, "--as", "done", "--all", "--item", "1")
+        sending = self.run_cli(*set_status, "--as", "sending", "--all")
+        one = self.run_cli(*set_status, "--as", "queued", "--delivery", "2")
+        dry = self.run_cli(*set_status, "--as", "done", "--all", "--dry-run")
+        everything = self.run_cli(*set_status, "--as", "done", "--all")
 
         self.assertNotEqual(refused.exit_code, 0)
+        self.assertNotEqual(unnamed.exit_code, 0)
         self.assertNotEqual(mixed.exit_code, 0)
         self.assertNotEqual(sending.exit_code, 0)
+        self.assertIn("Would mark 2 delivery(ies) as done", dry.stdout)
         self.assertEqual(one.exit_code, 0, one.output)
         (queued,) = self.db.find_deliveries(delivery_ids=[2])
         self.assertEqual((queued.attempts, queued.last_error), (0, None))
@@ -207,8 +215,8 @@ class DeleteCommandTests(unittest.TestCase):
     def test_send_needs_a_selection_and_skips_unconfigured_ledger_keys(self) -> None:
         self.deliver(self.items[0])
 
-        refused = self.run_cli("deliveries", "send")
-        skipped = self.run_cli("deliveries", "send", "--delivery", "1")
+        refused = self.run_cli("deliveries", "send", "-w", "w")
+        skipped = self.run_cli("deliveries", "send", "-w", "w", "--delivery", "1")
 
         self.assertNotEqual(refused.exit_code, 0)
         self.assertEqual(skipped.exit_code, 0, skipped.output)

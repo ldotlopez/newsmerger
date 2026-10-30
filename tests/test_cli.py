@@ -11,6 +11,7 @@ import requests
 from click.testing import CliRunner
 from foundation.storage import EntryNotFoundError
 
+from newstool.app import MarkSummary
 from newstool.cli import cli
 from newstool.config import ConfigError
 from newstool.db import DeliveryStatus
@@ -24,6 +25,7 @@ from newstool.models import (
     SourceItem,
 )
 from newstool.processors import RunSummary
+from newstool.sinks import SubjectKindError
 
 SOURCE = SourceData(
     id="plaza", name="Plaza", url="https://plaza.test/", provider="plaza"
@@ -521,6 +523,7 @@ class InspectCommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         app.find_deliveries.assert_called_once_with(
             ProcessingScope(),
+            workflow=None,
             sink="telegram",
             status=DeliveryStatus.ERROR,
             artifact_names=None,
@@ -531,37 +534,87 @@ class InspectCommandTests(unittest.TestCase):
         self.assertIn("digest/a/1", result.output)
         self.assertIn("chat not", result.output)
 
-    def test_queue_passes_the_selection_and_prints_counts(self) -> None:
+    def test_set_status_with_a_sink_marks_the_selected_subjects(self) -> None:
         app = Mock()
-        app.queue_deliveries.return_value = {"channel/telegram": 3}
+        app.mark_deliveries.return_value = MarkSummary(created=3, kept=2)
 
         result = invoke(
             app,
             "deliveries",
-            "queue",
+            "set-status",
+            "-w",
+            "channel",
+            "--sink",
+            "telegram",
             "--source",
             "plaza",
-            "--sink",
-            "channel/telegram",
+            "--as",
+            "done",
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        app.queue_deliveries.assert_called_once_with(
-            ProcessingScope(source="plaza"), (), sink="channel/telegram"
+        app.mark_deliveries.assert_called_once_with(
+            "telegram",
+            DeliveryStatus.DONE,
+            ProcessingScope(source="plaza"),
+            (),
+            workflow="channel",
+            overwrite=False,
+            dry_run=False,
         )
-        self.assertIn("channel/telegram", result.output)
+        self.assertIn("Marked 3 delivery(ies) as done: 3 new, 0 changed", result.stdout)
+        self.assertIn("Left 2 existing delivery(ies)", result.stderr)
 
-    def test_queue_needs_a_filter_or_all_but_not_both(self) -> None:
+    def test_set_status_all_with_a_sink_marks_every_subject(self) -> None:
         app = Mock()
-        app.queue_deliveries.return_value = {}
+        app.mark_deliveries.return_value = MarkSummary(created=1)
 
-        self.assertEqual(invoke(app, "deliveries", "queue").exit_code, 2)
+        args = ("deliveries", "set-status", "-w", "channel", "--sink", "telegram")
+        result = invoke(app, *args, "--all", "--as", "queued", "--dry-run")
+
+        self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(
-            invoke(app, "deliveries", "queue", "--all", "--item", "1").exit_code, 2
+            app.mark_deliveries.call_args.kwargs,
+            {"workflow": "channel", "overwrite": False, "dry_run": True},
         )
-        app.queue_deliveries.assert_not_called()
-        self.assertEqual(invoke(app, "deliveries", "queue", "--all").exit_code, 0)
-        app.queue_deliveries.assert_called_once_with(ProcessingScope(), (), sink=None)
+        self.assertIn("Would mark 1 delivery(ies)", result.stdout)
+
+    def test_set_status_with_a_sink_and_row_filters_changes_rows(self) -> None:
+        app = Mock()
+        app.find_deliveries.return_value = []
+        app.set_delivery_status.return_value = 0
+        args = ("deliveries", "set-status", "-w", "channel", "--sink", "telegram")
+
+        result = invoke(app, *args, "--status", "error", "--as", "queued")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.mark_deliveries.assert_not_called()
+        self.assertEqual(app.find_deliveries.call_args.kwargs["workflow"], "channel")
+
+    def test_set_status_usage_errors(self) -> None:
+        app = Mock()
+        set_status = ("deliveries", "set-status", "--as", "done")
+        for args in (
+            ("--sink", "telegram", "--all"),  # no -w
+            ("-w", "channel", "--overwrite", "--item", "1"),  # no --sink
+            ("-w", "channel", "--sink", "t", "--overwrite", "--delivery", "1"),
+            ("-w", "channel", "--sink", "t", "--all", "--item", "1"),
+            ("-w", "channel"),  # no selection
+        ):
+            with self.subTest(args=args):
+                self.assertEqual(invoke(app, *set_status, *args).exit_code, 2)
+        app.mark_deliveries.assert_not_called()
+        app.set_delivery_status.assert_not_called()
+
+    def test_a_kind_mismatch_is_a_message(self) -> None:
+        app = Mock()
+        app.mark_deliveries.side_effect = SubjectKindError("not --artifact")
+        args = ("deliveries", "set-status", "-w", "c", "--sink", "telegram")
+
+        result = invoke(app, *args, "--artifact", "digest/a", "--as", "done")
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("not --artifact", result.output)
 
     def test_malformed_artifact_id_is_a_usage_error(self) -> None:
         result = invoke(Mock(), "inspect", "artifacts", "--artifact", "feedgenerator")

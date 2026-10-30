@@ -25,7 +25,13 @@ from newstool.db import (
     DeliveryStatus,
     ProcessingStatus,
 )
-from newstool.models import Artifact, ProcessingScope, SourceData, SourceItem
+from newstool.models import (
+    Artifact,
+    Delivery,
+    ProcessingScope,
+    SourceData,
+    SourceItem,
+)
 
 
 def make_source(source_id: str = "example", name: str = "Example") -> SourceData:
@@ -721,9 +727,9 @@ class DeliveryTests(DatabaseTestCase):
         self.assertEqual(rows[0][0].artifact_name, "digest/a/1")
 
     def test_find_deliveries_filters_by_subject_sink_and_status(self):
-        self.db.queue_item_deliveries("telegram", ProcessingScope())
+        self.db.queue_item_deliveries("w/telegram", ProcessingScope())
         self.db.save_artifact(Artifact("digest", "a/1", "x", "text/markdown"))
-        self.db.queue_artifact_deliveries("telegram_artifacts", ["digest"])
+        self.db.queue_artifact_deliveries("w/telegram_artifacts", ["digest"])
 
         def found(scope=None, **filters) -> list[tuple[str, int | None, str | None]]:
             return [
@@ -734,14 +740,43 @@ class DeliveryTests(DatabaseTestCase):
         self.assertEqual(len(found()), 4)
         self.assertEqual(
             found(ProcessingScope(item_ids=(self.items[1].id,))),
-            [("telegram", self.items[1].id, None)],
+            [("w/telegram", self.items[1].id, None)],
         )
         self.assertEqual(
             found(artifact_names=[("digest", "a/1")]),
-            [("telegram_artifacts", None, "digest/a/1")],
+            [("w/telegram_artifacts", None, "digest/a/1")],
         )
-        self.assertEqual(len(found(sink="telegram", status=DeliveryStatus.QUEUED)), 3)
+        self.assertEqual(
+            len(found(workflow="w", key="telegram", status=DeliveryStatus.QUEUED)), 3
+        )
         self.assertEqual(found(status=DeliveryStatus.DONE), [])
+
+    def test_find_deliveries_matches_whole_ledger_key_halves(self):
+        for ledger_key in ("w/telegram", "w2/telegram", "w/telegram2", "w_x/b"):
+            self.db.queue_item_deliveries(
+                ledger_key, ProcessingScope(item_ids=(self.items[0].id,))
+            )
+
+        def sinks(**filters) -> list[str]:
+            return sorted(row.sink for row in self.db.find_deliveries(**filters))
+
+        self.assertEqual(sinks(workflow="w"), ["w/telegram", "w/telegram2"])
+        self.assertEqual(sinks(key="telegram"), ["w/telegram", "w2/telegram"])
+        self.assertEqual(sinks(workflow="w", key="telegram"), ["w/telegram"])
+        # `_` is literal, not a LIKE wildcard.
+        self.assertEqual(sinks(workflow="wax"), [])
+        self.assertEqual(sinks(workflow="w_x"), ["w_x/b"])
+
+    def test_added_deliveries_are_stamped_now(self):
+        added = self.db.add_deliveries(
+            [Delivery("w/telegram", DeliveryStatus.DONE, item_id=self.items[0].id)]
+        )
+
+        (row,) = self.db.find_deliveries()
+        self.assertEqual(added, 1)
+        self.assertEqual((row.sink, row.status), ("w/telegram", DeliveryStatus.DONE))
+        self.assertIsNotNone(row.created_at)
+        self.assertEqual(row.created_at, row.updated_at)
 
     def test_a_row_has_exactly_one_subject(self):
         with self.assertRaises(IntegrityError), self.db.session_scope() as sess:
@@ -802,17 +837,17 @@ class DeleteTests(DatabaseTestCase):
 
     def test_deleting_deliveries_keeps_their_subjects(self):
         self.db.upsert_source_items([make_item(make_source(), uid="a1")])
-        self.db.queue_item_deliveries("telegram", ProcessingScope())
-        self.db.queue_item_deliveries("other", ProcessingScope())
-        (row,) = self.db.find_deliveries(sink="telegram")
+        self.db.queue_item_deliveries("w/telegram", ProcessingScope())
+        self.db.queue_item_deliveries("w/other", ProcessingScope())
+        (row,) = self.db.find_deliveries(key="telegram")
 
         self.assertEqual(self.db.delete_deliveries([row.id]), 1)
         self.assertEqual(self.db.delete_deliveries([]), 0)
 
-        self.assertEqual([d.sink for d in self.db.find_deliveries()], ["other"])
+        self.assertEqual([d.sink for d in self.db.find_deliveries()], ["w/other"])
         self.assertEqual(len(self.db.get_items()), 1)
         self.assertEqual(
-            self.db.queue_item_deliveries("telegram", ProcessingScope()), 1
+            self.db.queue_item_deliveries("w/telegram", ProcessingScope()), 1
         )
 
 

@@ -13,7 +13,7 @@ from foundation.jsonlib import JsonCompatible
 
 from .config import Duration
 from .db import DeliveryStatus, backoff_seconds
-from .errors import log_failure, reason
+from .errors import PluginFailure, log_failure, reason
 from .models import Artifact, Delivery, ProcessingScope, SourceItem
 from .plugins import PluginOptions, Services
 from .processors import RunSummary
@@ -25,6 +25,10 @@ type ArtifactNames = tuple[tuple[str, str], ...]  # (remixer, name) pairs
 
 class SelectionRequiredError(ValueError):
     """A forced delivery names no subject explicitly."""
+
+
+class SubjectKindError(ValueError):
+    """A selection names subjects of the kind a delivery does not deliver."""
 
 
 class DeliveryOptions(PluginOptions):
@@ -254,6 +258,16 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         """The key's rows in scope, with their subjects, in delivery order."""
 
     @abstractmethod
+    def subjects(self, scope: ProcessingScope, artifacts: ArtifactNames) -> list[S]:
+        """The subjects a selection names, whatever their state or the
+        lookback; every subject without a filter. A filter of the other kind
+        is a `SubjectKindError`."""
+
+    @abstractmethod
+    def new_delivery(self, key: str, subject: S) -> Delivery:
+        """A new `queued` row of the key for `subject`."""
+
+    @abstractmethod
     def label(self, subject: S) -> str:
         """How logs name a subject."""
 
@@ -312,6 +326,18 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
     ) -> list[tuple[Delivery, SourceItem]]:
         return self.db.get_item_deliveries(key, scope, statuses=statuses)
 
+    def subjects(
+        self, scope: ProcessingScope, artifacts: ArtifactNames
+    ) -> list[SourceItem]:
+        if artifacts:
+            raise SubjectKindError(
+                "an item delivery takes item filters, not --artifact"
+            )
+        return self.db.get_items(scope)
+
+    def new_delivery(self, key: str, subject: SourceItem) -> Delivery:
+        return Delivery(sink=key, status=DeliveryStatus.QUEUED, item_id=subject.id)
+
     def select(
         self, pending: list[tuple[Delivery, SourceItem]], now: datetime
     ) -> list[tuple[Delivery, SourceItem]]:
@@ -328,6 +354,13 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
 
     def label(self, subject: SourceItem) -> str:
         return f"item {subject.id} ({subject.uri})"
+
+    def require_annotation(self, item: SourceItem, key: str) -> Any:
+        """The item's annotation `key`; a row can be queued without it."""
+        values = self.db.get_annotation_values([item], key=key)
+        if item.key not in values:
+            raise PluginFailure(f"{key} annotation is missing")
+        return values[item.key]
 
 
 class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
@@ -371,6 +404,25 @@ class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
         return self.db.get_artifact_deliveries(
             key, statuses=statuses, names=artifacts or None
         )
+
+    def subjects(
+        self, scope: ProcessingScope, artifacts: ArtifactNames
+    ) -> list[Artifact]:
+        if any((scope.source, scope.since, scope.until, scope.item_ids)):
+            raise SubjectKindError(
+                "an artifact delivery takes --artifact, not item filters"
+            )
+        if artifacts:
+            return self.db.list_artifacts(names=artifacts, limit=scope.limit)
+        found = [
+            artifact
+            for remixer in self.options.artifacts
+            for artifact in self.db.list_artifacts(remixer)
+        ]
+        return found[: scope.limit]
+
+    def new_delivery(self, key: str, subject: Artifact) -> Delivery:
+        return Delivery(sink=key, status=DeliveryStatus.QUEUED, artifact_id=subject.id)
 
     def label(self, subject: Artifact) -> str:
         return f"artifact {subject.remixer}/{subject.name}"

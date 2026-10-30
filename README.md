@@ -270,31 +270,37 @@ uv run newstool -c config.yaml inspect annotations --key summary/telegram/es
 uv run newstool -c config.yaml inspect artifacts
 uv run newstool -c config.yaml inspect artifacts --artifact feedgenerator/feed > feed.xml
 uv run newstool -c config.yaml inspect deliveries --sink telegram --status error
+uv run newstool -c config.yaml inspect deliveries -w main-channels
 
-# Change the state of ledger rows, or send them now
-uv run newstool -c config.yaml deliveries set-status --as queued --status error
-uv run newstool -c config.yaml deliveries set-status --as done --delivery 31
-uv run newstool -c config.yaml deliveries set-status --as queued --all
-uv run newstool -c config.yaml deliveries send --delivery 31
+# Change the state of one workflow's ledger rows, or send them now
+uv run newstool -c config.yaml deliveries set-status -w main-channels --as queued --status error
+uv run newstool -c config.yaml deliveries set-status -w main-channels --as done --delivery 31
+uv run newstool -c config.yaml deliveries set-status -w main-channels --as queued --all
+uv run newstool -c config.yaml deliveries send -w main-channels --delivery 31
+
+# Mark what a new delivery must not send, without sending it
+uv run newstool -c config.yaml deliveries set-status -w main-channels --sink telegram-main --all --as done --dry-run
+uv run newstool -c config.yaml deliveries set-status -w main-channels --sink telegram-main --all --as done
 
 # Delete, without asking: the same options as inspect select what goes
 uv run newstool -c config.yaml delete items --item 4127
 uv run newstool -c config.yaml delete annotations --processor summarize --source castellonplaza
 uv run newstool -c config.yaml delete annotations --key summary/telegram/es
 uv run newstool -c config.yaml delete artifacts --artifact digest/castellonplaza/2026-10-01_2026-10-08
-uv run newstool -c config.yaml delete deliveries --sink telegram --item 4127
-uv run newstool -c config.yaml delete deliveries --all
+uv run newstool -c config.yaml delete deliveries -w main-channels --sink telegram-main --item 4127
+uv run newstool -c config.yaml delete deliveries -w main-channels --all
 ```
 
 Items and annotations are selected by their numeric id, which `inspect`
 shows; artifacts by `<remix key>/<name>`, and deliveries by the numeric id
-`inspect deliveries` shows (`--delivery`), or by their recorded key
-(`<workflow>/<key>`, `--sink`). `process`, `remix`,
+`inspect deliveries` shows (`--delivery`), or by their workflow (`-w`)
+and delivery key (`--sink`), the two halves of the ledger key
+`<workflow>/<key>`. `process`, `remix`,
 `inspect` and `delete` accept `--source` (a source id), `--since`,
 `--until`, `--item` (repeatable) and `--limit`; `inspect` and `delete` add
 `--processor`, `--key` and `--annotation` for annotations,
 `--remixer`, `--artifact` and `--limit` for artifacts, and `--artifact`,
-`--delivery` (repeatable), `--sink` and `--status` for deliveries. Filters combine; an
+`--delivery` (repeatable), `-w`, `--sink` and `--status` for deliveries. Filters combine; an
 id that the selection does not return is an error.
 
 `inspect` and `delete` sort with `--sort` (default `updated`), always
@@ -321,22 +327,40 @@ its source's index comes back on the next `import` with a new id.
 `delete annotations` deletes exactly what `inspect annotations` lists with
 the same options (by processor, key such as `summary/telegram/es`, id or
 item), each with its processing state, so the run that wrote the key
-processes the item again. `delete deliveries` drops ledger rows, or every
-row with `--all` (no other filter); the next `run` delivers those subjects
+processes the item again. `delete deliveries` drops the ledger rows of the
+workflow `-w` names, or every row of it (or of `--sink`) with `--all` and
+no other filter; the next `run` delivers those subjects
 again while its `lookback` covers them. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
 
-`deliveries set-status` and `deliveries send` take the selection of
-`inspect deliveries` and need at least one filter or id, so run `inspect`
-first. `set-status --as queued|done|error` changes the state of the
-selected rows: `queued` also gives them fresh attempts, so the next `run`
-sends them, and `done` records a delivery you settled by hand.
-`set-status --all` (no other filter) changes every row. `send` sends the
+`deliveries set-status`, `deliveries send` and `delete deliveries` act on
+one workflow, which `-w` must name; `inspect deliveries` takes `-w` as an
+optional filter, and there `--sink` without it shows that delivery key in
+every workflow. They take the selection of `inspect deliveries` and need
+at least one filter or id, so run `inspect` first.
+
+`set-status --as queued|done|error` sets the state of deliveries:
+`queued` also gives fresh attempts, so the next `run` sends them, and
+`done` records a delivery you settled by hand.
+
+- With `--sink` and subject filters (`--source`, `--since`, `--until`,
+  `--item`, `--artifact`), or `--all` for every subject of the delivery,
+  each selected subject without a row gets one in that state, whatever the
+  `lookback` or the annotation the sink requires; `--limit` counts
+  subjects. Existing rows are left as they are, with a warning, unless
+  `--overwrite`. A filter of the other kind (`--artifact` for an item
+  delivery) is an error. Queuing an item without its required annotation
+  warns: it fails until the annotation exists, holding back its source.
+  `--all --as done` before the first `run` of a new delivery keeps it from
+  posting what is already stored.
+- Otherwise, or with `--delivery` or `--status`, it changes the selected
+  rows; `--all` alone changes every row of the workflow.
+
+`--dry-run` counts what would change without changing it. `send` sends the
 selected rows now, whatever their state (`done` ones too), with no backoff
 or pacing, and exits non-zero if one fails; a row whose delivery is no
-longer in the configuration is skipped with a warning. Neither creates
-rows: a subject with none is queued by the next `run`.
+longer in the configuration is skipped with a warning. It creates no rows.
 
 Global options: `--log-level LEVEL` (also accepts specs such as
 `info,db:debug`), and `-v`/`-q`, repeatable, to raise or lower it one step
@@ -566,8 +590,9 @@ How delivery (the last phase of `run`) behaves:
   within its `lookback`.
 - A delivery is marked `sending` before the call. If a run is interrupted
   there, its outcome is unknown and it is never retried on its own: check
-  the chat, then settle it with `deliveries set-status --as done|queued
-  --delivery ID` (the id `inspect deliveries` shows), or leave it.
+  the chat, then settle it with `deliveries set-status -w WORKFLOW --as
+  done|queued --delivery ID` (the id `inspect deliveries` shows), or leave
+  it.
 - `inspect deliveries` shows the ledger: each row's id, subject, state,
   attempts and last error.
 

@@ -4,6 +4,8 @@
 - **Date:** 2026-10-29
 - **Revises:** 0007 (`deliver --requeue|--force`, `deliveries resolve`),
   0008 (deliveries "selected by their subject")
+- **Revised:** 2026-10-30, by 0014 (`set-status` creates rows; `-w` and
+  the delivery key)
 
 ## Context
 
