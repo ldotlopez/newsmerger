@@ -531,6 +531,38 @@ class InspectCommandTests(unittest.TestCase):
         self.assertIn("digest/a/1", result.output)
         self.assertIn("chat not", result.output)
 
+    def test_queue_passes_the_selection_and_prints_counts(self) -> None:
+        app = Mock()
+        app.queue_deliveries.return_value = {"channel/telegram": 3}
+
+        result = invoke(
+            app,
+            "deliveries",
+            "queue",
+            "--source",
+            "plaza",
+            "--sink",
+            "channel/telegram",
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        app.queue_deliveries.assert_called_once_with(
+            ProcessingScope(source="plaza"), (), sink="channel/telegram"
+        )
+        self.assertIn("channel/telegram", result.output)
+
+    def test_queue_needs_a_filter_or_all_but_not_both(self) -> None:
+        app = Mock()
+        app.queue_deliveries.return_value = {}
+
+        self.assertEqual(invoke(app, "deliveries", "queue").exit_code, 2)
+        self.assertEqual(
+            invoke(app, "deliveries", "queue", "--all", "--item", "1").exit_code, 2
+        )
+        app.queue_deliveries.assert_not_called()
+        self.assertEqual(invoke(app, "deliveries", "queue", "--all").exit_code, 0)
+        app.queue_deliveries.assert_called_once_with(ProcessingScope(), (), sink=None)
+
     def test_malformed_artifact_id_is_a_usage_error(self) -> None:
         result = invoke(Mock(), "inspect", "artifacts", "--artifact", "feedgenerator")
 

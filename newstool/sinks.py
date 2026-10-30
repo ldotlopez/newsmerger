@@ -237,8 +237,8 @@ class BaseSink[S: (SourceItem, Artifact), O: DeliveryOptions]:
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         now: datetime,
-    ) -> None:
-        """Queue the candidates in scope."""
+    ) -> int:
+        """Queue the candidates in scope; return how many."""
 
     @abstractmethod
     def queue_selected(
@@ -296,11 +296,13 @@ class BaseItemSink[O: DeliveryOptions](BaseSink[SourceItem, O]):
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         now: datetime,
-    ) -> None:
+    ) -> int:
         if scope.since is None and scope.item_ids is None:
             since = now - timedelta(seconds=self.options.lookback)
             scope = dataclasses.replace(scope, since=since)
-        db.queue_item_deliveries(key, scope, requires=self.required_key(self.options))
+        return db.queue_item_deliveries(
+            key, scope, requires=self.required_key(self.options)
+        )
 
     def queue_selected(
         self,
@@ -356,13 +358,12 @@ class BaseArtifactSink[O: ArtifactDeliveryOptions](BaseSink[Artifact, O]):
         scope: ProcessingScope,
         artifacts: ArtifactNames,
         now: datetime,
-    ) -> None:
+    ) -> int:
         remixers = self.options.artifacts
         if artifacts:
-            db.queue_artifact_deliveries(key, remixers, names=artifacts)
-        else:
-            since = scope.since or now - timedelta(seconds=self.options.lookback)
-            db.queue_artifact_deliveries(key, remixers, since=since)
+            return db.queue_artifact_deliveries(key, remixers, names=artifacts)
+        since = scope.since or now - timedelta(seconds=self.options.lookback)
+        return db.queue_artifact_deliveries(key, remixers, since=since)
 
     def queue_selected(
         self,

@@ -1141,6 +1141,39 @@ def deliveries_set_status_cmd(
     click.echo(f"Marked {changed} delivery(ies) as {target}")
 
 
+@deliveries_group.command("queue")
+@scope_options
+@artifact_ids_option
+@click.option("--sink", default=None, help="Only this ledger key's delivery")
+@click.option("--all", "all_rows", is_flag=True, help="Every subject; takes no filter")
+@click.pass_context
+@report_user_errors
+def deliveries_queue_cmd(
+    ctx: click.Context,
+    scope: ProcessingScope,
+    artifact_ids: tuple[tuple[str, str], ...],
+    sink: str | None,
+    all_rows: bool,
+) -> None:
+    """Give the selected subjects a `queued` ledger row without sending them;
+    --limit counts items per delivery.
+
+    The lookback does not apply, a delivery's required annotation does.
+    Subjects that already have a row are left as they are. `deliveries
+    set-status --status queued --as done` then marks them delivered.
+    """
+    filters = delivery_filters(scope, artifact_ids, (), sink, None)
+    if all_rows and any(filters):
+        raise click.UsageError("--all takes no filter or id")
+    if not all_rows:
+        require_selection(*filters, action="queue")
+    app = app_from_context(ctx, write=True)
+    queued = app.queue_deliveries(scope, artifact_ids, sink=sink)
+    print_table(
+        "Queue", ["Delivery", "Queued"], [[key, n] for key, n in queued.items()]
+    )
+
+
 @deliveries_group.command("send")
 @delivery_options
 @sort_option(DELIVERY_SORTS)

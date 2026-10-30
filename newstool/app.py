@@ -37,7 +37,7 @@ from .models import (
 from .plugins import ClassRegister, Services
 from .processors import RunSummary
 from .providers import PreflightProvider
-from .sinks import ArtifactNames
+from .sinks import ArtifactNames, BaseItemSink
 
 PLUGINS_NAMESPACE = "newstool.plugins"
 PLUGIN_ENTRY_POINT = "__newstool_plugin__"
@@ -433,6 +433,40 @@ class Application:
                 force=True,
             )
         return summaries
+
+    def queue_deliveries(
+        self,
+        scope: ProcessingScope | None = None,
+        artifacts: ArtifactNames = (),
+        *,
+        sink: str | None = None,
+    ) -> dict[str, int]:
+        """Give the subjects in scope a `queued` row in every delivery (or the
+        ledger key `sink`) without sending them, ignoring the lookback; return
+        how many per ledger key. Item filters reach item deliveries only and
+        `artifacts` artifact deliveries only; a delivery's `requires` holds."""
+        scope = scope or ProcessingScope()
+        item_filtered = any((scope.source, scope.since, scope.until, scope.item_ids))
+        if sink is not None and sink not in self._catalog.deliveries:
+            raise ConfigError(f"no delivery has the ledger key '{sink}'")
+        counts: dict[str, int] = {}
+        for ledger_key, run in self._catalog.deliveries.items():
+            if sink is not None and ledger_key != sink:
+                continue
+            target = self._object(run.profile)
+            is_item_sink = isinstance(target, BaseItemSink)
+            if (artifacts and is_item_sink) or (item_filtered and not is_item_sink):
+                continue  # the selection names the other kind of subject
+            # No lookback: an explicit `since` from the beginning of time.
+            since = scope.since or datetime.min.replace(tzinfo=UTC)
+            counts[ledger_key] = target.queue(
+                self._db,
+                ledger_key,
+                workflow_scope(run.workflow, dataclasses.replace(scope, since=since)),
+                artifacts,
+                datetime.now(UTC),
+            )
+        return counts
 
     def delete_annotations(self, annotation_ids: Iterable[int]) -> int:
         """Delete these annotations with the processing state of their

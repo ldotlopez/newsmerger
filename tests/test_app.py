@@ -23,6 +23,7 @@ from newstool.config import Config, ConfigError
 from newstool.db import DeliveryStatus, ProcessingStatus
 from newstool.errors import PluginFailure
 from newstool.models import (
+    Artifact,
     PreflightSourceItemData,
     ProcessingScope,
     SourceItem,
@@ -540,6 +541,60 @@ workflows:
         row.sink = "gone/telegram"
         self.assertEqual(self.app.send_deliveries([row]), {})
         self.assertEqual(post.call_count, 2)
+
+    def test_queue_gives_rows_without_sending_or_lookback(self) -> None:
+        self.app.close()
+        self.app = self.make_app(
+            "  telegram: {bot_token: t}\n  telegram_artifacts: {bot_token: t}\n",
+            catalog="""
+llms: [ollama]
+processors: [markdownify, summarize]
+remixers:
+  - {remixer: feedgenerator, skip_default: true}
+sinks:
+  - {sink: telegram, id: main, options: {chat_id: main}}
+  - {sink: telegram_artifacts, id: docs, options: {chat_id: d, artifacts: [feedgenerator]}}
+""",
+            workflows="""
+workflows:
+  - name: channel
+    sources: [mediterraneo]
+    process: [markdownify, summarize]
+    remix: [feedgenerator]
+    deliver: [main, docs]
+""",
+        )
+        item = self.import_sample()  # older than the lookback window
+        self.app._db.save_artifact(
+            Artifact("feedgenerator", "feed", "<rss/>", "application/rss+xml")
+        )
+
+        # The item has no summary yet, which the telegram sink requires.
+        self.assertEqual(
+            self.app.queue_deliveries(),
+            {"channel/telegram": 0, "channel/telegram_artifacts": 1},
+        )
+        self.app._db.record_result(
+            item, "summarize", "summary", ProcessingStatus.DONE, value="S"
+        )
+        # Item filters only reach item deliveries.
+        self.assertEqual(
+            self.app.queue_deliveries(ProcessingScope(item_ids=(item.id,))),
+            {"channel/telegram": 1},
+        )
+        self.assertEqual(
+            self.app.queue_deliveries(sink="channel/telegram_artifacts"),
+            {"channel/telegram_artifacts": 0},
+        )
+        self.assertEqual(
+            {(d.sink, d.status) for d in self.app.find_deliveries()},
+            {
+                ("channel/telegram", DeliveryStatus.QUEUED),
+                ("channel/telegram_artifacts", DeliveryStatus.QUEUED),
+            },
+        )
+        with self.assertRaisesRegex(ConfigError, "ledger key 'telegram'"):
+            self.app.queue_deliveries(sink="telegram")
 
     def test_what_runs_read_must_be_written_on_their_sources(self) -> None:
         for catalog, workflows, message in (
