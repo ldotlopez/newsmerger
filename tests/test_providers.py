@@ -435,6 +435,32 @@ class TestPrensaIberica(unittest.TestCase):
             ),
         )
 
+    def test_iter_items_card_template(self) -> None:
+        # This index links articles relatively, has no dates and other headers.
+        index = read_sample("prensaiberica-index-castello-provincia.html")
+        source = Mock(url="https://www.elperiodicomediterraneo.com/castello-provincia/")
+        for options, expected in (
+            (PrensaIbericaOptions(), 63),
+            (PrensaIbericaOptions(exclude_sections=[]), 67),
+        ):
+            provider = PrensaIbericaProvider(options, Services())
+            fetcher = Mock(get=Mock(return_value=index))
+            items = list(provider.iter_items(source, fetcher))
+            refs = [item.ref for item in items]
+            self.assertEqual(len(refs), expected)
+            self.assertEqual(len(set(refs)), len(refs))
+            self.assertTrue(
+                all(
+                    ref.startswith("https://www.elperiodicomediterraneo.com/")
+                    for ref in refs
+                )
+            )
+            self.assertTrue(all(item.modified_at is None for item in items))
+        self.assertEqual(
+            refs[0],
+            "https://www.elperiodicomediterraneo.com/castello-provincia/2026/10/30/cadena-supermercados-castellon-borde-final-oromarket-135892901.html",
+        )
+
     def test_retrieve_item_fetches_and_parses_ref(self) -> None:
         content = read_sample("prensaiberica-item-132310503.html")
         fetcher = Mock()

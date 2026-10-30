@@ -1,9 +1,10 @@
 import hashlib
 import logging
+import re
 from collections.abc import Iterator
 from datetime import datetime
 from typing import cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import bs4
 from foundation.scrapelib import (
@@ -21,6 +22,9 @@ from ..providers import BaseProvider, ProviderType
 from . import PluginOptions, PluginTypes
 
 LOGGER = logging.getLogger(__name__)
+
+# Article URLs end in their numeric id: `.../slug-135898589.html`.
+ARTICLE_HREF = re.compile(r"-\d+\.html$")
 
 
 class Options(PluginOptions):
@@ -48,15 +52,15 @@ class PrensaIbericaProvider(BaseProvider):
 
         excluded_ids = {id(c) for c in self._find_excluded_containers(soup)}
         seen: set[str] = set()
-        for headline in soup.find_all(["h1", "h2"], {"itemprop": "headline"}):
-            article = self._get_article_for_headline(headline)
-            if article is None:
+        # Innermost articles are the cards; outer ones are layout rows.
+        for article in soup.find_all("article"):
+            if article.find("article") is not None:
                 continue
             if self._is_in_excluded_section(article, excluded_ids):
                 continue
 
-            href = _extract_href(article, site_prefix)
-            if href in seen:
+            href = _extract_href(article, url)
+            if href is None or not href.startswith(site_prefix) or href in seen:
                 continue
             seen.add(href)
 
@@ -140,12 +144,13 @@ class PrensaIbericaProvider(BaseProvider):
         containers = []
         excluded = {title.casefold() for title in self.options.exclude_sections}
 
-        for h3 in soup.find_all("h3", class_="grp__header__title"):
-            title = self._get_section_title(h3)
+        # Section headers of the two index templates the sites serve.
+        for header in soup.select("h3.grp__header__title, h2.ft-mol-headband__title"):
+            title = self._get_section_title(header)
             if title.casefold() not in excluded:
                 continue
 
-            container = self._get_section_container(h3)
+            container = self._get_section_container(header)
             if container is None:
                 LOGGER.warning(
                     f"Could not find container for excluded section: {title}"
@@ -156,41 +161,33 @@ class PrensaIbericaProvider(BaseProvider):
 
         return containers
 
-    def _get_section_title(self, h3: bs4.Tag) -> str:
-        """Extract the visible title text from a section header h3."""
-        link = h3.find("a")
-        return link.get_text(strip=True) if link else h3.get_text(strip=True)
+    def _get_section_title(self, header: bs4.Tag) -> str:
+        """Extract the visible title text from a section header."""
+        link = header.find("a")
+        return link.get_text(strip=True) if link else header.get_text(strip=True)
 
-    def _get_section_container(self, h3: bs4.Tag) -> bs4.Tag | None:
-        """Climb from a header's h3 title up to the section's containing div."""
-        header = h3.find_parent("header")
-        return header.parent if header else None
+    def _get_section_container(self, header: bs4.Tag) -> bs4.Tag | None:
+        """Climb from a section header to the first ancestor holding articles."""
+        return next((p for p in header.parents if p.find("article")), None)
 
     def _is_in_excluded_section(self, article: bs4.Tag, excluded_ids: set[int]) -> bool:
         """Check whether an article lives inside any excluded section container."""
         return any(id(parent) in excluded_ids for parent in article.parents)
 
-    # --- Article -> entry helpers ---------------------------------------
 
-    def _get_article_for_headline(self, headline: bs4.Tag) -> bs4.Tag | None:
-        """Climb parents to find the article tag wrapping a headline."""
-        article = headline.find_parent("article")
-        if article is None:
-            LOGGER.warning(f"No article parent found for headline: {headline.text}")
+def _extract_href(article: bs4.Tag, page_url: str) -> str | None:
+    """The absolute URL of the article link carrying the card's headline.
 
-        return article
-
-
-def _extract_href(article: bs4.Tag, site_prefix: str) -> str:
-    a_tag = article.find(
-        "a",
-        class_="new__headline",
-        href=lambda x: x and x.startswith(site_prefix),
-    )
-    if a_tag is None:
-        raise PluginFailure("article without a headline link")
-
-    return cast(str, a_tag.get("href"))
+    None for blocks that are not article cards (menus, footer link lists).
+    """
+    headlines = {h.get_text(strip=True) for h in article.find_all(["h1", "h2"])}
+    headlines.discard("")
+    for a_tag in article.find_all("a", href=True):
+        href = cast(str, a_tag["href"])
+        texts = {a_tag.get_text(strip=True), cast(str, a_tag.get("title", "")).strip()}
+        if ARTICLE_HREF.search(href) and headlines & texts:
+            return urljoin(page_url, href)
+    return None
 
 
 def _get_modified_at(article: bs4.Tag) -> datetime | None:
