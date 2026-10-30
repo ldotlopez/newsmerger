@@ -174,6 +174,26 @@ cache_dir: {self.tmp_dir}/cache
 
         self.assertEqual(imported, [])
         self.assertIn("not newer once retrieved", logs.output[0])
+        # The listed date was checked: the next run doesn't fetch it again.
+        _, retrieve_item = self.import_preflight([listed("a", JUNE)], stale)
+        retrieve_item.assert_not_called()
+
+    def test_items_unchanged_once_retrieved_are_not_fetched_again(self) -> None:
+        self.import_preflight([listed("a", APRIL)])
+
+        # The page bumps its date, but its content is still April's: the
+        # store writes nothing, yet the listed date counts as checked.
+        def same(item, fetcher) -> SourceItemData:
+            april = retrieved(item, fetcher, modified_at=APRIL)
+            return april.model_copy(update={"modified_at": MAY})
+
+        listed_newer = [listed("a", MAY)]
+        self.import_preflight(listed_newer, same)
+
+        (stored,) = self.app.get_items()
+        self.assertEqual(stored.modified_at, MAY)
+        _, retrieve_item = self.import_preflight(listed_newer, same)
+        retrieve_item.assert_not_called()
 
     def test_a_uid_other_than_listed_is_warned_about_and_stored(self) -> None:
         renamed = lambda item, fetcher: retrieved(item, fetcher, uid="other")

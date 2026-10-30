@@ -689,6 +689,23 @@ class Database:
             )
             return dict(query.all())
 
+    def advance_modified_times(
+        self, source_id: str, modified_times: dict[str, datetime]
+    ) -> None:
+        """Move each uid's `modified_at` forward to the given time, never
+        backwards, whether or not its content changed."""
+        if not modified_times:
+            return
+        with self.session_scope() as sess:
+            query = sess.query(DBSourceItem).filter(
+                DBSourceItem.source_id == source_id,
+                DBSourceItem.uid.in_(modified_times),
+            )
+            for db_item in query:
+                db_item.modified_at = max(
+                    db_item.modified_at, modified_times[db_item.uid]
+                )
+
     @staticmethod
     def _apply_scope(query: Query, scope: ProcessingScope) -> Query:
         if scope.source:

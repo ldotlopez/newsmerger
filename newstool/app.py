@@ -9,6 +9,7 @@ import dataclasses
 import fcntl
 import logging
 from collections.abc import Iterable, Iterator
+from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Self
@@ -169,8 +170,9 @@ class Application:
         stored ones a preflight provider lists as unchanged."""
         source = self.config.get_source(source_id)
         provider = self._object(self._catalog.sources[source.id])
+        checked: dict[str, datetime] = {}
         if isinstance(provider, PreflightProvider):
-            item_datas = self._retrieve_preflight(source, provider)
+            item_datas = self._retrieve_preflight(source, provider, checked)
         else:
             item_datas = provider.retrieve_items(source, self._fetcher)
         items = []
@@ -182,13 +184,19 @@ class Application:
         finally:
             # An error mid-run keeps what was fetched: the next run resumes.
             self._db.upsert_source_items(items)
+            # Changed or not, a listed date once checked is not fetched again.
+            self._db.advance_modified_times(source.id, checked)
         return items
 
     def _retrieve_preflight(
-        self, source: SourceData, provider: PreflightProvider
+        self,
+        source: SourceData,
+        provider: PreflightProvider,
+        checked: dict[str, datetime],
     ) -> Iterator[SourceItemData]:
         """The listed items that are new, or listed as modified since stored.
-        Items listed without a date are always fetched."""
+        Items listed without a date are always fetched. Fills `checked` with
+        the listed date of each stored item retrieved."""
         stored_times = self._db.get_item_modified_times(source.id)
         for preflight_item in provider.iter_items(source, self._fetcher):
             stored = stored_times.get(preflight_item.uid)
@@ -201,6 +209,8 @@ class Application:
             except ValueError as e:
                 LOGGER.error(f"{describe(e)} while retrieving '{preflight_item.ref}'")
                 continue
+            if dated:
+                checked[preflight_item.uid] = listed
             if item_data.uid != preflight_item.uid:
                 LOGGER.warning(
                     f"{source.id}: listed uid '{preflight_item.uid}' "
