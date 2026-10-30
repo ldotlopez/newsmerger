@@ -283,6 +283,7 @@ uv run newstool -c config.yaml delete annotations --processor summarize --source
 uv run newstool -c config.yaml delete annotations --key summary/telegram/es
 uv run newstool -c config.yaml delete artifacts --artifact digest/castellonplaza/2026-10-01_2026-10-08
 uv run newstool -c config.yaml delete deliveries --sink telegram --item 4127
+uv run newstool -c config.yaml delete deliveries --all
 ```
 
 Items and annotations are selected by their numeric id, which `inspect`
@@ -320,8 +321,9 @@ its source's index comes back on the next `import` with a new id.
 `delete annotations` deletes exactly what `inspect annotations` lists with
 the same options (by processor, key such as `summary/telegram/es`, id or
 item), each with its processing state, so the run that wrote the key
-processes the item again. `delete deliveries` drops ledger rows; the next
-`run` delivers those subjects again while its `lookback` covers them. Items and
+processes the item again. `delete deliveries` drops ledger rows, or every
+row with `--all` (no other filter); the next `run` delivers those subjects
+again while its `lookback` covers them. Items and
 artifacts with deliveries are skipped with a warning unless `--force`,
 which deletes their deliveries too, so they can be delivered again.
 
