@@ -153,6 +153,49 @@ class SummarizeTests(ProcessorTestCase):
         with self.assertRaises(pydantic.ValidationError):
             summarize.SummarizeOptions.model_validate({"temperature": 1})
 
+    def test_an_interrupted_run_keeps_the_summaries_already_made(self) -> None:
+        self.db.upsert_source_items(
+            [
+                SourceItem(
+                    source=SOURCE,
+                    uid=uid,
+                    title="T",
+                    uri=f"https://s.test/{uid}",
+                    content=b"<p></p>",
+                    mimetype="text/html",
+                )
+                for uid in ("2", "3")
+            ]
+        )
+        items = self.db.get_items()
+        for item in items[1:]:
+            self.db.record_result(
+                item, "markdownify", "markdown", ProcessingStatus.DONE, value="# T"
+            )
+
+        class InterruptedLLM(StubLLM):
+            def prompt(self, prompt: str, **options: object) -> str:
+                if len(self.calls) == 2:
+                    raise KeyboardInterrupt
+                return super().prompt(prompt, **options)
+
+        processor = build(summarize.SummarizeProcessor, InterruptedLLM("Summary."))
+        with self.assertRaises(KeyboardInterrupt):
+            processor.process(self.db, key="summary")
+
+        # A fresh connection sees only committed rows.
+        reopened = Database(
+            f"sqlite:///{self.tmp_dir}/data.db", self.tmp_dir / "content"
+        )
+        self.addCleanup(reopened.close)
+        summaries = reopened.get_annotation_values(items, key="summary")
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual(set(summaries.values()), {"Summary."})
+        unprocessed = reopened.get_unprocessed_items(
+            "summary", version=None, max_retries=3, requires="markdown"
+        )
+        self.assertEqual(len(unprocessed), 1)
+
 
 class TaggerTests(ProcessorTestCase):
     def test_merges_json_tags_with_the_item_tags(self) -> None:
