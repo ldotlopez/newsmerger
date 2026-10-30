@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pydantic
 
-from newstool.models import SourceData, SourceItemData
+from newstool.models import PreflightSourceItemData, SourceData, SourceItemData
 from newstool.plugins import NoOptions, Services, merge_options
 from newstool.plugins.csjuntasgobierno import CSJuntasGobiernoProvider
 from newstool.plugins.feedreader import FeedReaderProvider, Options
@@ -380,17 +380,55 @@ class TestPrensaIberica(unittest.TestCase):
             ),
         )
 
-    def test_retrieve_item_fetches_and_parses_url(self) -> None:
+    def test_iter_items_lists_dated_articles_without_excluded_sections(self) -> None:
+        index = read_sample("prensaiberica-index-castello.html")
+        source = Mock(url="https://www.elperiodicomediterraneo.com/castello/")
+        fetcher = Mock(get=Mock(return_value=index))
+
+        items = list(self.provider.iter_items(source, fetcher))
+
+        fetcher.get.assert_called_once_with(
+            "https://www.elperiodicomediterraneo.com/castello/"
+        )
+        self.assertEqual(len(items), 21)
+        refs = [item.ref for item in items]
+        self.assertEqual(len(set(refs)), len(refs))
+        self.assertFalse(any("/comarcas/" in ref or "/videos/" in ref for ref in refs))
+        self.assertTrue(
+            all(
+                item.uid == hashlib.sha256(item.ref.encode()).hexdigest()
+                for item in items
+            )
+        )
+        self.assertEqual(
+            items[0].ref,
+            "https://www.elperiodicomediterraneo.com/castello/2026/10/30/luces-navidad-castello-ayuntamiento-encendido-castellon-135891703.html",
+        )
+        self.assertEqual(
+            items[0].modified_at,
+            datetime.datetime(
+                2026,
+                10,
+                30,
+                6,
+                10,
+                45,
+                tzinfo=datetime.timezone(datetime.timedelta(hours=1)),
+            ),
+        )
+
+    def test_retrieve_item_fetches_and_parses_ref(self) -> None:
         content = read_sample("prensaiberica-item-132310503.html")
         fetcher = Mock()
         fetcher.get.return_value = content
-        item = self.provider.retrieve_item("https://example.test/article", fetcher)
+        preflight_item = PreflightSourceItemData(
+            uid="ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8",
+            ref="https://example.test/article",
+        )
+        item = self.provider.retrieve_item(preflight_item, fetcher)
 
         fetcher.get.assert_called_once_with("https://example.test/article")
-        self.assertEqual(
-            item.uid,
-            "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8",
-        )
+        self.assertEqual(item.uid, preflight_item.uid)
 
 
 ARTICLE = b"""<!DOCTYPE html><html><head>

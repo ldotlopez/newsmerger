@@ -2,9 +2,10 @@ import hashlib
 import logging
 from collections.abc import Iterator
 from datetime import datetime
-from urllib.parse import urljoin
+from typing import ClassVar, cast
+from urllib.parse import urlsplit
 
-import feedparser
+import bs4
 from foundation.scrapelib import (
     drop_selectors,
     find_canonical_url,
@@ -15,38 +16,50 @@ from foundation.scrapelib import (
 
 from ..errors import PluginFailure
 from ..httpclient import HTTPClient
-from ..models import SourceData, SourceItemData
-from ..providers import URI, IndexSiteProvider, ProviderType
+from ..models import PreflightSourceItemData, SourceData, SourceItemData
+from ..providers import BaseProvider, ProviderType
 from . import PluginTypes
 
 LOGGER = logging.getLogger(__name__)
 
 
-class PrensaIbericaProvider(IndexSiteProvider):
-    def parse_index(
-        self, content: bytes, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[URI]:
-        soup = soupify(content.decode("utf-8"))
+class PrensaIbericaProvider(BaseProvider):
+    EXCLUDED_SECTION_TITLES: ClassVar = {"Comarcas", "Vídeos y galerías de Castellón"}
 
-        if not (tag := soup.select_one('html head link[rel="alternate"]')):
-            LOGGER.warning("Could not find <link rel='alternate'> in index page")
-            return
+    def iter_items(
+        self, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[PreflightSourceItemData[str]]:
+        # The index dates each article (dateModified): the core skips the
+        # stored ones that did not change.
+        url = str(source.url)
+        soup = soupify(fetcher.get(url).decode("utf-8"))
+        parts = urlsplit(url)
+        site_prefix = f"{parts.scheme}://{parts.netloc}/"
 
-        href = tag.attrs.get("href")
-        if not href:
-            LOGGER.warning("Could not find href in <link rel='alternate'>")
-            return
+        excluded_ids = {id(c) for c in self._find_excluded_containers(soup)}
+        seen: set[str] = set()
+        for headline in soup.find_all(["h1", "h2"], {"itemprop": "headline"}):
+            article = self._get_article_for_headline(headline)
+            if article is None:
+                continue
+            if self._is_in_excluded_section(article, excluded_ids):
+                continue
 
-        if not href.startswith("/rss/section/"):
-            LOGGER.warning(
-                f"Unexpected href in <link rel='alternate'>: {href} (expected '/rss/section/...')"
+            href = _extract_href(article, site_prefix)
+            if href in seen:
+                continue
+            seen.add(href)
+
+            yield PreflightSourceItemData(
+                uid=hashlib.sha256(href.encode()).hexdigest(),
+                ref=href,
+                modified_at=_get_modified_at(article),
             )
-            return
 
-        feed_url = urljoin(str(source.url), href)
-        feed_content = fetcher.get(feed_url)
-        fc = feedparser.parse(feed_content)
-        yield from (entry["link"] for entry in fc["entries"])
+    def retrieve_item(
+        self, preflight_item: PreflightSourceItemData[str], fetcher: HTTPClient
+    ) -> SourceItemData:
+        return self.parse_item(fetcher.get(preflight_item.ref))
 
     def parse_item(self, content: bytes) -> SourceItemData:
         soup = soupify(content.decode("utf-8"))
@@ -108,6 +121,72 @@ class PrensaIbericaProvider(IndexSiteProvider):
                 "tags": tags,
             },
         )
+
+    # --- Section exclusion helpers -------------------------------------
+
+    def _find_excluded_containers(self, soup: bs4.BeautifulSoup) -> list[bs4.Tag]:
+        """Find the container divs for sections we want to exclude entirely,
+        identified by their header title (e.g. 'Comarcas', 'Vídeos y galerías de Castellón')."""
+        containers = []
+
+        for h3 in soup.find_all("h3", class_="grp__header__title"):
+            title = self._get_section_title(h3)
+            if title not in self.EXCLUDED_SECTION_TITLES:
+                continue
+
+            container = self._get_section_container(h3)
+            if container is None:
+                LOGGER.warning(
+                    f"Could not find container for excluded section: {title}"
+                )
+                continue
+
+            containers.append(container)
+
+        return containers
+
+    def _get_section_title(self, h3: bs4.Tag) -> str:
+        """Extract the visible title text from a section header h3."""
+        link = h3.find("a")
+        return link.get_text(strip=True) if link else h3.get_text(strip=True)
+
+    def _get_section_container(self, h3: bs4.Tag) -> bs4.Tag | None:
+        """Climb from a header's h3 title up to the section's containing div."""
+        header = h3.find_parent("header")
+        return header.parent if header else None
+
+    def _is_in_excluded_section(self, article: bs4.Tag, excluded_ids: set[int]) -> bool:
+        """Check whether an article lives inside any excluded section container."""
+        return any(id(parent) in excluded_ids for parent in article.parents)
+
+    # --- Article -> entry helpers ---------------------------------------
+
+    def _get_article_for_headline(self, headline: bs4.Tag) -> bs4.Tag | None:
+        """Climb parents to find the article tag wrapping a headline."""
+        article = headline.find_parent("article")
+        if article is None:
+            LOGGER.warning(f"No article parent found for headline: {headline.text}")
+
+        return article
+
+
+def _extract_href(article: bs4.Tag, site_prefix: str) -> str:
+    a_tag = article.find(
+        "a",
+        class_="new__headline",
+        href=lambda x: x and x.startswith(site_prefix),
+    )
+    if a_tag is None:
+        raise PluginFailure("article without a headline link")
+
+    return cast(str, a_tag.get("href"))
+
+
+def _get_modified_at(article: bs4.Tag) -> datetime | None:
+    meta = article.find("meta", {"itemprop": "dateModified"})
+    if meta is None or not meta.get("content"):
+        return None
+    return datetime.fromisoformat(cast(str, meta.get("content")))
 
 
 def __newstool_plugin__() -> PluginTypes:

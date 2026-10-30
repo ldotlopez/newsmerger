@@ -113,7 +113,11 @@ cache_dir: {self.tmp_dir}/cache
     def import_sample(self) -> SourceItem:
         provider = self.app._object(self.app._catalog.sources["mediterraneo"])
         item_data = provider.parse_item(SAMPLE.read_bytes())
-        with patch.object(provider, "retrieve_items", return_value=iter([item_data])):
+        preflight_item = PreflightSourceItemData(uid=item_data.uid, ref=item_data.uri)
+        with (
+            patch.object(provider, "iter_items", return_value=iter([preflight_item])),
+            patch.object(provider, "retrieve_item", return_value=item_data),
+        ):
             (item,) = self.app.import_source("mediterraneo")
         return item
 

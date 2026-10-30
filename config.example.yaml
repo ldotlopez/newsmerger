@@ -72,7 +72,7 @@ llms:
 sources:
   - id: elperiodicomediterraneo-castello
     name: El Periódico Mediterraneo (Castelló ciudad)
-    provider: prensaiberica_plain
+    provider: prensaiberica
     url: https://www.elperiodicomediterraneo.com/castello
 
   - id: castelloninformacion-castello
