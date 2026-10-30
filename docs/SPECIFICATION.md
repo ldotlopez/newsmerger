@@ -139,9 +139,18 @@ article.
     than the stored one (it never moves backwards); if the provider does not
     emit it, it takes the current time. `published_at` is set once and never
     overwritten.
+- **Listed dates:** a provider may list its items before fetching them, each
+  with the date its index shows. A stored item listed with a date that is not
+  newer than its `modified_at` is not fetched. One listed as newer is
+  fetched; once it has been checked, its `modified_at` takes the listed date
+  whether or not it changed, so it is not fetched again until a later date is
+  listed. If its fetched date is not newer than the stored one, it is not
+  updated. Items listed without a date are always fetched.
 - **Change detection:** an item is changed if any of `title`, `uri`,
   `mimetype`, content (`content_sha256`) or `data` differs. Dates do not
-  count. Re-importing an identical item writes nothing.
+  count. Re-importing an identical item writes nothing but a listed date
+  (above).
+- **Interrupted import:** the items fetched before an error are stored.
 - **Changed item:** it is overwritten. Its annotations are kept, but if its
   content changed, all its processing states become eligible again with
   attempts reset to zero. Artifacts are not invalidated.
