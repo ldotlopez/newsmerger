@@ -378,7 +378,7 @@ Each provider is a plugin of the same name, without options except
 
 | Provider | Site | Content |
 | :--- | :--- | :--- |
-| `prensaiberica`, `prensaiberica_plain` | Prensa Ibérica papers (El Periódico Mediterráneo...) | HTML |
+| `prensaiberica` | Index page of a Prensa Ibérica paper's section (El Periódico Mediterráneo...); unchanged articles are not fetched again | HTML |
 | `castelloninformacion` | Castellón Información | HTML |
 | `plaza` | Castellón Plaza | HTML |
 | `theguardian` | The Guardian | HTML |
