@@ -145,3 +145,6 @@ the newest rows lets their ids be reused.
   (decision 0002). Added: `delete deliveries`, with the `inspect
   deliveries` selection, which drops ledger rows. Removed: `deliver` and
   `deliveries resolve` (decision 0007). Remains: everything else.
+- **2026-10-30.** Added: `delete deliveries --all` deletes every ledger
+  row and takes no other filter, like `deliveries set-status --all`
+  (decision 0012). Remains: everything else.
