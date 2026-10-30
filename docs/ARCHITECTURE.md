@@ -39,7 +39,7 @@ config.yaml ─► Config ─► Application (app.py) ◄── cli.py, scripts/
 | `httpclient.py` | `requests` session with browser headers and a `foundation` cache, which `get(url, use_cache=False)` skips. |
 | `errors.py` | How failures reach the user: `PluginFailure`, the exception a plugin raises, with a message written for the user, when it cannot do its job in an expected way; `EXPECTED_ERRORS`, that and the failures of the network, the LLM backend and the database; `describe` (the message of a `PluginFailure`, `Type: message` for any other exception) and `log_failure` (error-level log; the traceback only with debug logging or when the exception is unexpected). |
 | `db.py` | SQLAlchemy models and `Database`, the only code that touches SQLite or the content storage. |
-| `providers.py` | The `Provider` and `ProviderType` protocols, `BaseProvider` and `IndexSiteProvider`, optional base classes. |
+| `providers.py` | The `Provider`, `PreflightProvider` and `ProviderType` protocols, `BaseProvider` and `IndexSiteProvider`, optional base classes. |
 | `processors.py` | The `Processor` and `ProcessorType` protocols, `ProcessorOptions`, `BaseProcessor`, `SkipItem` and `RunSummary`. |
 | `remixers.py` | The `Remixer` and `RemixerType` protocols and `BaseRemixer`. |
 | `sinks.py` | The `Sink` and `SinkType` protocols, `BaseItemSink`, `BaseArtifactSink`, `DeliveryOptions` and `ArtifactDeliveryOptions`, and `SelectionRequiredError`. |
@@ -77,7 +77,8 @@ out without objects. An object keeps its options (`self.options`) and
 receives what each task needs as method arguments: providers the source
 and the `HTTPClient`, processors, remixers and sinks the `Database`, the
 scope and the run's key. Each protocol has its own method
-(`retrieve_items`, `process`, `remix`, `deliver`). Processors, remixers and
+(`retrieve_items` or `iter_items`/`retrieve_item`, `process`, `remix`,
+`deliver`). Processors, remixers and
 sinks own their name, a class attribute that records who wrote an
 annotation; entry points register each class under it. Annotations and
 processing state are keyed by the process run's key, artifacts by the
@@ -143,8 +144,17 @@ grouping remixer reads `tags`.
 
 ## Providers
 
-`Provider.retrieve_items(source, fetcher)` yields `SourceItemData`. Each
-source builds its own provider object, with the source's options. Most
+`Provider.retrieve_items(source, fetcher)` yields `SourceItemData`. A
+`PreflightProvider` imports in two stages instead: `iter_items(source,
+fetcher)` lists `PreflightSourceItemData` (the `uid`, a `ref` of the
+plugin's own type to fetch the item with, and the `modified_at` the index
+shows, if any), and the core calls `retrieve_item(preflight_item, fetcher)`
+only for items that are new, listed without a date, or listed newer than
+the stored `modified_at`. An item that turns out no newer once retrieved is
+dropped with a warning, and a uid other than the listed one is warned about.
+Whichever the kind, what was fetched is stored even if the import fails
+halfway. Each source builds its own provider object, with the source's
+options. Most
 sites are `IndexSiteProvider`s, which take no options: fetch `index_url(source)` (the source's URL unless the provider
 overrides it), `parse_index` it into article URLs, fetch each article and
 `parse_item` it.
@@ -236,8 +246,11 @@ def __newstool_plugin__() -> PluginTypes:
 that aren't articles. For anything else (several items in one page, binary
 files), subclass `BaseProvider` and implement
 `retrieve_items(source, fetcher)` yourself, fetching with
-`fetcher.get(url)`; `csjuntasgobierno` is an example, and `feedreader` and
-`telegram_channel` ones with options (`self.options`).
+`fetcher.get(url)`; `feedreader` and `telegram_channel` are examples with
+options (`self.options`). When the index already gives each item's uid and
+date and fetching an item is expensive, implement `iter_items` and
+`retrieve_item` instead, so stored items are skipped undownloaded;
+`csjuntasgobierno` is an example.
 
 A class with options sets `options_model` to a `PluginOptions` subclass
 with defaults for the general case, so a use needs no options; its
