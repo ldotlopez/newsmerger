@@ -386,14 +386,16 @@ class TestPrensaIberica(unittest.TestCase):
             ),
         )
 
-    def test_iter_items_excludes_no_section_by_default(self) -> None:
+    def test_iter_items_excluded_sections_default_and_empty(self) -> None:
         index = read_sample("prensaiberica-index-castello.html")
         source = Mock(url="https://www.elperiodicomediterraneo.com/castello/")
-        provider = PrensaIbericaProvider(PrensaIbericaOptions(), Services())
-
-        items = list(provider.iter_items(source, Mock(get=Mock(return_value=index))))
-
-        self.assertEqual(len(items), 41)
+        for options, expected in (
+            (PrensaIbericaOptions(), 21),
+            (PrensaIbericaOptions(exclude_sections=[]), 41),
+        ):
+            provider = PrensaIbericaProvider(options, Services())
+            fetcher = Mock(get=Mock(return_value=index))
+            self.assertEqual(len(list(provider.iter_items(source, fetcher))), expected)
 
     def test_iter_items_lists_dated_articles_without_excluded_sections(self) -> None:
         # The excluded titles differ in case from the index's headers.

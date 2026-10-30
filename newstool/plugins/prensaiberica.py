@@ -24,9 +24,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 class Options(PluginOptions):
-    # Index sections whose articles are left out, by header title (e.g.
-    # "Comarcas"), compared case-insensitively.
-    exclude_sections: tuple[str, ...] = ()
+    # Index sections whose articles are left out, by header title, compared
+    # case-insensitively. An empty list excludes none.
+    exclude_sections: tuple[str, ...] = (
+        "Comarcas",
+        "Vídeos y galerías de Castellón",
+    )
 
 
 class PrensaIbericaProvider(BaseProvider):
