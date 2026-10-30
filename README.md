@@ -374,7 +374,7 @@ output on both streams; `NO_COLOR=1` only drops the colors.
 ### Providers
 
 Each provider is a plugin of the same name, without options except
-`telegram_channel` and `feedreader`.
+`prensaiberica`, `telegram_channel` and `feedreader`.
 
 | Provider | Site | Content |
 | :--- | :--- | :--- |
@@ -385,6 +385,20 @@ Each provider is a plugin of the same name, without options except
 | `csjuntasgobierno` | Index page of *juntas de gobierno* minutes | PDF |
 | `telegram_channel` | Articles linked from a public Telegram channel (`url: https://t.me/<channel>`) | HTML |
 | `feedreader` | Any RSS or Atom feed (`url:` the feed) | The feed's HTML or text, or the article's HTML with `fetch_article` or `article_selector` |
+
+`prensaiberica` imports the articles its section's index page lists. Its
+`exclude_sections` option (default none) leaves out the articles of the
+index's sections with those header titles, compared case-insensitively:
+
+```yaml
+sources:
+  - id: elperiodicomediterraneo-castello
+    name: El Periódico Mediterraneo (Castelló ciudad)
+    provider: prensaiberica
+    url: https://www.elperiodicomediterraneo.com/castello
+    options:
+      exclude_sections: [Comarcas, Vídeos y galerías de Castellón]
+```
 
 `telegram_channel` reads the channel's web preview, which only public
 channels have, and imports one item per linked article, keyed by its
