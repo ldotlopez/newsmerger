@@ -301,6 +301,8 @@ SQLite tables:
 Every table with an integer id uses `AUTOINCREMENT`, so a deleted id is
 never reused: the CLI selects items and annotations by id (decision 0008).
 The DTOs carry it; `upsert_source_items` sets it on the items it saves.
+`import_source` stores each batch oldest first, so new item ids follow
+publication order.
 
 SQLAlchemy models never leave `db.py`: `Database` takes and returns DTOs.
 Every SQLite connection gets `SQLITE_PRAGMAS` from a SQLAlchemy `connect`
