@@ -7,7 +7,6 @@ from typing import Any, Protocol, runtime_checkable
 
 import pydantic
 
-from .httpclient import HTTPClient
 from .models import PreflightSourceItemData, SourceData, SourceItemData
 from .plugins import NoOptions, Services
 
@@ -20,9 +19,7 @@ type URI = str
 class Provider(Protocol):
     """Retrieves all of a source's items in one go."""
 
-    def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]: ...
+    def retrieve_items(self, source: SourceData) -> Iterator[SourceItemData]: ...
 
 
 @runtime_checkable
@@ -32,11 +29,11 @@ class PreflightProvider[T](Protocol):
     not newer than the stored one is not fetched."""
 
     def iter_items(
-        self, source: SourceData, fetcher: HTTPClient
+        self, source: SourceData
     ) -> Iterator[PreflightSourceItemData[T]]: ...
 
     def retrieve_item(
-        self, preflight_item: PreflightSourceItemData[T], fetcher: HTTPClient
+        self, preflight_item: PreflightSourceItemData[T]
     ) -> SourceItemData: ...
 
 
@@ -59,6 +56,7 @@ class BaseProvider:
 
     def __init__(self, options: Any, services: Services) -> None:
         self.options = options
+        self.fetcher = services.fetcher
 
 
 class IndexSiteProvider(BaseProvider):
@@ -69,23 +67,19 @@ class IndexSiteProvider(BaseProvider):
         return str(source.url)
 
     @abstractmethod
-    def parse_index(
-        self, content: bytes, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[URI]: ...
+    def parse_index(self, content: bytes, source: SourceData) -> Iterator[URI]: ...
 
     @abstractmethod
     def parse_item(self, content: bytes) -> SourceItemData: ...
 
-    def retrieve_item(self, url: str, fetcher: HTTPClient) -> SourceItemData:
+    def retrieve_item(self, url: str) -> SourceItemData:
         """Fetch and parse one item URL."""
-        return self.parse_item(fetcher.get(url))
+        return self.parse_item(self.fetcher.get(url))
 
-    def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]:
-        index = fetcher.get(self.index_url(source))
-        for url in self.parse_index(index, source, fetcher):
+    def retrieve_items(self, source: SourceData) -> Iterator[SourceItemData]:
+        index = self.fetcher.get(self.index_url(source))
+        for url in self.parse_index(index, source):
             try:
-                yield self.retrieve_item(url, fetcher)
+                yield self.retrieve_item(url)
             except ValueError as e:
                 LOGGER.error(f"error '{e}' while parsing '{url}'")

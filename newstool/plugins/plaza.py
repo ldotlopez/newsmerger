@@ -16,7 +16,6 @@ from foundation.scrapelib import (
 )
 
 from ..errors import PluginFailure
-from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
 from . import PluginTypes
@@ -45,9 +44,7 @@ def parse_datetime(tag: bs4.Tag) -> datetime:
 
 
 class PlazaProvider(IndexSiteProvider):
-    def parse_index(
-        self, content: bytes, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[URI]:
+    def parse_index(self, content: bytes, source: SourceData) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
         section = get_section(soup, "Castellón")
         container = section.find_parent("div", {"class": "wrap-SUPERIOR"})

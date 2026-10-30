@@ -12,6 +12,7 @@ import pydantic
 from foundation.plugin import BaseRegister, PluginError, ProtocolConformanceError
 
 from ..db import Database
+from ..httpclient import HTTPClient
 from ..llms import LLM, LLMUnavailableError
 
 # What an entry point returns: (type name, type Protocol, class) per class.
@@ -52,11 +53,12 @@ def merge_options(
 
 @dataclasses.dataclass(slots=True, kw_only=True)
 class Services:
-    """What the core shares with plugin objects: the database, and
-    `llm_factory`, which returns the LLM a name refers to (see
+    """What the core shares with plugin objects: the database, the HTTP
+    client, and `llm_factory`, which returns the LLM a name refers to (see
     `UsesLLMOptions`), built on first use."""
 
     db: Database
+    fetcher: HTTPClient
     llm_factory: Callable[[str | None], LLM] | None = None
 
     def llm(self, name: str | None = None) -> LLM:

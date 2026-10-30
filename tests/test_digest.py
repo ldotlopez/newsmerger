@@ -49,7 +49,7 @@ class DigestRemixerTests(unittest.TestCase):
     ) -> tuple[Mock, list[tuple[str, str, str]]]:
         llm = Mock()
         llm.prompt.return_value = response
-        services = Services(db=self.db, llm_factory=lambda name: llm)
+        services = Services(db=self.db, fetcher=Mock(), llm_factory=lambda name: llm)
         remixer = digest.DigestRemixer(digest.DigestOptions(**options), services)
         return llm, list(remixer.produce(scope))
 
@@ -131,7 +131,8 @@ class DigestPluginTests(unittest.TestCase):
 
         ((name, protocol, cls),) = digest.__newstool_plugin__()
         remixer = cls(
-            digest.DigestOptions(llm="writer"), Services(db=Mock(), llm_factory=factory)
+            digest.DigestOptions(llm="writer"),
+            Services(db=Mock(), fetcher=Mock(), llm_factory=factory),
         )
 
         self.assertEqual((name, protocol), ("digest", RemixerType))
@@ -140,7 +141,9 @@ class DigestPluginTests(unittest.TestCase):
 
     def test_cannot_be_built_without_an_llm(self) -> None:
         with self.assertRaises(LLMUnavailableError):
-            digest.DigestRemixer(digest.DigestOptions(), Services(db=Mock()))
+            digest.DigestRemixer(
+                digest.DigestOptions(), Services(db=Mock(), fetcher=Mock())
+            )
 
 
 if __name__ == "__main__":

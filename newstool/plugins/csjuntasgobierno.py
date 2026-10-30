@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 import bs4
 
 from ..errors import PluginFailure
-from ..httpclient import HTTPClient
 from ..models import PreflightSourceItemData, SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
 from . import PluginTypes
@@ -50,11 +49,11 @@ class PreparseData:
 
 class CSJuntasGobiernoProvider(BaseProvider):
     def iter_items(
-        self, source: SourceData, fetcher: HTTPClient
+        self, source: SourceData
     ) -> Iterator[PreflightSourceItemData[PreparseData]]:
         # The index lists every session since 2006 and dates each one: the
         # core skips the stored sessions undownloaded.
-        index = fetcher.get(str(source.url))
+        index = self.fetcher.get(str(source.url))
         for protodata in self._iter_pdf_links(index, str(source.url)):
             yield PreflightSourceItemData(
                 uid=hashlib.sha256(protodata.uri.encode("utf-8")).hexdigest(),
@@ -65,7 +64,6 @@ class CSJuntasGobiernoProvider(BaseProvider):
     def retrieve_item(
         self,
         preflight_item: PreflightSourceItemData[PreparseData],
-        fetcher: HTTPClient,
     ) -> SourceItemData:
         protodata = preflight_item.ref
         return SourceItemData(
@@ -74,7 +72,7 @@ class CSJuntasGobiernoProvider(BaseProvider):
             title=protodata.title,
             published_at=protodata.dt,
             modified_at=protodata.dt,
-            content=fetcher.get(protodata.uri),
+            content=self.fetcher.get(protodata.uri),
             mimetype="application/pdf",
             data={
                 "type": protodata.type_,

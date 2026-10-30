@@ -16,7 +16,6 @@ from foundation.scrapelib import (
 )
 
 from ..errors import PluginFailure
-from ..httpclient import HTTPClient
 from ..models import PreflightSourceItemData, SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
 from . import PluginOptions, PluginTypes
@@ -40,13 +39,11 @@ class PrensaIbericaProvider(BaseProvider):
     options_model = Options
     options: Options
 
-    def iter_items(
-        self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[PreflightSourceItemData[str]]:
+    def iter_items(self, source: SourceData) -> Iterator[PreflightSourceItemData[str]]:
         # The index dates each article (dateModified): the core skips the
         # stored ones that did not change.
         url = str(source.url)
-        soup = soupify(fetcher.get(url).decode("utf-8"))
+        soup = soupify(self.fetcher.get(url).decode("utf-8"))
         parts = urlsplit(url)
         site_prefix = f"{parts.scheme}://{parts.netloc}/"
 
@@ -71,9 +68,9 @@ class PrensaIbericaProvider(BaseProvider):
             )
 
     def retrieve_item(
-        self, preflight_item: PreflightSourceItemData[str], fetcher: HTTPClient
+        self, preflight_item: PreflightSourceItemData[str]
     ) -> SourceItemData:
-        return self.parse_item(fetcher.get(preflight_item.ref))
+        return self.parse_item(self.fetcher.get(preflight_item.ref))
 
     def parse_item(self, content: bytes) -> SourceItemData:
         soup = soupify(content.decode("utf-8"))

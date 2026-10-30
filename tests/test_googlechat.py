@@ -118,7 +118,7 @@ class GoogleChatSinkTests(unittest.TestCase):
 
     def deliver(self, **options: Any) -> None:
         sink = GoogleChatSink(
-            webhook_options(self.section, options), Services(db=self.db)
+            webhook_options(self.section, options), Services(db=self.db, fetcher=Mock())
         )
         sink.deliver(key="googlechat")
 

@@ -32,16 +32,14 @@ class FeedReaderProvider(BaseProvider):
     options_model = Options
     options: Options
 
-    def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]:
-        feed = fetch_feed(str(source.url), fetcher)
+    def retrieve_items(self, source: SourceData) -> Iterator[SourceItemData]:
+        feed = fetch_feed(str(source.url), self.fetcher)
         selector = self.options.article_selector
         for entry in feed["entries"]:
             try:
                 item = parse_entry(entry)
                 if self.options.fetch_article:
-                    item.content = fetch_article(item.uri, fetcher)
+                    item.content = fetch_article(item.uri, self.fetcher)
                     item.mimetype = "text/html"
                 # Plain text has no elements to select: it is kept whole.
                 if selector is not None and item.mimetype in HTML_MIMETYPES:

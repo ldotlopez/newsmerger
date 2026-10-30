@@ -7,6 +7,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 from newstool.db import Database, ProcessingStatus
 from newstool.models import ProcessingScope, SourceData, SourceItem
@@ -48,7 +49,7 @@ class RemixerTestCase(unittest.TestCase):
 class FeedGeneratorTests(RemixerTestCase):
     def feed(self, **params) -> ET.Element:
         remixer = feedgenerator.FeedGeneratorRemixer(
-            feedgenerator.Options(**params), Services(db=self.db)
+            feedgenerator.Options(**params), Services(db=self.db, fetcher=Mock())
         )
         (artifact,) = remixer.produce(ProcessingScope())
         name, content, content_type = artifact
@@ -83,7 +84,7 @@ class GroupingTests(RemixerTestCase):
 
     def groups(self, remixer_class) -> list[list[str]]:
         cfg = grouping.GroupingOptions(tau=None, lookback="10000d")
-        remixer = remixer_class(cfg, Services(db=self.db))
+        remixer = remixer_class(cfg, Services(db=self.db, fetcher=Mock()))
         ((_, content, _),) = remixer.produce(ProcessingScope())
         return [
             sorted(member["uid"] for member in group["members"])
@@ -114,7 +115,7 @@ class GroupingTests(RemixerTestCase):
     def test_nothing_to_group_produces_no_artifact(self) -> None:
         self.add_items(1)
         cfg = grouping.GroupingOptions()
-        remixer = grouping.SingleLinkRemixer(cfg, Services(db=self.db))
+        remixer = grouping.SingleLinkRemixer(cfg, Services(db=self.db, fetcher=Mock()))
 
         self.assertEqual(list(remixer.produce(ProcessingScope())), [])
 
@@ -145,7 +146,7 @@ class EmbeddingGroupingTests(RemixerTestCase):
     def groups_of(self, **options) -> tuple[list[list[str]], dict]:
         cfg = grouping.EmbeddingsOptions(tau=None, lookback="10000d", **options)
         ((_, content, _),) = grouping.EmbeddingsRemixer(
-            cfg, Services(db=self.db)
+            cfg, Services(db=self.db, fetcher=Mock())
         ).produce(ProcessingScope())
         payload = json.loads(content)
         groups = [

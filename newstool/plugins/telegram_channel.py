@@ -18,7 +18,6 @@ from foundation.scrapelib import (
 from pydantic import PositiveInt
 
 from ..errors import PluginFailure
-from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
 from . import PluginOptions, PluginTypes
@@ -128,15 +127,13 @@ class TelegramChannelProvider(BaseProvider):
     options_model = Options
     options: Options
 
-    def iter_posts(
-        self, source: SourceData, fetcher: HTTPClient, pages: int
-    ) -> Iterator[Post]:
+    def iter_posts(self, source: SourceData, pages: int) -> Iterator[Post]:
         page_url: str | None = preview_url(source)
         for _ in range(pages):
             if page_url is None:
                 return
             # New posts must show up on every run, not after the cache expires.
-            content = fetcher.get(page_url, use_cache=False)
+            content = self.fetcher.get(page_url, use_cache=False)
             posts, page_url = parse_preview(content, page_url)
             if not posts:
                 raise PluginFailure(
@@ -144,13 +141,11 @@ class TelegramChannelProvider(BaseProvider):
                 )
             yield from posts
 
-    def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData]:
-        for post in self.iter_posts(source, fetcher, self.options.pages):
+    def retrieve_items(self, source: SourceData) -> Iterator[SourceItemData]:
+        for post in self.iter_posts(source, self.options.pages):
             for url in post.links:
                 try:
-                    item = parse_article(fetcher.get(url), post)
+                    item = parse_article(self.fetcher.get(url), post)
                 except ValueError as e:
                     LOGGER.error(f"error '{e}' while parsing '{url}' ({post.id})")
                     continue

@@ -32,7 +32,9 @@ class RecordingItemSink(BaseItemSink[DeliveryOptions]):
     def __init__(
         self, db: Database, failing: set[str] | None = None, **options
     ) -> None:
-        super().__init__(DeliveryOptions.model_validate(options), Services(db=db))
+        super().__init__(
+            DeliveryOptions.model_validate(options), Services(db=db, fetcher=Mock())
+        )
         self.failing = failing or set()
         self.sent: list[str] = []
 
@@ -53,7 +55,8 @@ class RecordingArtifactSink(BaseArtifactSink[ArtifactDeliveryOptions]):
     def __init__(self, db: Database, **options) -> None:
         options = {"artifacts": ["digest"], **options}
         super().__init__(
-            ArtifactDeliveryOptions.model_validate(options), Services(db=db)
+            ArtifactDeliveryOptions.model_validate(options),
+            Services(db=db, fetcher=Mock()),
         )
         self.sent: list[str] = []
 

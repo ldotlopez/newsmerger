@@ -61,16 +61,16 @@ class Application:
         self._db = Database(
             config.database_uri, config.content_dir, create_schema=create_schema
         )
-        self._services = Services(db=self._db, llm_factory=self._llm)
-        # Each profile's object, built when a run first needs it.
-        self._objects: dict[Profile, Any] = {}
-
         self._cache = UserCache(
             app=PACKAGE_NAME,
             expiration_time=config.cache.expiration,
             base_dir=config.cache_dir,
         )
-        self._fetcher = HTTPClient(cache=self._cache)
+        self._services = Services(
+            db=self._db, fetcher=HTTPClient(cache=self._cache), llm_factory=self._llm
+        )
+        # Each profile's object, built when a run first needs it.
+        self._objects: dict[Profile, Any] = {}
         self._lock_file: IO[str] | None = None
 
     @classmethod
@@ -174,7 +174,7 @@ class Application:
         if isinstance(provider, PreflightProvider):
             item_datas = self._retrieve_preflight(source, provider, checked)
         else:
-            item_datas = provider.retrieve_items(source, self._fetcher)
+            item_datas = provider.retrieve_items(source)
         items = []
         try:
             for item_data in item_datas:
@@ -202,14 +202,14 @@ class Application:
         Items listed without a date are always fetched. Fills `checked` with
         the listed date of each stored item retrieved."""
         stored_times = self._db.get_item_modified_times(source.id)
-        for preflight_item in provider.iter_items(source, self._fetcher):
+        for preflight_item in provider.iter_items(source):
             stored = stored_times.get(preflight_item.uid)
             listed = preflight_item.modified_at
             dated = stored is not None and listed is not None
             if dated and listed <= stored:
                 continue
             try:
-                item_data = provider.retrieve_item(preflight_item, self._fetcher)
+                item_data = provider.retrieve_item(preflight_item)
             except ValueError as e:
                 LOGGER.error(f"{describe(e)} while retrieving '{preflight_item.ref}'")
                 continue

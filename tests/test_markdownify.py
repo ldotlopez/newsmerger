@@ -33,7 +33,9 @@ class MarkdownifyPdfTests(unittest.TestCase):
             uri="https://example.test/acta.pdf",
             mimetype="application/pdf",
         )
-        processor = MarkdownifyProcessor(ProcessorOptions(), Services(db=db))
+        processor = MarkdownifyProcessor(
+            ProcessorOptions(), Services(db=db, fetcher=Mock())
+        )
         return processor.process_item(item)
 
     def test_extracts_the_text_of_every_page(self) -> None:

@@ -14,7 +14,6 @@ from foundation.scrapelib import (
 )
 
 from ..errors import PluginFailure
-from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
 from . import PluginTypes
@@ -26,9 +25,7 @@ class CastellonInformacionProvider(IndexSiteProvider):
     def index_url(self, source: SourceData) -> str:
         return str(source.url).rstrip("/") + "/feed/"
 
-    def parse_index(
-        self, content: bytes, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[URI]:
+    def parse_index(self, content: bytes, source: SourceData) -> Iterator[URI]:
         feed = feedparser.parse(content.decode("utf-8"))
         for entry in feed.entries:
             yield entry.link

@@ -14,7 +14,6 @@ from foundation.scrapelib import (
 )
 
 from ..errors import PluginFailure
-from ..httpclient import HTTPClient
 from ..models import SourceData, SourceItemData
 from ..providers import URI, IndexSiteProvider, ProviderType
 from . import PluginTypes
@@ -26,15 +25,13 @@ NON_ARTICLE_RE = re.compile(r"/(live|video|gallery|audio|picture)/")
 
 
 class TheGuardianProvider(IndexSiteProvider):
-    def parse_index(
-        self, content: bytes, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[URI]:
+    def parse_index(self, content: bytes, source: SourceData) -> Iterator[URI]:
         soup = soupify(content.decode("utf-8"))
         tag = soup.select_one('link[rel="alternate"][type="application/rss+xml"]')
         if tag is None or not (href := tag.attrs.get("href")):
             raise PluginFailure("Could not find RSS feed link in index page")
 
-        feed = feedparser.parse(fetcher.get(urljoin(self.index_url(source), href)))
+        feed = feedparser.parse(self.fetcher.get(urljoin(self.index_url(source), href)))
         for entry in feed["entries"]:
             if NON_ARTICLE_RE.search(entry["link"]):
                 LOGGER.debug(f"Skipping non-article entry '{entry['link']}'")

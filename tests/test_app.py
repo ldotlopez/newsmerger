@@ -52,7 +52,6 @@ def listed(
 
 def retrieved(
     item: PreflightSourceItemData[str],
-    fetcher: object,
     *,
     uid: str | None = None,
     modified_at: datetime | None = None,
@@ -159,10 +158,8 @@ cache_dir: {self.tmp_dir}/cache
         self.assertEqual({item.uid for item in self.app.get_items()}, {"new", "late"})
 
     def test_import_stores_new_items_oldest_first(self) -> None:
-        def retrieve_published(
-            item: PreflightSourceItemData[str], fetcher: object
-        ) -> SourceItemData:
-            item_data = retrieved(item, fetcher)
+        def retrieve_published(item: PreflightSourceItemData[str]) -> SourceItemData:
+            item_data = retrieved(item)
             item_data.published_at = item.modified_at
             return item_data
 
@@ -191,7 +188,7 @@ cache_dir: {self.tmp_dir}/cache
 
     def test_items_not_newer_once_retrieved_are_not_updated(self) -> None:
         self.import_preflight([listed("a", MAY)])
-        stale = lambda item, fetcher: retrieved(item, fetcher, modified_at=MAY)
+        stale = lambda item: retrieved(item, modified_at=MAY)
         with self.assertLogs("newstool.app", "WARNING") as logs:
             imported, _ = self.import_preflight([listed("a", JUNE)], stale)
 
@@ -206,8 +203,8 @@ cache_dir: {self.tmp_dir}/cache
 
         # The page bumps its date, but its content is still April's: the
         # store writes nothing, yet the listed date counts as checked.
-        def same(item, fetcher) -> SourceItemData:
-            april = retrieved(item, fetcher, modified_at=APRIL)
+        def same(item) -> SourceItemData:
+            april = retrieved(item, modified_at=APRIL)
             return april.model_copy(update={"modified_at": MAY})
 
         listed_newer = [listed("a", MAY)]
@@ -219,7 +216,7 @@ cache_dir: {self.tmp_dir}/cache
         retrieve_item.assert_not_called()
 
     def test_a_uid_other_than_listed_is_warned_about_and_stored(self) -> None:
-        renamed = lambda item, fetcher: retrieved(item, fetcher, uid="other")
+        renamed = lambda item: retrieved(item, uid="other")
         with self.assertLogs("newstool.app", "WARNING") as logs:
             (imported,), _ = self.import_preflight([listed("a")], renamed)
 
@@ -227,10 +224,10 @@ cache_dir: {self.tmp_dir}/cache
         self.assertIn("retrieved as 'other'", logs.output[0])
 
     def test_a_bad_item_is_skipped(self) -> None:
-        def retrieve(item, fetcher) -> SourceItemData:
+        def retrieve(item) -> SourceItemData:
             if item.uid == "bad":
                 raise PluginFailure("not a PDF")
-            return retrieved(item, fetcher)
+            return retrieved(item)
 
         with self.assertLogs("newstool.app", "ERROR"):
             (imported,), _ = self.import_preflight(
@@ -239,10 +236,10 @@ cache_dir: {self.tmp_dir}/cache
         self.assertEqual(imported.uid, "good")
 
     def test_items_fetched_before_a_failure_are_stored(self) -> None:
-        def retrieve(item, fetcher) -> SourceItemData:
+        def retrieve(item) -> SourceItemData:
             if item.uid == "second":
                 raise ConnectionError("timed out")
-            return retrieved(item, fetcher)
+            return retrieved(item)
 
         with self.assertRaises(ConnectionError):
             self.import_preflight([listed("first"), listed("second")], retrieve)
@@ -269,9 +266,7 @@ cache_dir: {self.tmp_dir}/cache
                 self.assertEqual(
                     provider.options, feedreader.Options(article_selector=expected)
                 )
-                call.assert_called_once_with(
-                    app.config.get_source("blog"), app._fetcher
-                )
+                call.assert_called_once_with(app.config.get_source("blog"))
 
     def test_unknown_provider_option_is_a_config_error(self) -> None:
         with self.assertRaisesRegex(
@@ -839,7 +834,9 @@ class ClassRegisterTests(unittest.TestCase):
         )
 
     def test_entry_points_must_return_classes(self) -> None:
-        instance = MarkdownifyProcessor(ProcessorOptions(), Services(db=Mock()))
+        instance = MarkdownifyProcessor(
+            ProcessorOptions(), Services(db=Mock(), fetcher=Mock())
+        )
         register = self.register([("markdownify", ProcessorType, instance)])
 
         with self.assertRaisesRegex(PluginError, "as an instance, not a class"):

@@ -48,7 +48,7 @@ class ServicesTests(unittest.TestCase):
             names.append(name)
             return llm
 
-        services = Services(db=Mock(), llm_factory=factory)
+        services = Services(db=Mock(), fetcher=Mock(), llm_factory=factory)
 
         self.assertIs(services.llm(), llm)
         self.assertIs(services.llm("b"), llm)
@@ -56,7 +56,7 @@ class ServicesTests(unittest.TestCase):
 
     def test_without_llms_it_raises(self) -> None:
         with self.assertRaisesRegex(LLMUnavailableError, "no llm is configured"):
-            Services(db=Mock()).llm()
+            Services(db=Mock(), fetcher=Mock()).llm()
 
 
 class ProcessorTestCase(unittest.TestCase):
@@ -93,7 +93,7 @@ class ProcessorTestCase(unittest.TestCase):
 
     def build(self, cls: type, llm: StubLLM, **options: object) -> Processor:
         """A processor of `cls` with `options`, using `llm`."""
-        services = Services(db=self.db, llm_factory=lambda name: llm)
+        services = Services(db=self.db, fetcher=Mock(), llm_factory=lambda name: llm)
         return cls(cls.options_model(**options), services)
 
     def annotation(self, processor: Processor, key: str) -> object:
@@ -249,7 +249,7 @@ class ConsumerPluginTests(unittest.TestCase):
                 ((_, protocol, cls),) = plugin.__newstool_plugin__()
                 processor = cls(
                     cls.options_model(**options),
-                    Services(db=Mock(), llm_factory=factory),
+                    Services(db=Mock(), fetcher=Mock(), llm_factory=factory),
                 )
 
                 self.assertIs(protocol, ProcessorType)
@@ -261,7 +261,7 @@ class ConsumerPluginTests(unittest.TestCase):
             with self.subTest(plugin=plugin.__name__):
                 ((_, _, cls),) = plugin.__newstool_plugin__()
                 with self.assertRaises(LLMUnavailableError):
-                    cls(cls.options_model(), Services(db=Mock()))
+                    cls(cls.options_model(), Services(db=Mock(), fetcher=Mock()))
 
 
 class OllamaTests(unittest.TestCase):
@@ -271,7 +271,7 @@ class OllamaTests(unittest.TestCase):
         client.embed.return_value = Mock(embeddings=[(1.0, 2.0)])
         options = ollama.Options(chat_model="chat", embed_model="embedder")
         with patch.object(ollama, "ollama_client", return_value=client):
-            llm = ollama.OllamaLLM(options, Services(db=Mock()))
+            llm = ollama.OllamaLLM(options, Services(db=Mock(), fetcher=Mock()))
 
         self.assertEqual(llm.prompt("hi"), "ok")
         llm.prompt("hi", model="other", json_mode=True, context_length=8192)
@@ -300,7 +300,9 @@ class OllamaTests(unittest.TestCase):
 
     def test_registers_one_llm_class_named_ollama(self) -> None:
         ((name, protocol, cls),) = ollama.__newstool_plugin__()
-        llm = cls(ollama.Options(chat_model="chat"), Services(db=Mock()))
+        llm = cls(
+            ollama.Options(chat_model="chat"), Services(db=Mock(), fetcher=Mock())
+        )
 
         self.assertEqual((name, protocol, cls), ("ollama", LLMType, ollama.OllamaLLM))
         self.assertEqual(
