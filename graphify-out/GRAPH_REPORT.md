@@ -1,7 +1,7 @@
 # Graph Report - prensaiberica-preflight  (2026-10-30)
 
 ## Corpus Check
-- 75 files · ~146,322 words
+- 75 files · ~146,395 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 5 file(s) not represented in the graph (top: (none) 4, .lock 1)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `a18cf1e0`
+- Built from commit: `b05bc67f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -381,7 +381,7 @@ Nodes (4): DBSource, SourceData, CastellonInformacionProvider, IndexSiteProvider
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `Database` connect `BaseProcessor` to `test_db.py`, `db.py`, `Artifact`, `feedgenerator.py`, `StubLLM`, `DeleteCommandTests`, `test_telegram.py`, `Delivery`, `Services`, `BaseItemSink`, `Any`, `TelegramSinkTests`, `test_app.py`, `.session_scope`, `plugins/__init__.py`, `ProcessingScope`, `grouping.py`, `migrate_autoincrement.py`, `.close`, `RecordingItemSink`, `Config`, `GoogleChatSinkTests`, `Application`, `.record_result`, `MarkdownifyProcessor`, `Delivery`, `.feed`, `PluginOptions`, `RunSummary`, `.save_artifact`, `.__init__`, `DigestRemixerTests`, `SourceItem`, `SourceData`?**
-  _High betweenness centrality (0.135) - this node is a cross-community bridge._
+  _High betweenness centrality (0.134) - this node is a cross-community bridge._
 - **Are the 42 inferred relationships involving `Database` (e.g. with `Application` and `Annotation`) actually correct?**
   _`Database` has 42 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `newstool`, `External pipelines (scripts/pipeline_url.py)`, `Annotation` to the rest of the system?**
@@ -389,7 +389,7 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `test_db.py` be split into smaller, more focused modules?**
   _Cohesion score 0.05880665519219736 - nodes in this community are weakly interconnected._
 - **Why does `ProcessingScope` connect `ProcessingScope` to `test_db.py`, `db.py`, `ApplicationTests`, `BaseProcessor`, `Artifact`, `feedgenerator.py`, `StubLLM`, `DeleteCommandTests`, `invoke`, `Context`, `test_telegram.py`, `Delivery`, `inspect_deliveries_cmd`, `BaseItemSink`, `Any`, `test_app.py`, `report_user_errors`, `grouping.py`, `cli.py`, `RecordingItemSink`, `GoogleChatSinkTests`, `Application`, `Delivery`, `.feed`, `RunSummary`, `.save_artifact`, `DigestRemixerTests`, `deliveries_send_cmd`, `SourceItem`?**
-  _High betweenness centrality (0.117) - this node is a cross-community bridge._
+  _High betweenness centrality (0.116) - this node is a cross-community bridge._
 - **Are the 41 inferred relationships involving `ProcessingScope` (e.g. with `Application` and `delete_annotations_cmd()`) actually correct?**
   _`ProcessingScope` has 41 INFERRED edges - model-reasoned connections that need verification._
 - **Should `catalog.py` be split into smaller, more focused modules?**
