@@ -1060,6 +1060,9 @@ def delete_artifacts_cmd(
 @delete_group.command("deliveries")
 @delivery_options
 @sort_option(DELIVERY_SORTS)
+@click.option(
+    "--all", "all_rows", is_flag=True, help="Every ledger row; takes no filter"
+)
 @click.pass_context
 @report_user_errors
 def delete_deliveries_cmd(
@@ -1070,15 +1073,18 @@ def delete_deliveries_cmd(
     sink: str | None,
     status: str | None,
     sort: str,
+    all_rows: bool,
 ) -> None:
     """Delete ledger rows; --limit counts rows.
 
     A deleted subject is queued again by the next run of its delivery while
     its lookback still covers it, and is then delivered again.
     """
-    require_selection(
-        *delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
-    )
+    filters = delivery_filters(scope, artifact_ids, delivery_ids, sink, status)
+    if all_rows and any(filters):
+        raise click.UsageError("--all takes no filter or id")
+    if not all_rows:
+        require_selection(*filters)
     app = app_from_context(ctx, write=True)
     deliveries = select_deliveries(
         app, scope, artifact_ids, delivery_ids, sink, status, sort

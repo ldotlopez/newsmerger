@@ -160,6 +160,20 @@ class DeleteCommandTests(unittest.TestCase):
         self.assertIn("Deleted 1 delivery(ies)", result.stdout)
         self.assertEqual([d.id for d in self.db.find_deliveries()], [1])
 
+    def test_deliveries_are_deleted_all_at_once(self) -> None:
+        for item in self.items:
+            self.deliver(item)
+
+        refused = self.run_cli("delete", "deliveries")
+        mixed = self.run_cli("delete", "deliveries", "--all", "--sink", "telegram")
+        everything = self.run_cli("delete", "deliveries", "--all")
+
+        self.assertNotEqual(refused.exit_code, 0)
+        self.assertNotEqual(mixed.exit_code, 0)
+        self.assertEqual(everything.exit_code, 0, everything.output)
+        self.assertIn("Deleted 2 delivery(ies)", everything.stdout)
+        self.assertEqual(self.db.find_deliveries(), [])
+
     def test_deliveries_are_marked_by_selection_or_all_at_once(self) -> None:
         for item in self.items:
             self.deliver(item)
