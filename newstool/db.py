@@ -681,13 +681,13 @@ class Database:
                 query = query.limit(scope.limit)
             return [db_item.to_dto() for db_item in query]
 
-    def get_item_uids(self, source_id: str) -> set[str]:
-        """The uids stored for a source."""
+    def get_item_modified_times(self, source_id: str) -> dict[str, datetime]:
+        """The `modified_at` of each uid stored for a source."""
         with self.session_scope() as sess:
-            query = sess.query(DBSourceItem.uid).filter(
+            query = sess.query(DBSourceItem.uid, DBSourceItem.modified_at).filter(
                 DBSourceItem.source_id == source_id
             )
-            return {uid for (uid,) in query}
+            return dict(query.all())
 
     @staticmethod
     def _apply_scope(query: Query, scope: ProcessingScope) -> Query:

@@ -8,7 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 import pydantic
 
 from .httpclient import HTTPClient
-from .models import LazySourceItemData, SourceData, SourceItemData
+from .models import PreflightSourceItemData, SourceData, SourceItemData
 from .plugins import NoOptions, Services
 
 LOGGER = logging.getLogger(__name__)
@@ -18,12 +18,26 @@ type URI = str
 
 @runtime_checkable
 class Provider(Protocol):
-    """Retrieves a source's items. Items it yields as `LazySourceItemData` are
-    loaded only if their uid is not stored yet."""
+    """Retrieves all of a source's items in one go."""
 
     def retrieve_items(
         self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData | LazySourceItemData]: ...
+    ) -> Iterator[SourceItemData]: ...
+
+
+@runtime_checkable
+class PreflightProvider[T](Protocol):
+    """Retrieves a source's items in two stages: lists them, then fetches the
+    ones the core asks for. A stored item listed with a `modified_at` that is
+    not newer than the stored one is not fetched."""
+
+    def iter_items(
+        self, source: SourceData, fetcher: HTTPClient
+    ) -> Iterator[PreflightSourceItemData[T]]: ...
+
+    def retrieve_item(
+        self, preflight_item: PreflightSourceItemData[T], fetcher: HTTPClient
+    ) -> SourceItemData: ...
 
 
 @runtime_checkable
@@ -33,21 +47,18 @@ class ProviderType(Protocol):
 
     options_model: type[pydantic.BaseModel]
 
-    def __call__(self, options: Any, services: Services) -> Provider: ...
+    def __call__(
+        self, options: Any, services: Services
+    ) -> Provider | PreflightProvider: ...
 
 
 class BaseProvider:
-    """A Provider built with its source's options."""
+    """A Provider or PreflightProvider built with its source's options."""
 
     options_model: type[pydantic.BaseModel] = NoOptions
 
     def __init__(self, options: Any, services: Services) -> None:
         self.options = options
-
-    @abstractmethod
-    def retrieve_items(
-        self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[SourceItemData | LazySourceItemData]: ...
 
 
 class IndexSiteProvider(BaseProvider):

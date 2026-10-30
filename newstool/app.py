@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 import fcntl
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Self
@@ -20,6 +20,7 @@ from .catalog import Catalog, Profile
 from .config import DEFAULT_WORKFLOW, Config, ConfigError, Workflow
 from .consts import PACKAGE_NAME
 from .db import Database, DeliveryStatus
+from .errors import describe
 from .httpclient import HTTPClient
 from .llms import LLM
 from .models import (
@@ -27,13 +28,14 @@ from .models import (
     Artifact,
     Delivery,
     ItemKey,
-    LazySourceItemData,
     ProcessingScope,
     SourceData,
     SourceItem,
+    SourceItemData,
 )
 from .plugins import ClassRegister, Services
 from .processors import RunSummary
+from .providers import PreflightProvider
 from .sinks import ArtifactNames
 
 PLUGINS_NAMESPACE = "newstool.plugins"
@@ -163,23 +165,56 @@ class Application:
     # --- Import ------------------------------------------------------------
 
     def import_source(self, source_id: str) -> list[SourceItem]:
-        """Fetch every item of a configured source and store it, except lazy
-        items already stored."""
+        """Fetch the items of a configured source and store them, except the
+        stored ones a preflight provider lists as unchanged."""
         source = self.config.get_source(source_id)
         provider = self._object(self._catalog.sources[source.id])
-        stored_uids = self._db.get_item_uids(source.id)
+        if isinstance(provider, PreflightProvider):
+            item_datas = self._retrieve_preflight(source, provider)
+        else:
+            item_datas = provider.retrieve_items(source, self._fetcher)
         items = []
-        for item_data in provider.retrieve_items(source, self._fetcher):
-            if isinstance(item_data, LazySourceItemData):
-                if item_data.uid in stored_uids:
-                    continue
-                item_data = item_data.load()
-            item = SourceItem.from_data(source, item_data)
-            LOGGER.info(f"{source.id}: {item.uri}")
-            items.append(item)
-
-        self._db.upsert_source_items(items)
+        try:
+            for item_data in item_datas:
+                item = SourceItem.from_data(source, item_data)
+                LOGGER.info(f"{source.id}: {item.uri}")
+                items.append(item)
+        finally:
+            # An error mid-run keeps what was fetched: the next run resumes.
+            self._db.upsert_source_items(items)
         return items
+
+    def _retrieve_preflight(
+        self, source: SourceData, provider: PreflightProvider
+    ) -> Iterator[SourceItemData]:
+        """The listed items that are new, or listed as modified since stored.
+        Items listed without a date are always fetched."""
+        stored_times = self._db.get_item_modified_times(source.id)
+        for preflight_item in provider.iter_items(source, self._fetcher):
+            stored = stored_times.get(preflight_item.uid)
+            listed = preflight_item.modified_at
+            dated = stored is not None and listed is not None
+            if dated and listed <= stored:
+                continue
+            try:
+                item_data = provider.retrieve_item(preflight_item, self._fetcher)
+            except ValueError as e:
+                LOGGER.error(f"{describe(e)} while retrieving '{preflight_item.ref}'")
+                continue
+            if item_data.uid != preflight_item.uid:
+                LOGGER.warning(
+                    f"{source.id}: listed uid '{preflight_item.uid}' "
+                    f"retrieved as '{item_data.uid}'"
+                )
+            if dated and (
+                item_data.modified_at is None or item_data.modified_at <= stored
+            ):
+                LOGGER.warning(
+                    f"{source.id}: '{item_data.uri}' listed as modified but not "
+                    "newer once retrieved: not updated"
+                )
+                continue
+            yield item_data
 
     # --- Process -----------------------------------------------------------
 

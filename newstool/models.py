@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-from collections.abc import Callable
 from datetime import datetime
 from typing import Self
 
@@ -63,14 +62,20 @@ class SourceItemData(BaseModel):
         return self
 
 
-@dataclasses.dataclass(slots=True)
-class LazySourceItemData:
-    """An item whose content is fetched only when needed: the core skips the
-    uids its source already stored without calling `load`. For sources whose
-    items never change once published."""
+@dataclasses.dataclass(frozen=True, slots=True)
+class PreflightSourceItemData[T]:
+    """An item as its source's index lists it, before fetching it."""
 
     uid: str
-    load: Callable[[], SourceItemData]
+    ref: T  # what the plugin needs to fetch it; opaque to the core
+    # As the index shows it, when it does: lets the core skip unchanged items.
+    modified_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.modified_at is not None and self.modified_at.tzinfo is None:
+            raise ValueError(
+                f"modified_at must be timezone-aware: {self.modified_at!r}"
+            )
 
 
 @dataclasses.dataclass

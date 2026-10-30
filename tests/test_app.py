@@ -6,6 +6,8 @@ from __future__ import annotations
 import shutil
 import tempfile
 import unittest
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -19,8 +21,9 @@ from newstool.app import (
 )
 from newstool.config import Config, ConfigError
 from newstool.db import DeliveryStatus, ProcessingStatus
+from newstool.errors import PluginFailure
 from newstool.models import (
-    LazySourceItemData,
+    PreflightSourceItemData,
     ProcessingScope,
     SourceItem,
     SourceItemData,
@@ -32,6 +35,37 @@ from newstool.processors import ProcessorOptions, ProcessorType
 
 SAMPLE = Path(__file__).parent / "samples" / "prensaiberica-item-132310503.html"
 SAMPLE_UID = "ec16b09f034ca03296e75d7e5c304f10337f2e77a0327b0d045c54f0a1d970e8"
+
+APRIL = datetime(2026, 4, 30, 10, tzinfo=UTC)
+MAY = datetime(2026, 5, 28, 10, tzinfo=UTC)
+JUNE = datetime(2026, 6, 25, 10, tzinfo=UTC)
+
+
+def listed(
+    uid: str, modified_at: datetime | None = None
+) -> PreflightSourceItemData[str]:
+    return PreflightSourceItemData(
+        uid=uid, ref=f"https://x.test/{uid}.pdf", modified_at=modified_at
+    )
+
+
+def retrieved(
+    item: PreflightSourceItemData[str],
+    fetcher: object,
+    *,
+    uid: str | None = None,
+    modified_at: datetime | None = None,
+) -> SourceItemData:
+    modified_at = modified_at or item.modified_at
+    return SourceItemData(
+        uid=uid or item.uid,
+        title=item.uid,
+        uri=item.ref,
+        # A new date is a new revision: the store only updates changed content.
+        content=f"%PDF {modified_at}".encode(),
+        mimetype="application/pdf",
+        modified_at=modified_at,
+    )
 
 
 class ApplicationTests(unittest.TestCase):
@@ -92,29 +126,88 @@ cache_dir: {self.tmp_dir}/cache
         self.assertEqual(item.key, stored.key)
         self.assertEqual(item.id, stored.id)
 
-    def test_lazy_items_already_stored_are_not_loaded(self) -> None:
-        def lazy(uid: str) -> LazySourceItemData:
-            item_data = SourceItemData(
-                uid=uid,
-                title=uid,
-                uri=f"https://x.test/{uid}.pdf",
-                content=b"%PDF",
-                mimetype="application/pdf",
-            )
-            return LazySourceItemData(uid=uid, load=Mock(return_value=item_data))
-
+    def import_preflight(
+        self,
+        listed: list[PreflightSourceItemData[str]],
+        retrieve: Callable[..., SourceItemData] | None = None,
+    ) -> tuple[list[SourceItem], Mock]:
+        """Import `juntas` from a stubbed listing; `retrieve` stands for
+        `retrieve_item` and defaults to an item dated as listed."""
         provider = self.app._object(self.app._catalog.sources["juntas"])
-        first = [lazy("new")]
-        with patch.object(provider, "retrieve_items", return_value=iter(first)):
-            self.app.import_source("juntas")
+        retrieve_item = Mock(side_effect=retrieve or retrieved)
+        with (
+            patch.object(provider, "iter_items", return_value=iter(listed)),
+            patch.object(provider, "retrieve_item", retrieve_item),
+        ):
+            items = self.app.import_source("juntas")
+        return items, retrieve_item
+
+    def test_stored_items_listed_as_unchanged_are_not_fetched(self) -> None:
+        self.import_preflight([listed("new", MAY)])
         # A late upload of an older session lands behind the stored one.
-        second = [lazy("new"), lazy("late")]
-        with patch.object(provider, "retrieve_items", return_value=iter(second)):
-            (imported,) = self.app.import_source("juntas")
+        (imported,), retrieve_item = self.import_preflight(
+            [listed("new", MAY), listed("late", APRIL)]
+        )
 
         self.assertEqual(imported.uid, "late")
-        second[0].load.assert_not_called()
+        retrieve_item.assert_called_once()
         self.assertEqual({item.uid for item in self.app.get_items()}, {"new", "late"})
+
+    def test_items_listed_without_a_date_are_always_fetched(self) -> None:
+        self.import_preflight([listed("a")])
+        (imported,), _ = self.import_preflight([listed("a")])
+        self.assertEqual(imported.uid, "a")
+
+    def test_stored_items_listed_as_newer_are_updated(self) -> None:
+        self.import_preflight([listed("a", APRIL)])
+        (imported,), _ = self.import_preflight([listed("a", MAY)])
+
+        self.assertEqual(imported.modified_at, MAY)
+        (stored,) = self.app.get_items()
+        self.assertEqual(stored.modified_at, MAY)
+
+    def test_items_not_newer_once_retrieved_are_not_updated(self) -> None:
+        self.import_preflight([listed("a", MAY)])
+        stale = lambda item, fetcher: retrieved(item, fetcher, modified_at=MAY)
+        with self.assertLogs("newstool.app", "WARNING") as logs:
+            imported, _ = self.import_preflight([listed("a", JUNE)], stale)
+
+        self.assertEqual(imported, [])
+        self.assertIn("not newer once retrieved", logs.output[0])
+
+    def test_a_uid_other_than_listed_is_warned_about_and_stored(self) -> None:
+        renamed = lambda item, fetcher: retrieved(item, fetcher, uid="other")
+        with self.assertLogs("newstool.app", "WARNING") as logs:
+            (imported,), _ = self.import_preflight([listed("a")], renamed)
+
+        self.assertEqual(imported.uid, "other")
+        self.assertIn("retrieved as 'other'", logs.output[0])
+
+    def test_a_bad_item_is_skipped(self) -> None:
+        def retrieve(item, fetcher) -> SourceItemData:
+            if item.uid == "bad":
+                raise PluginFailure("not a PDF")
+            return retrieved(item, fetcher)
+
+        with self.assertLogs("newstool.app", "ERROR"):
+            (imported,), _ = self.import_preflight(
+                [listed("bad"), listed("good")], retrieve
+            )
+        self.assertEqual(imported.uid, "good")
+
+    def test_items_fetched_before_a_failure_are_stored(self) -> None:
+        def retrieve(item, fetcher) -> SourceItemData:
+            if item.uid == "second":
+                raise ConnectionError("timed out")
+            return retrieved(item, fetcher)
+
+        with self.assertRaises(ConnectionError):
+            self.import_preflight([listed("first"), listed("second")], retrieve)
+        self.assertEqual([item.uid for item in self.app.get_items()], ["first"])
+
+    def test_listed_dates_must_be_timezone_aware(self) -> None:
+        with self.assertRaises(ValueError):
+            listed("a", MAY.replace(tzinfo=None))
 
     def test_source_options_over_the_section_build_its_provider(self) -> None:
         for options, expected in (

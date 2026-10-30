@@ -4,7 +4,6 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -12,7 +11,7 @@ import bs4
 
 from ..errors import PluginFailure
 from ..httpclient import HTTPClient
-from ..models import LazySourceItemData, SourceData, SourceItemData
+from ..models import PreflightSourceItemData, SourceData, SourceItemData
 from ..providers import BaseProvider, ProviderType
 from . import PluginTypes
 
@@ -50,23 +49,27 @@ class PreparseData:
 
 
 class CSJuntasGobiernoProvider(BaseProvider):
-    def retrieve_items(
+    def iter_items(
         self, source: SourceData, fetcher: HTTPClient
-    ) -> Iterator[LazySourceItemData]:
-        # The index lists every session since 2006 and published PDFs never
-        # change: lazy items let the core skip the stored ones undownloaded.
+    ) -> Iterator[PreflightSourceItemData[PreparseData]]:
+        # The index lists every session since 2006 and dates each one: the
+        # core skips the stored sessions undownloaded.
         index = fetcher.get(str(source.url))
         for protodata in self._iter_pdf_links(index, str(source.url)):
-            uid = hashlib.sha256(protodata.uri.encode("utf-8")).hexdigest()
-            yield LazySourceItemData(
-                uid=uid, load=partial(self._load_item, uid, protodata, fetcher)
+            yield PreflightSourceItemData(
+                uid=hashlib.sha256(protodata.uri.encode("utf-8")).hexdigest(),
+                ref=protodata,
+                modified_at=protodata.dt,
             )
 
-    def _load_item(
-        self, uid: str, protodata: PreparseData, fetcher: HTTPClient
+    def retrieve_item(
+        self,
+        preflight_item: PreflightSourceItemData[PreparseData],
+        fetcher: HTTPClient,
     ) -> SourceItemData:
+        protodata = preflight_item.ref
         return SourceItemData(
-            uid=uid,
+            uid=preflight_item.uid,
             uri=protodata.uri,
             title=protodata.title,
             published_at=protodata.dt,
